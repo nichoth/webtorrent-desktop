@@ -166,6 +166,23 @@ it tight.
   that only a bundler alias references, rather than a bare string
   replacement -- otherwise depcheck reports them unused and `npm test`
   fails, and the fix is not to add a depcheck ignore.
+- **Vite replaces bare `process.env` with `{}`** unless
+  `define: { 'process.env': 'globalThis.process.env' }` is set. Silent,
+  and it kills startup at the first `path.join(process.env.HOME, ...)`
+  inside `application-config-path`. Assume the same for any other
+  Node-ism Vite thinks a browser cannot have.
+- **The Vite entry filename is pinned** to `build-vite/renderer/main.js`
+  via `output.entryFileNames`, because `static/main.html` references it
+  from a plain `<script src>`. Do not restore hashed entry names.
+- **Reading a renderer stack trace:** the `console-message` hook gives
+  no stack. Temporarily add an inline
+  `window.addEventListener('error', e => console.log('STACK:' +
+  e.error.stack))` to `static/main.html` above the bundle tag and build
+  with `npx vite build --minify false`.
+- **Probing the rendered DOM:** hook `did-finish-load`, then
+  `setTimeout(..., 4000)` before `wc.executeJavaScript` -- the event
+  fires before React has rendered. Both windows fire it, so key on
+  `location.pathname`.
 - **`docs/vite-baseline.md`** is the measured inventory of what Vite
   cannot handle in the renderer, grouped by cause, and since US-014 the
   record of how each builtin was resolved. Consult it before guessing
@@ -1608,4 +1625,98 @@ to record, and the Electron probe output.
   call returns the runtime API. Only the second one answers the
   question, and `wc.executeJavaScript` from a `web-contents-created`
   hook is how to ask it non-interactively.
+---
+
+## 2026-07-27 - US-015
+
+Serve the renderer HTML through the Vite bundle.
+
+**Interpretation:** no failing test was written first. This repo still
+has no unit test runner (it arrives in US-019) and the change is one
+markup line plus build config; the meaningful verification is
+empirical, so the evidence below is a launch check plus a DOM/CSS probe
+of the running renderer.
+
+**What was implemented**
+
+- `static/main.html` now loads the Vite output with a plain
+  `<script src="../build-vite/renderer/main.js">` instead of the inline
+  `require('../build/renderer/main.js')`. The tag stays in the same
+  position, at the end of `<body>` after `<div id='body'>`, so
+  `document.getElementById('body')` is present when the bundle runs.
+- `vite.config.js` pins the entry filename to `renderer/main.js`
+  (`output.entryFileNames`). The default `assets/main-[hash].js`
+  changes on every build and cannot be referenced from a static
+  `<script src>`. Chunks and assets keep their hashes -- nothing links
+  to them by name.
+- `vite.config.js` adds `define: { 'process.env': 'globalThis.process.env' }`.
+  This was the one real bug the story surfaced: see below.
+- `static/webtorrent.html` and `static/main.css` are untouched
+  (`git diff --stat` lists only `static/main.html` and
+  `vite.config.js`).
+
+**Files changed**
+
+- `static/main.html`, `vite.config.js`, `src/AGENTS.md`,
+  `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `npx vite build`: 0 `has been externalized` warnings, 0 lines
+  matching `^import|^export` in the output, and the emitted `require()`
+  set is exactly the configured external list.
+- Launch check with `npx electron --no-sandbox .`: the log shows
+  `'Main Window'` and the main window's `init:` line. The only
+  severity-3 renderer error is the pre-existing
+  `Cannot read properties of undefined (reading 'getCurrentWindow')`
+  from `electron.remote`, which is on master.
+- DOM/CSS probe via `wc.executeJavaScript` after load:
+  `{"url":".../static/main.html","hasHeader":true,"bodyLen":29047,
+  "css":"rgb(40, 40, 40)"}`. `.header` present and a 29 kB body means
+  the React tree rendered from the Vite bundle;
+  `getComputedStyle(document.body).backgroundColor` matching
+  `main.css:13` (`background: rgb(40, 40, 40)`) is the evidence that
+  `main.css` is still applied. `main.html` has no inline background, so
+  the value can only come from the stylesheet.
+- `npm test` (standard + depcheck) passes.
+- **Smoke test not run.** This session is non-interactive. The launch
+  check and the DOM probe cover "the window opens and renders from the
+  Vite bundle"; what they do not cover is interaction -- adding a
+  torrent, playback, the menus. Since this is the first commit where
+  anything actually executes the Vite output, that is where the
+  residual risk sits, and US-017 is the verification pass that owns it.
+
+**Learnings for future iterations**
+
+- **Vite rewrites bare `process.env` to `{}`.** It is a browser-first
+  default and it is silent: `application-config-path` compiled to
+  `path.join({}["HOME"], ...)`, so the very first `path.join` of
+  startup threw `Path must be a string. Received undefined` and the
+  whole renderer died before rendering anything. The fix is
+  `define: { 'process.env': 'globalThis.process.env' }` -- going
+  through `globalThis` hands back the real object without re-triggering
+  the substitution. `process.env.NODE_ENV` is a longer key and still
+  wins, so mode-dependent library code is unaffected. Expect the same
+  class of silent substitution for any other Node-ism Vite assumes is
+  absent in a browser.
+- **Getting a stack trace out of the renderer.** The `console-message`
+  hook gives a message and no stack. To get the stack, temporarily add
+  an inline `<script>window.addEventListener('error', e =>
+  console.log('STACK:' + e.error.stack))</script>` to `static/main.html`
+  *before* the bundle tag, and build with
+  `npx vite build --minify false` so the frames name real functions.
+  Terminal output mangles the escaped `\n`; pipe through
+  `tr '\\n' '\n'` to read it.
+- **Probing the DOM needs a delay after `did-finish-load`.** The event
+  fires before the React tree exists; a `setTimeout(..., 4000)` inside
+  the handler is what makes the probe meaningful. Both windows fire it,
+  so key the assertion on `location.pathname` -- the hidden
+  `webtorrent.html` legitimately reports a 53-char body and no
+  `.header`.
+- **Background colour is a usable CSS-applied assertion** here because
+  `main.html` sets no inline background: a computed
+  `rgb(40, 40, 40)` can only have come from `main.css`. Check the
+  stylesheet actually declares the value you assert on before treating
+  a match as proof -- `#282828` appears in `webtorrent.html`'s inline
+  style too, and that coincidence would have made the check vacuous.
 ---

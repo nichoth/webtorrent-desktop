@@ -74,8 +74,8 @@ through Vite, and loads via `static/webtorrent.html`.
 **Do not use dynamic `import()` in `src/renderer/`.** It never settles
 there -- no resolve, no reject, no console error, and control never
 returns to the caller. `static/main.html` loads
-`build/renderer/main.js` from a classic `<script>` in a `file://`
-document, so `import()` goes through Chromium's module loader rather
+`build-vite/renderer/main.js` from a classic `<script src>` in a
+`file://` document, so `import()` goes through Chromium's loader rather
 than Node's, and a bare specifier just hangs.
 
 That leaves only two ways to load a module, and the choice is a

@@ -128,7 +128,19 @@ const external = [...firstPartyExternals, ...transitiveExternals]
       : [id, `node:${id}`]
   ))
 
+// Vite targets browsers, so it statically replaces bare `process.env`
+// with `{}` -- which turned `application-config-path`'s
+// `process.env.HOME` into `{}["HOME"]` and made the very first
+// `path.join()` of startup throw "Path must be a string. Received
+// undefined". This renderer runs with `nodeIntegration: true`, so
+// `process.env` is the real thing at runtime; routing the replacement
+// through `globalThis` hands it back without re-triggering the
+// substitution. `process.env.NODE_ENV` is a longer key and still wins,
+// so React et al. keep whatever Vite decides for the mode.
+const processEnv = { 'process.env': 'globalThis.process.env' }
+
 export default defineConfig({
+  define: processEnv,
   plugins: [jsxInJs],
   resolve: {
     alias: [
@@ -147,7 +159,15 @@ export default defineConfig({
       input: 'src/renderer/main.js',
       external,
       output: {
-        format: 'cjs'
+        format: 'cjs',
+        // `static/main.html` references the entry with a plain
+        // `<script src>`, so the entry filename has to be stable --
+        // the default `assets/main-[hash].js` would change on every
+        // build and break the tag. Chunks and assets keep their
+        // hashes; nothing links to them by name.
+        entryFileNames: 'renderer/main.js',
+        chunkFileNames: 'renderer/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash][extname]'
       }
     }
   }

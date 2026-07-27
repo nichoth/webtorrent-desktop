@@ -274,8 +274,8 @@
         "Smoke test passes"
       ],
       "priority": 15,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "static/main.html now loads build-vite/renderer/main.js from a plain <script src>; the Vite entry filename is pinned via output.entryFileNames so the tag stays valid across builds. webtorrent.html and main.css are untouched. Surfaced and fixed a real bug: Vite rewrites bare process.env to {}, which made application-config-path throw 'Path must be a string' before anything rendered -- fixed with define: { 'process.env': 'globalThis.process.env' }. App verified launching from the Vite output by DOM probe (.header present, 29kB body) and main.css verified applied via computed background colour. Smoke test not run (non-interactive); interaction paths carry the residual risk and are US-017's."
     },
     {
       "id": "US-016",
