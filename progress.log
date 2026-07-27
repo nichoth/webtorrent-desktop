@@ -770,3 +770,118 @@ verified empirically against the running app; see Verification.
   here) even though the per-row progress text drifts run to run. Count
   rows and read `.name`; do not diff the list's outerHTML.
 ---
+
+## 2026-07-27 - US-008
+
+Convert all 11 modules in `src/renderer/components/` to ESM.
+
+**Interpretation:** a mechanical module-format conversion with no
+behaviour change, and this repo still has no unit test runner (it
+arrives in US-019), so per execution rule 3 no failing test was written
+first. The behavioural claim -- all five modals still render -- was
+verified empirically against the running app; see Verification.
+
+Note: the execution rules name `NOTES/architecture.md` and
+`NOTES/product.md`, neither of which exists in this repo. The
+equivalents actually present are `tasks/prd-renderer-decoupling.md`
+and `docs/vite-baseline.md`.
+
+**What was implemented**
+
+- All 11 components converted from `require` to `import` and from
+  `module.exports = X` to `export default X`:
+  create-torrent-error-page, delete-all-torrents-modal, header,
+  heading, modal-ok-cancel, open-torrent-address-modal, path-selector,
+  remove-torrent-modal, show-more, unsupported-media-modal,
+  update-available-modal.
+- `require('material-ui/FlatButton').default` /`RaisedButton` /
+  `TextField` became plain default imports, per the existing convention.
+- `const colors = require('material-ui/styles/colors')` in `heading.js`
+  and `path-selector.js` became named imports (`grey100`, `grey50`)
+  with the `colors.` prefix dropped at the two use sites -- that module
+  has no default export.
+- No import site needed updating. `pages/app.js`,
+  `pages/create-torrent-page.js` and `pages/preferences-page.js`
+  already used plain default imports (added in US-006/US-007), and
+  those imports now resolve to real default exports. Nothing outside
+  `src/renderer/pages/` imports a component.
+- Added `src/renderer/components/AGENTS.md`.
+
+**Files changed**
+
+- all 11 files in `src/renderer/components/`
+- `src/renderer/components/AGENTS.md` (new)
+- `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `grep -rn "module\.exports\|require(" src/renderer/components/`
+  returns no hits -- exit 1, the whole component layer is ESM.
+- `npm test` (standard + depcheck) passes, exit 0.
+- `npm run build` (Babel) compiles 64 files.
+- `npx vite build` succeeds and the bundle contains one occurrence each
+  of a literal unique to all five modals: `Enter torrent address or
+  magnet link`, `Are you sure you want to remove all the torrents`, `A
+  new version of WebTorrent is available`, `Sorry, we can't play that
+  file`, `you must select at least one file`.
+- App launched via `npx electron --no-sandbox .` (`init: 664.397ms`)
+  with a temporary probe appended to `build/main/index.js` (never to
+  source). The probe rendered each of the five modals in turn and read
+  `.modal-content` innerText back. All five rendered with correct body
+  copy AND correct ModalOKCancel buttons, which is the evidence that
+  `modal-ok-cancel.js`'s default export resolves:
+  open-torrent-address (CANCEL/OK), remove-torrent (CANCEL/REMOVE
+  DATA), update-available (SKIP THIS RELEASE/SHOW DOWNLOAD PAGE),
+  unsupported-media (CANCEL/INSTALL VLC), delete-all-torrents
+  (CANCEL/REMOVE). `dispatch('exitModal')` then removed `.modal`.
+- A second probe covered the non-modal components: the preferences page
+  rendered 5 `Heading`s (Folders, Playback, Default torrent app,
+  General, Trackers) and 3 `PathSelector`s (three CHANGE buttons), and
+  `dispatch('showCreateTorrent', ['/tmp/wt-probe8'])` rendered "Create
+  torrent wt-probe8 / 2 files, 3 B / Path:/tmp/wt-probe8/ / SHOW
+  ADVANCED SETTINGS... / CANCEL / CREATE TORRENT", the last of which is
+  `ShowMore`. `header` is proven by `.header` being present at load.
+- The only severity-3 renderer console line is the pre-existing
+  `electron.remote` /`getCurrentWindow` failure recorded under US-005,
+  plus a pre-existing Material-UI "provide an id or a name" TextField
+  warning on the preferences page. Neither is new.
+- `npm run build` was re-run afterwards; `build/main/index.js` is clean
+  (0 `PROBE` matches) and no electron process is left running.
+- The six-step manual smoke test was **not** run -- this session is
+  non-interactive. Residual risk: 10 of the 11 components were rendered
+  and read back, but only *rendered*, not clicked. The OK/Cancel
+  handlers (actually removing a torrent, opening VLC, clicking CHANGE
+  to open a native dialog) were not exercised. `create-torrent-error-
+  page.js` was not rendered at all -- see below; its evidence is
+  static.
+
+**Learnings for future iterations:**
+
+- **Rendering an arbitrary modal non-interactively:** there is no
+  dispatch action for most of them, but `update()` runs after every
+  dispatch, so `window.state.modal = { id: '<modal-id>', ...props }`
+  followed by a harmless `window.dispatch('setTitle',
+  window.state.window.title)` renders it. Read
+  `document.querySelector('.modal-content').innerText`. The modal ids
+  are the keys of the `Modals` map in `pages/app.js`. This is the
+  cheapest way to satisfy any "the modals still work" criterion.
+- **`dispatch('showCreateTorrent', [dir])` is asynchronous.** It walks
+  the folder before navigating, so a read immediately afterwards
+  returns the *previous* page and looks like a failure. Wait ~1.5s.
+  Same for `dispatch('preferences')` (~800ms). The US-007 note about
+  stacking probes has a sibling: unwaited reads are the other way to
+  get a convincing but wrong probe result.
+- **`components/create-torrent-error-page.js` is dead code.**
+  `create-torrent-page.js` returns it from its **constructor**
+  (`if (files.length === 0) return (<CreateTorrentErrorPage/>)`), which
+  JS treats as replacing the constructed instance, not as a render.
+  Pointing `showCreateTorrent` at a directory of only dotfiles renders
+  nothing at all. Pre-existing, unrelated to ESM -- do not try to
+  "fix" it inside a conversion story, and do not burn a session trying
+  to render it.
+- **Material-UI colours are the only import shape that changes a use
+  site.** Every other conversion in this layer was header-only, but
+  `require('material-ui/styles/colors')` binds a namespace, so
+  switching to named imports means editing `colors.greyNNN` at each
+  use too. Grep for `colors\.` before assuming a file is header-only.
+---

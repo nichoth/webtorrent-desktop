@@ -1,6 +1,6 @@
-const React = require('react')
+import React from 'react'
 
-const { dispatcher } = require('../lib/dispatcher')
+import { dispatcher } from '../lib/dispatcher'
 
 class Header extends React.Component {
   render () {
@@ -65,4 +65,4 @@ class Header extends React.Component {
   }
 }
 
-module.exports = Header
+export default Header

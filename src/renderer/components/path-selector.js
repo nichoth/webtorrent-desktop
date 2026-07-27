@@ -1,12 +1,12 @@
-const path = require('path')
+import path from 'path'
 
-const colors = require('material-ui/styles/colors')
-const remote = require('@electron/remote')
-const React = require('react')
-const PropTypes = require('prop-types')
+import { grey50 } from 'material-ui/styles/colors'
+import remote from '@electron/remote'
+import React from 'react'
+import PropTypes from 'prop-types'
 
-const RaisedButton = require('material-ui/RaisedButton').default
-const TextField = require('material-ui/TextField').default
+import RaisedButton from 'material-ui/RaisedButton'
+import TextField from 'material-ui/TextField'
 
 // Lets you pick a file or directory.
 // Uses the system Open File dialog.
@@ -54,7 +54,7 @@ class PathSelector extends React.Component {
       whiteSpace: 'nowrap'
     }
     const textareaStyle = {
-      color: colors.grey50
+      color: grey50
     }
     const textFieldStyle = {
       flex: '1'
@@ -82,4 +82,4 @@ class PathSelector extends React.Component {
   }
 }
 
-module.exports = PathSelector
+export default PathSelector

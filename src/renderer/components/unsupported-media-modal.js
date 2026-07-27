@@ -1,10 +1,10 @@
-const React = require('react')
-const { shell } = require('electron')
+import React from 'react'
+import { shell } from 'electron'
 
-const ModalOKCancel = require('./modal-ok-cancel')
-const { dispatcher } = require('../lib/dispatcher')
+import ModalOKCancel from './modal-ok-cancel'
+import { dispatcher } from '../lib/dispatcher'
 
-module.exports = class UnsupportedMediaModal extends React.Component {
+export default class UnsupportedMediaModal extends React.Component {
   render () {
     const state = this.props.state
     const err = state.modal.error

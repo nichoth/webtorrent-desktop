@@ -1,7 +1,7 @@
-const React = require('react')
-const PropTypes = require('prop-types')
+import React from 'react'
+import PropTypes from 'prop-types'
 
-const colors = require('material-ui/styles/colors')
+import { grey100 } from 'material-ui/styles/colors'
 
 class Heading extends React.Component {
   static get propTypes () {
@@ -19,7 +19,7 @@ class Heading extends React.Component {
   render () {
     const HeadingTag = 'h' + this.props.level
     const style = {
-      color: colors.grey100,
+      color: grey100,
       fontSize: 20,
       marginBottom: 15,
       marginTop: 30
@@ -32,4 +32,4 @@ class Heading extends React.Component {
   }
 }
 
-module.exports = Heading
+export default Heading
