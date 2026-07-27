@@ -84,8 +84,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck)"
       ],
       "priority": 4,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented as an enforce:pre plugin (webtorrent:jsx-in-js) calling Vite's exported transformWithOxc with lang:'jsx' and jsx:{runtime:'classic'}, not via the oxc config key -- vite build delegates to the native builtin:vite-transform plugin, which ignores an explicit lang. useBuiltIns:true has no oxc counterpart and is moot (zero JSX spread attributes under src/); justified in a comment in vite.config.js. npx vite build: exit 0, 723 modules, no JSX errors; header.js confirmed in the bundle. Babel build and launch check unchanged. Manual smoke test not run (non-interactive session); no src/ file was touched so the Electron app runs identical code."
     },
     {
       "id": "US-005",

@@ -61,6 +61,21 @@ it tight.
   redirected. Related: throwaway Vite probe entries must live inside
   the repo (a `/tmp` entry cannot resolve `node_modules` and Rolldown
   reports it as a misleading unresolved-import error).
+- **JSX-in-`.js` is handled by a hand-rolled plugin, not the `oxc`
+  config key.** `vite.config.js` has a `webtorrent:jsx-in-js` plugin
+  (`enforce: 'pre'`) that pipes this repo's own `src/**/*.js` through
+  Vite's exported `transformWithOxc` with `lang: 'jsx'` and
+  `jsx: { runtime: 'classic' }`. Setting `oxc: { lang: 'jsx' }`
+  instead looks right and works in dev, but `vite build` delegates to
+  the native `builtin:vite-transform` plugin, which derives the
+  language from the file extension and ignores `lang`. Do not
+  "simplify" the plugin back into the `oxc` key. Classic runtime is
+  required because every component relies on the implicit
+  `React.createElement` pragma.
+- **Proving a specific file reached the bundle** when the output is
+  minified: grep `build-vite/assets/main-*.js` for a string literal
+  unique to that file. Identifiers are mangled; string literals are
+  not.
 - **`docs/vite-baseline.md`** is the measured inventory of what Vite
   cannot handle in the renderer, grouped by cause. Consult it before
   guessing at scope for any Phase 1 story.
@@ -318,4 +333,91 @@ see Verification below.
   webtorrent hidden window also fires `did-finish-load`, so a
   `web-contents-created` probe reports twice -- the one with
   `bodyLen: 53` and no `.header` is the hidden window, not a failure.
+---
+
+## 2026-07-27 - US-004
+
+Configure the JSX transform for `.js` files in Vite.
+
+**Interpretation:** this is a pure build-config story, so per execution
+rule 3 no failing test was written first -- there is still no unit test
+runner in this repo (it arrives in US-019), and the acceptance criteria
+are all "verified in the build output". The failing state was
+reproduced first instead: `npx vite build` aborting with
+`[PARSE_ERROR] Unexpected JSX expression` at
+`src/renderer/main.js:114`.
+
+**What was implemented**
+
+- Added a `webtorrent:jsx-in-js` plugin to `vite.config.js` that runs
+  `enforce: 'pre'` and pipes this repo's own `src/**/*.js` through
+  Vite's exported `transformWithOxc` with `lang: 'jsx'` and
+  `jsx: { runtime: 'classic' }`.
+- The filter matches by absolute path prefix (`<root>/src/`) rather
+  than a `/src/` regex, so packages under `node_modules` that ship
+  their own `src/` directory are not parsed as JSX.
+- Documented in a comment inside `vite.config.js` why the `oxc` config
+  key alone does not work, and why `useBuiltIns: true` has no
+  counterpart to carry over.
+
+**Files changed**
+
+- `vite.config.js`
+- `specs/prd.json` (US-004 `passes: true`)
+- `progress.log`
+
+**Verification**
+
+- Before: `npx vite build` exit 1, `Unexpected JSX expression` at
+  `src/renderer/main.js:114`.
+- After: `npx vite build` exit 0, `723 modules transformed`, zero JSX
+  syntax errors in the output.
+- `src/renderer/components/header.js` specifically: it is in the
+  bundle (its unique `'icon back '` string literal appears in
+  `build-vite/assets/main-*.js`), and running `transformWithOxc` on it
+  directly returns `errors: 0` with
+  `React.createElement("div", { className: "header", ... })`.
+- Classic runtime confirmed at the bundle level: 0 occurrences of
+  `jsx-runtime` / `_jsx(`, 330 occurrences of `createElement`.
+- Babel path unchanged: `npm run build` compiles 64 files;
+  `npx electron --no-sandbox .` reaches `init: 710ms` with both
+  windows up.
+- `npm test` (standard + depcheck) passes.
+- The six-step manual smoke test was NOT run -- non-interactive
+  session. Risk is nil for this story: no `src/` file was touched and
+  the Babel output is byte-identical, so the Electron app is running
+  exactly the code it ran before.
+
+**Learnings for future iterations:**
+
+- **Setting `oxc.lang` in `vite.config.js` does not work for
+  `vite build`.** Vite's `oxc` plugin has two code paths. In dev it
+  calls `transformWithOxc`, which honours an explicit `lang`. In a
+  bundled build (`applyToEnvironment` -> `isBundled`) it delegates to
+  the native `builtin:vite-transform` plugin, which derives the
+  language from the file extension and silently ignores `lang` -- the
+  build still fails with `Unexpected JSX expression`, only now
+  attributed to `[builtin:vite-transform]` instead of the parser. A
+  hand-rolled `enforce: 'pre'` plugin calling `transformWithOxc` is
+  the way to get JSX-in-`.js` through a production build.
+- **`transformWithOxc` is a public export of `vite`**, alongside
+  `defineConfig`. Signature:
+  `transformWithOxc(code, filename, options, inMap, config, watcher)`.
+  It returns `{ code, map, errors, warnings }`.
+- **oxc's `JsxOptions` has no `useBuiltIns`.** It always emits native
+  `Object.assign` for JSX spread attributes, which is what Babel's
+  `useBuiltIns: true` selects, so the two agree. Moot here anyway:
+  `grep -rn "{\.\.\." src/renderer` finds zero JSX spread attributes.
+- **oxc's JSX default runtime is `automatic`, Babel's is classic.**
+  Every component here does `const React = require('react')` and
+  relies on the implicit `React.createElement` pragma, so
+  `runtime: 'classic'` must be set explicitly or the bundle imports
+  `react/jsx-runtime` instead.
+- **Cheap way to prove a specific file made it through the bundle**
+  when the output is minified: grep the bundle for a string literal
+  that is unique to that file (`'icon back '` for `header.js`).
+  Identifier names are mangled; string literals are not.
+- The module count is now **723**, down from the 724 of the US-001
+  probe -- US-002 deleted `lib/telemetry.js` and US-003 removed the
+  `module` import, offset by the `inline-style-prefixer` stub.
 ---
