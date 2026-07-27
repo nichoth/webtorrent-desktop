@@ -690,3 +690,83 @@ verified empirically against the running app instead; see Verification.
   lines of `webtorrent: queueing` chatter and looked exactly like "the
   probe never ran".
 ---
+
+## 2026-07-27 - US-007
+
+Convert `pages/player-page.js` and `pages/torrent-list-page.js` to ESM.
+
+**Interpretation:** a mechanical module-format conversion with no
+behaviour change and still no unit test runner in this repo (that
+arrives in US-019), so per execution rule 3 no failing test was written
+first. The behavioural claim -- the torrent list still renders -- was
+verified empirically against the running app; see Verification.
+
+**What was implemented**
+
+- `pages/player-page.js`: `require` -> `import`,
+  `module.exports = class Player` -> `export default class Player`.
+  `require('bitfield').default` became `import BitField from
+  'bitfield'` (the package sets `__esModule` on its CJS build and has a
+  real `export default` on its ESM build, so both loaders resolve the
+  class).
+- `pages/torrent-list-page.js`: same conversion.
+  `require('material-ui/Checkbox').default` and
+  `.../LinearProgress').default` became plain default imports.
+- `pages/app.js` needed no change -- it already imported both without
+  `.default` (added in US-006), and both now really are default
+  exports.
+- `src/renderer/pages/AGENTS.md`: added the rule for third-party
+  `require('pkg').default` -> default import.
+
+**Files changed**
+
+- `src/renderer/pages/player-page.js`
+- `src/renderer/pages/torrent-list-page.js`
+- `src/renderer/pages/AGENTS.md`
+- `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `grep -rn "module\.exports\|require(" src/renderer/pages/` returns no
+  hits in any `.js` file -- the whole page layer is ESM. (The only
+  matches are prose in `AGENTS.md` and one comment in `app.js`.)
+- `npm test` (standard + depcheck) passes, exit 0.
+- `npm run build` (Babel) compiles 64 files.
+- `npx vite build` succeeds; the bundle contains the unique player-page
+  literals `Audio codec unsupported`, `Enter full screen` and
+  `audio-release` (one occurrence each), proving the converted module
+  reached the output.
+- App launched via `npx electron --no-sandbox .` with a temporary probe
+  appended to `build/main/index.js` (never to source), reaching
+  `init: 627.986ms`. The probe read the DOM: `.header` present (463
+  chars, identical to the US-006 anchor) and `.torrent-list` rendered
+  11 `.torrent` rows with real names. The only severity-3 renderer
+  console line is the pre-existing `electron.remote` /
+  `getCurrentWindow` failure recorded under US-005. `npm run build` was
+  re-run afterwards and `build/main/index.js` confirmed clean.
+- The six-step manual smoke test was **not** run -- this session is
+  non-interactive. The player page specifically was NOT exercised at
+  runtime: a second read-only probe over `state.saved.torrents` found
+  no torrent with a downloaded media file, so there was nothing to open
+  without starting a real download. Opening a video, play/pause and
+  seek therefore carry the residual risk for this story; the evidence
+  for `player-page.js` is static (lint, Babel compile, Vite bundle
+  inclusion) plus the fact that `app.js` resolves it as a default
+  export at startup alongside the torrent list.
+
+**Learnings for future iterations:**
+
+- **`state.saved.torrents` is not a probe fixture for playback.** On a
+  fresh-ish install the entries carry no populated `files` array with
+  local media, so `dispatch('playFile', ...)` has nothing to open.
+  Any story whose acceptance criteria mention playback needs either a
+  seeded fixture torrent committed for the purpose or an honest "not
+  verified at runtime" note. Do not invent a download to satisfy it.
+- **Appending a second probe block without rebuilding stacks them.**
+  `build/` is not cleaned between `cat >>` calls, so the previous
+  probe still fires and its output interleaves with the new one. Run
+  `npm run build` between probes, not just at the end.
+- **`.torrent-list` row count is a usable stable anchor** (11 rows
+  here) even though the per-row progress text drifts run to run. Count
+  rows and read `.name`; do not diff the list's outerHTML.
+---

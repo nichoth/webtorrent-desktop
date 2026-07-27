@@ -26,3 +26,10 @@ Rolldown both handle it. `material-ui/**` submodules end in
 `.default`, so a default import is correct there too, except
 `material-ui/styles/colors`, which is a bag of named exports with no
 default (`import { grey400 } from ...`).
+
+A third-party `require('pkg').default` (for example `bitfield`) becomes
+a plain `import Pkg from 'pkg'`. Check the package first: dropping
+`.default` is only correct when its CommonJS build sets
+`__esModule`, or when its `exports.import` entry has a real
+`export default`. If neither holds, a default import silently yields
+the whole module object.

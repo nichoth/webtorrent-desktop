@@ -136,7 +136,7 @@
         "Smoke test passes, with attention to opening a video, play/pause, seek, and the torrent list rendering"
       ],
       "priority": 7,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
