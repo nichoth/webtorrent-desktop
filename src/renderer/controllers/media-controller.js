@@ -1,5 +1,4 @@
 const { ipcRenderer } = require('electron')
-const telemetry = require('../lib/telemetry')
 const Playlist = require('../lib/playlist')
 
 // Controls local play back: the <video>/<audio> tag and VLC
@@ -9,9 +8,9 @@ module.exports = class MediaController {
     this.state = state
   }
 
-  mediaSuccess () {
-    telemetry.logPlayAttempt('success')
-  }
+  // Dispatched by the <video>/<audio> tag; nothing to do, but the dispatcher
+  // resolves every action by name so the method has to exist
+  mediaSuccess () {}
 
   mediaStalled () {
     this.state.playing.isStalled = true
@@ -20,7 +19,6 @@ module.exports = class MediaController {
   mediaError (error) {
     const state = this.state
     if (state.location.url() === 'player') {
-      telemetry.logPlayAttempt('error')
       state.playing.location = 'error'
       ipcRenderer.send('checkForExternalPlayer', state.saved.prefs.externalPlayerPath)
       ipcRenderer.once('checkForExternalPlayer', (e, isInstalled) => {
@@ -58,7 +56,6 @@ module.exports = class MediaController {
 
     const onServerRunning = () => {
       state.playing.isReady = true
-      telemetry.logPlayAttempt('external')
 
       const mediaURL = Playlist.getCurrentLocalURL(state)
       ipcRenderer.send('openExternalPlayer',

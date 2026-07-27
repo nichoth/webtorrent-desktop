@@ -258,3 +258,25 @@ real runtime API at load time) and, structurally, by the whole of Phase
 Only the JSX category actually fails the build. The other three are
 build-time-silent and runtime-fatal, which is the main thing this
 baseline establishes.
+
+## Resolved by deletion (US-002)
+
+`src/renderer/lib/telemetry.js` was **deleted**, not ported. Every
+entry in this inventory attributed to that file is therefore resolved
+by removal, and no shim, stub, or externalization has to be designed
+for it:
+
+- Section 4a: `crypto` in `lib/telemetry.js` -- gone.
+- Section 4a: `os` in `lib/telemetry.js` -- gone. This was the
+  renderer's only importer of `os`, so `os` drops out of the
+  first-party builtin list entirely.
+- Section 5: `src/renderer/lib/telemetry.js` -- gone. The Electron
+  first-party import count drops from 15 to 14.
+- `@electron/remote`'s `screen` API had exactly one renderer consumer,
+  telemetry's `getScreenInfo()`. That API now has no renderer caller
+  and needs no shim.
+
+Revised first-party counts after US-002: 21 Node-builtin import sites
+(was 23), 14 `electron` import sites (was 15). The tables above are
+left as measured on 2026-07-27 so the baseline stays a faithful record
+of the starting state; this section is the delta.

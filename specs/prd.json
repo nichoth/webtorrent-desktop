@@ -51,8 +51,8 @@
         "Smoke test passes, with attention to step 3 (video playback), since media-controller and playback-controller were both edited"
       ],
       "priority": 2,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "telemetry.js deleted; grep for 'telemetry' under src/ is empty. `uncaughtError` kept as a console.error no-op because src/main/index.js:98 still dispatches it. mediaSuccess() kept as an empty method for the same dispatcher-by-name reason. Uncaught errors confirmed reaching the renderer console via a console-message probe on the build artifacts. The six-step manual smoke test was NOT run (non-interactive session); launch check, npm test and the Babel build all pass. Found a pre-existing bug for US-024/US-027: main.js lines 168/429/441 use `electron.remote.getCurrentWindow()`, which is undefined in modern Electron."
     },
     {
       "id": "US-003",

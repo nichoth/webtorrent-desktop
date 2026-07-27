@@ -3,7 +3,6 @@ const path = require('path')
 
 const Cast = require('../lib/cast')
 const { dispatch } = require('../lib/dispatcher')
-const telemetry = require('../lib/telemetry')
 const { UnplayableFileError, UnplayableTorrentError } = require('../lib/errors')
 const sound = require('../lib/sound')
 const TorrentPlayer = require('../lib/torrent-player')
@@ -351,8 +350,6 @@ module.exports = class PlaybackController {
 
     // Save volume (this session only, not in state.saved)
     state.previousVolume = state.playing.volume
-
-    if (!state.playing.isReady) telemetry.logPlayAttempt('abandoned') // user gave up waiting
 
     // Reset the window contents back to the home screen
     state.playing = State.getDefaultPlayState()

@@ -29,7 +29,6 @@ const React = require('react')
 const ReactDOM = require('react-dom')
 
 const config = require('../config')
-const telemetry = require('./lib/telemetry')
 const sound = require('./lib/sound')
 const TorrentPlayer = require('./lib/torrent-player')
 
@@ -70,13 +69,7 @@ function onState (err, _state) {
   state = window.state = _state
   window.dispatch = dispatch
 
-  telemetry.init(state)
   sound.init(state)
-
-  // Log uncaught JS errors
-  window.addEventListener(
-    'error', (e) => telemetry.logUncaughtError('window', e), true /* capture */
-  )
 
   // Create controllers
   controllers = {
@@ -185,12 +178,6 @@ function onState (err, _state) {
 
 // Runs a few seconds after the app loads, to avoid slowing down startup time
 function delayedInit () {
-  telemetry.send(state)
-
-  // Send telemetry data every 12 hours, for users who keep the app running
-  // for extended periods of time
-  setInterval(() => telemetry.send(state), 12 * 3600 * 1000)
-
   // Warn if the download dir is gone, eg b/c an external drive is unplugged
   checkDownloadPath()
 
@@ -342,7 +329,8 @@ const dispatchHandlers = {
   // Everything else
   onOpen,
   error: onError,
-  uncaughtError: (proc, err) => telemetry.logUncaughtError(proc, err),
+  // The main process dispatches this; surface it in the devtools console
+  uncaughtError: (proc, err) => console.error(`Uncaught error in ${proc}`, err),
   stateSave: () => State.save(state),
   stateSaveImmediate: () => State.saveImmediate(state),
   update: () => {} // No-op, just trigger an update
@@ -390,8 +378,6 @@ function setupIpc () {
   ipcRenderer.on('wt-poster', (e, ...args) => tc.torrentPosterSaved(...args))
   ipcRenderer.on('wt-audio-metadata', (e, ...args) => tc.torrentAudioMetadata(...args))
   ipcRenderer.on('wt-server-running', (e, ...args) => tc.torrentServerRunning(...args))
-
-  ipcRenderer.on('wt-uncaught-error', (e, err) => telemetry.logUncaughtError('webtorrent', err))
 
   ipcRenderer.send('ipcReady')
 
