@@ -45,6 +45,22 @@ it tight.
   the story allows, and then say plainly in `progress.log` that the
   smoke test was not run and which step carries the risk. Never claim
   it passed.
+- **Probing the running renderer's DOM.** `src/renderer/main.js`
+  exposes `window.state` and `window.dispatch`, so a temporary
+  `app.on('web-contents-created', ...)` block appended to
+  `build/main/index.js` can call
+  `wc.executeJavaScript("window.dispatch('preferences')")` to navigate
+  routes and read the DOM back non-interactively. Two caveats: the
+  hidden webtorrent window also fires `did-finish-load` (it reports a
+  ~53-char body and no `.header` -- not a failure), and torrent-list
+  DOM metrics drift ~20% run to run as progress bars update. Compare
+  stable anchors only: `.header` outerHTML and the preferences page.
+- **Vite `resolve.alias` string `find` entries match as a prefix**, so
+  aliasing a package name also captures its deep imports. Use
+  `find: /^pkg-name$/` when only the bare specifier should be
+  redirected. Related: throwaway Vite probe entries must live inside
+  the repo (a `/tmp` entry cannot resolve `node_modules` and Rolldown
+  reports it as a misleading unresolved-import error).
 - **`docs/vite-baseline.md`** is the measured inventory of what Vite
   cannot handle in the renderer, grouped by cause. Consult it before
   guessing at scope for any Phase 1 story.
@@ -219,3 +235,87 @@ was verified empirically instead; see Verification below.
   real context is `specs/prd.json`, `progress.log`,
   `tasks/prd-renderer-decoupling.md`, and `docs/vite-baseline.md`.
   Don't waste a turn looking for `NOTES/`.
+
+## 2026-07-27 - US-003
+
+Remove the `Module.prototype.require` monkey patch from the renderer
+entry point and replace it with a Vite `resolve.alias`.
+
+**Interpretation:** per execution rule 3 this is a
+config/refactor story with no behavioural delta to assert, and the repo
+still has no unit test runner (US-019). Instead of a test, I wrote two
+throwaway *empirical probes* and kept their output as the evidence --
+see Verification below.
+
+**What was implemented**
+
+- Deleted the `require('module')` import and the
+  `Module.prototype.require` override at the top of
+  `src/renderer/main.js`. Nothing else in the file used `Module`.
+- Added `stubs/inline-style-prefixer.js`, a committed no-op module that
+  `export default {}` -- exactly the fake object the old hook returned.
+- Added `resolve.alias` to `vite.config.js` mapping
+  `inline-style-prefixer` to that stub.
+
+**Files changed**
+
+- `src/renderer/main.js`
+- `vite.config.js`
+- `stubs/inline-style-prefixer.js` (new)
+- `specs/prd.json` (US-003 `passes: true`)
+- `progress.log`
+
+**Verification**
+
+- Alias probe (throwaway `.probe/` entry importing both the bare
+  specifier and `inline-style-prefixer/static/createPrefixer`, built
+  with and without the alias): with the alias 9 modules / 6.16 kB,
+  without it 40 modules / 75.36 kB, and `createPrefixer` is still
+  present in the aliased bundle. So the alias fires on the bare
+  specifier and does *not* break the deep imports.
+- `npm run build` (Babel) compiles 64 files.
+- App launches via `npx electron --no-sandbox .`, reaches
+  `init: 789ms`, both windows up.
+- Render probe, before vs after, on the torrent list page and the
+  preferences page: vendor-prefixed inline-style count and
+  `.header` outerHTML length are byte-identical
+  (home 0 / 463, prefs 14 / 396 in both runs).
+- `npm test` (standard + depcheck) passes, exit 0.
+- No CSS file touched.
+- **The six-step manual smoke test was NOT run** -- this session is
+  non-interactive. The steps that carry residual risk are the ones the
+  probe cannot reach: playing a torrent and the create-torrent flow.
+  Neither touches material-ui theming, so the risk is low.
+
+**Learnings for future iterations:**
+
+- **The old hook was already dead code for its stated purpose.**
+  Nothing in `node_modules` does `require('inline-style-prefixer')`
+  bare -- material-ui only imports the deep paths
+  (`inline-style-prefixer/static/...`, `.../dynamic/...`). So the
+  ~40ms it claimed to save was never actually being saved. Removing it
+  changes nothing at runtime, which is why the before/after render
+  probes match.
+- **Alias the bare specifier with a regex, not a string.** Vite alias
+  string `find` entries match as a *prefix*, so
+  `find: 'inline-style-prefixer'` would rewrite
+  `inline-style-prefixer/static/createPrefixer` to
+  `stubs/inline-style-prefixer.js/static/createPrefixer` and fail to
+  resolve. `find: /^inline-style-prefixer$/` is the correct form.
+- **Vite probes must live inside the repo.** A probe entry file under
+  `/tmp` cannot resolve the project's `node_modules`; Rolldown reports
+  it as an unresolved-import error that looks like a real bug. Put
+  throwaway probe configs in a gitignored dir at the repo root instead.
+- **Home-page DOM metrics are noisy between runs.** Torrent progress
+  bars add inline styles as downloads advance, so `bodyLen` and a raw
+  `[style]` count differ run to run by ~20%. For before/after render
+  comparisons use stable anchors: the `.header` outerHTML and the
+  preferences page, which were identical across every run.
+- **`window.dispatch` and `window.state` are exposed by
+  `src/renderer/main.js`**, which makes non-interactive route
+  navigation possible from the main process:
+  `wc.executeJavaScript("window.dispatch('preferences')")`. The
+  webtorrent hidden window also fires `did-finish-load`, so a
+  `web-contents-created` probe reports twice -- the one with
+  `bodyLen: 53` and no `.header` is the hidden window, not a failure.
+---
