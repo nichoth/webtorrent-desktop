@@ -28,8 +28,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck)"
       ],
       "priority": 1,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Baseline build fails on JSX as expected; full inventory in docs/vite-baseline.md. Note: with JSX enabled the Vite build already succeeds, so \"vite build passes\" is not a valid gate for later stories -- electron silently resolves to the npm CLI helper and Node builtins to throwing stubs. CommonJS category is empty: Rolldown handles CJS natively."
     },
     {
       "id": "US-002",

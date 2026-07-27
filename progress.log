@@ -1,0 +1,112 @@
+## Codebase Patterns
+
+Consolidated, reusable knowledge. Re-read in full every session -- keep
+it tight.
+
+- **No lint script.** `npm run lint` does not exist. The lint+dep gate
+  is `npm test`, which runs `standard && depcheck`. There is no unit
+  test runner yet; one arrives in US-019.
+- **Babel JSX config lives in the `babel` key of `package.json`**, not
+  a `.babelrc`. It is `@babel/plugin-transform-react-jsx` with
+  `useBuiltIns: true`. Reuse those exact options anywhere JSX has to be
+  compiled.
+- **`npm start` = `npm run build && electron --no-sandbox .`** where
+  `npm run build` is `babel src --out-dir build`. The Babel build must
+  keep working at every commit (FR-2), independently of Vite.
+- **Verifying the app launches non-interactively:** run
+  `npx electron --no-sandbox .` in the background, sleep ~12s, check
+  the process is alive and that the log shows `'Main Window'` and
+  `init: <time>`. Always kill the process afterwards. This is a launch
+  check only -- it is NOT the six-step manual smoke test.
+- **Vite 8 is Rolldown-based, not Rollup/esbuild.** Two consequences
+  that will keep mattering: it handles CommonJS natively (no
+  `@rollup/plugin-commonjs`, no CJS resolve errors), and Node builtins
+  are externalized to throwing browser stubs with a *warning*, not an
+  error. A green Vite build therefore proves very little on its own --
+  check the warning stream, not just the exit code.
+- **`electron` resolves silently to the wrong module.** Bundlers
+  resolve `require('electron')` to `node_modules/electron/index.js`,
+  the npm CLI helper that exports a path string, not the runtime API.
+  No warning is emitted. Anything relying on `electron.ipcRenderer`
+  will be `undefined` at runtime while the build reports success.
+- **`docs/vite-baseline.md`** is the measured inventory of what Vite
+  cannot handle in the renderer, grouped by cause. Consult it before
+  guessing at scope for any Phase 1 story.
+
+---
+
+## 2026-07-27 - US-001
+
+Create branch and capture the Vite baseline failure inventory.
+
+**Interpretation:** this is a scaffolding/measurement story, so per
+execution rule 3 no failing test was written first -- there is nothing
+behavioural to assert, and this repo has no unit test runner until
+US-019. The deliverable is the captured inventory itself.
+
+**What was implemented**
+
+- Created branch `renderer-decoupling` off `redesign` HEAD (859dd66).
+- Added `vite` 8.1.5 to devDependencies (exact pin, matching the
+  repo's existing exact-version convention).
+- Added a minimal `vite.config.js` at the repo root with
+  `src/renderer/main.js` as the rollup input and `build-vite` as the
+  out dir.
+- Ran `npx vite build`, captured stdout and stderr verbatim into
+  `docs/vite-baseline.md`, and grouped every finding under the four
+  required headings: CommonJS, JSX, Node builtin, Electron.
+- Added `build-vite/` to `.gitignore`.
+
+**Files changed**
+
+- `package.json`, `package-lock.json` (vite devDependency)
+- `vite.config.js` (new)
+- `docs/vite-baseline.md` (new)
+- `.gitignore`
+- `progress.log`
+
+**Verification**
+
+- `npx vite build` fails with exit 1 -- expected and required by the
+  acceptance criteria.
+- `npm test` (standard + depcheck) passes, exit 0.
+- `npm run build` (Babel) compiles 65 files.
+- App launches: `npx electron --no-sandbox .` reaches
+  `init: 1.058s` with both windows up, no errors.
+
+**Learnings for future iterations:**
+
+- **The baseline build alone is a near-useless inventory.** It
+  aborts on the first JSX token after transforming 2 of ~724 modules,
+  so it reports exactly one error and says nothing about the other
+  three categories. To get real numbers I ran a *throwaway* probe
+  config -- same config plus a `transform` hook piping
+  `src/renderer/**/*.js` through `@babel/plugin-transform-react-jsx` --
+  which reached 724 modules and 167 warning lines. The probe config was
+  deleted after the run and is not in the repo. If a future story needs
+  to re-measure, recreate it rather than assuming the baseline output
+  is complete.
+- **With JSX enabled, the Vite build already passes (exit 0, 1.46 MB
+  bundle).** This is a trap. US-014 and US-017 must not treat "vite
+  build succeeds" as the definition of done -- the build succeeds today
+  while `electron` resolves to the CLI helper and 20 Node builtins
+  point at throwing stubs. Assert on resolved module identity, not on
+  exit code.
+- **The CommonJS heading is empty and will stay empty.** Rolldown
+  handles CJS natively; `grep -ci 'could not resolve'` over the full
+  probe output returns 0. The ESM conversion in US-005..US-013 is still
+  required, but justify it by the `esmOrder` / shim-boundary reasons in
+  the PRD, not by an expectation that Vite rejects CommonJS. Do not
+  spend a session hunting for CJS build errors that do not exist.
+- **`path` is the widest first-party Node dependency** -- 12 renderer
+  files import it, versus 6 for `fs`. Worth sizing US-014 and the
+  Phase 2 shim work accordingly.
+- **Two first-party Node imports vanish for free.** `crypto` and `os`
+  in `lib/telemetry.js` disappear entirely when US-002 deletes that
+  module, and `module` in `main.js` goes with the monkey patch in
+  US-003. Three of the 23 first-party import sites need no shim work.
+- **depcheck accepts `vite`** because `vite.config.js` imports
+  `defineConfig` from it. Any future root-level tool added as a
+  devDependency needs a real import somewhere or `npm test` fails.
+
+---
