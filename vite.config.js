@@ -1,5 +1,8 @@
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { defineConfig, transformWithOxc } from 'vite'
+
+const require = createRequire(import.meta.url)
 
 // Replaces the old `Module.prototype.require` hook in
 // `src/renderer/main.js`. Matched exactly (not as a prefix) so that
@@ -56,8 +59,75 @@ const jsxInJs = {
   }
 }
 
-// Baseline config for the renderer bundle. Later Phase 1 stories add the
-// Node builtin/Electron externals and the HTML entry point.
+// `path` is the widest Node dependency in the renderer -- 13 first-party
+// files import it -- and every one of those uses is pure string
+// manipulation (`join`, `basename`, `extname`, `parse`). It is therefore
+// bundled from `path-browserify` rather than externalized, so that none
+// of those 13 call sites has to change and none of them needs a Phase 2
+// shim. Matched exactly (`/^path$/`) so a package literally named
+// `path-something` is not captured; `node:path` is aliased separately
+// because dependencies spell it either way.
+const pathBrowserify = require.resolve('path-browserify')
+
+// Externals. The bundle is emitted as CommonJS and loaded by an Electron
+// renderer with `nodeIntegration: true`, so a `require()` left in the
+// output resolves against the real Node/Electron module registry at load
+// time. That is what makes externalizing meaningful here: without it
+// Rolldown silently swaps in a browser stub that throws on first use, and
+// without CJS output the `require()` calls could not be emitted at all.
+//
+// - `fs`: 6 first-party renderer files. Phase 2 replaces these call sites
+//   with the platform shim; until then external keeps them working.
+// - `http`: only `lib/cast.js`, the deferred casualty the PRD exempts
+//   from the shim.
+// - `events`: only `lib/state.js`, for `EventEmitter`.
+// - `electron` / `@electron/remote`: these MUST be external. Left to the
+//   bundler, `electron` resolves to `node_modules/electron/index.js` --
+//   the npm CLI helper, which exports a path string, not the runtime API
+//   -- with no warning at all, so `ipcRenderer` would be `undefined` at
+//   runtime while the build reported success.
+//
+// `crypto` and `os` are deliberately absent from this list: grep confirms
+// `crypto` is used only by `src/renderer/webtorrent.js`, which FR-4
+// exempts from this build, and `os` has had no renderer importer since
+// the US-002 telemetry deletion. See docs/vite-baseline.md.
+const firstPartyExternals = [
+  'fs',
+  'http',
+  'events',
+  'electron',
+  '@electron/remote'
+]
+
+// Builtins no first-party renderer file imports, reached only through
+// dependencies -- the config-persistence stack under `lib/state.js`
+// (`application-config`, `write-file-atomic`, `graceful-fs`, `rimraf`)
+// and the casting stack under `lib/cast.js`. They are externalized for
+// the same reason as the list above: the alternative is a browser stub
+// that throws the first time config is written or a cast device is
+// discovered. Kept in a separate list so the first-party inventory above
+// stays an accurate statement of what Phase 2's shim has to cover -- `os`
+// in particular is here for `application-config-path` and
+// `multicast-dns`, NOT for any renderer file.
+//
+// Enumerated from the externalization warnings of a build with only the
+// list above applied, rather than taken wholesale from
+// `module.builtinModules`, so that a dependency reaching for a new
+// builtin shows up as a warning instead of being silently absorbed.
+const transitiveExternals = [
+  'assert', 'constants', 'dgram', 'fs/promises', 'https', 'net', 'os',
+  'querystring', 'stream', 'timers', 'tls', 'url', 'util',
+  'worker_threads'
+]
+
+// Dependencies spell builtins either way, so both forms are listed.
+const external = [...firstPartyExternals, ...transitiveExternals]
+  .flatMap(id => (
+    id === '@electron/remote' || id === 'electron'
+      ? [id]
+      : [id, `node:${id}`]
+  ))
+
 export default defineConfig({
   plugins: [jsxInJs],
   resolve: {
@@ -65,14 +135,20 @@ export default defineConfig({
       {
         find: /^inline-style-prefixer$/,
         replacement: inlineStylePrefixerStub
-      }
+      },
+      { find: /^path$/, replacement: pathBrowserify },
+      { find: /^node:path$/, replacement: pathBrowserify }
     ]
   },
   build: {
     outDir: 'build-vite',
     emptyOutDir: true,
     rollupOptions: {
-      input: 'src/renderer/main.js'
+      input: 'src/renderer/main.js',
+      external,
+      output: {
+        format: 'cjs'
+      }
     }
   }
 })

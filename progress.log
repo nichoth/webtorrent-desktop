@@ -150,9 +150,26 @@ it tight.
   something you broke. `@electron/remote` is the working module.
   Whenever a launch check surfaces an error, `git stash` your diff,
   rebuild, and relaunch before believing it is yours.
+- **Vite externals only work with `output.format: 'cjs'`.** Since
+  US-014 the renderer bundle is CJS, which is what lets an emitted
+  `require()` resolve against Electron's module registry under
+  `nodeIntegration: true`. Verify the mechanism rather than the exit
+  code: grep the output bundle for `require("` (should list every
+  external) and for `^import|^export` (should be empty). Changing the
+  format silently converts every external into a broken import.
+- **The externalization warning count is the Node-builtin gate.**
+  `grep -c 'has been externalized' <stderr>` should be 0. Anything
+  above that is a builtin resolved to a browser stub that throws on
+  first use, which no exit code will tell you about.
+- **depcheck sees `require.resolve('pkg')` in `vite.config.js`.** Use
+  `createRequire(import.meta.url)` and `require.resolve()` for packages
+  that only a bundler alias references, rather than a bare string
+  replacement -- otherwise depcheck reports them unused and `npm test`
+  fails, and the fix is not to add a depcheck ignore.
 - **`docs/vite-baseline.md`** is the measured inventory of what Vite
-  cannot handle in the renderer, grouped by cause. Consult it before
-  guessing at scope for any Phase 1 story.
+  cannot handle in the renderer, grouped by cause, and since US-014 the
+  record of how each builtin was resolved. Consult it before guessing
+  at scope for any Phase 1 or Phase 2 story.
 
 ---
 
@@ -1476,4 +1493,119 @@ belongs to whoever owns the `@electron/remote` migration.
   `dgram.Socket.prototype.send` before requiring the module and count
   packets by destination. SSDP is `239.255.255.250:1900`, mDNS is
   `224.0.0.251:5353`. A device count of 0 proves nothing either way.
+---
+
+## 2026-07-27 - US-014
+
+Resolve Node builtins and Electron externals in the Vite build.
+
+**Interpretation:** a build-configuration story, so per execution rule 3
+no failing test was written first -- there is no unit test runner until
+US-019 and nothing behavioural to assert. The gate is the build's own
+diagnostics plus targeted empirical probes, which is what the
+acceptance criteria ask for. Two criteria ("confirmed by grep") are
+findings to record, not code to write.
+
+**What was implemented**
+
+`vite.config.js`:
+
+- `path` aliased to `path-browserify` 1.0.1 (new devDependency, exact
+  pin), in both the `path` and `node:path` spellings. Bundled, not
+  externalized, per FR-7, so its 13 first-party call sites need no
+  change and no Phase 2 shim.
+- `build.rollupOptions.output.format = 'cjs'`. This is the load-bearing
+  change: without it the externals below cannot be emitted as
+  `require()` and would not resolve under Electron.
+- `rollupOptions.external` built from two deliberately separate lists.
+  `firstPartyExternals`: `fs`, `http`, `events`, `electron`,
+  `@electron/remote`. `transitiveExternals` (dependency-only, no
+  renderer importer): `assert`, `constants`, `dgram`, `fs/promises`,
+  `https`, `net`, `os`, `querystring`, `stream`, `timers`, `tls`,
+  `url`, `util`, `worker_threads`. Both spellings of each builtin.
+- `require.resolve` via `createRequire(import.meta.url)` so depcheck
+  can see the `path-browserify` usage.
+
+`events` is not named in the acceptance criteria but is imported by
+`src/renderer/lib/state.js`, and a stub there throws on the first state
+event, so it got the same treatment as `fs`. The transitive list is
+likewise beyond the letter of the criteria: without it the config-save
+and cast-discovery paths would be wired to throwing stubs the moment
+US-015/US-016 make the bundle the one that actually loads. The two
+lists are kept separate so the first-party one stays a faithful
+inventory of Phase 2 shim scope.
+
+`docs/vite-baseline.md`: new section documenting the resolution
+strategy per builtin, including the two grep findings the criteria ask
+to record, and the Electron probe output.
+
+**Files changed**
+
+- `vite.config.js`
+- `package.json`, `package-lock.json` (path-browserify devDependency)
+- `docs/vite-baseline.md`
+- `src/AGENTS.md` (new "Node builtins in `src/renderer/`" section)
+- `progress.log`, `specs/prd.json`
+
+**Verification**
+
+- `npx vite build`: exit 0, 713 modules, **0 unresolved imports** and
+  **0 `has been externalized for browser compatibility` warnings**
+  (was 113). Remaining stderr is a direct-`eval` warning from
+  `@protobufjs/inquire` and the >500 kB chunk-size notice, both
+  pre-existing and neither a resolution failure.
+- Output bundle inspected, not just its exit code: no `import`/`export`
+  statements, 19 distinct `require("...")` specifiers covering every
+  external, **no `require("path")`**, and the `path-browserify`-unique
+  literal `Path must be a string` present -- so `path` is bundled and
+  everything else is externalized, as intended.
+- `crypto`: grep over `src/` returns one hit,
+  `src/renderer/webtorrent.js:5`, which FR-4 exempts from the Vite
+  build. No external entry, confirmed by its absence from the warning
+  stream. `os`: grep returns zero hits in `src/`; the only renderer
+  importer was the telemetry module US-002 deleted.
+- Electron resolution verified empirically, since section 5 of the
+  baseline is precisely the finding that a green build proves nothing
+  here. A temporary `web-contents-created` hook in
+  `build/main/index.js` evaluated `require('electron')` in both live
+  renderers: `hasIpcRenderer: "object"`, `hasRemote: "object"`,
+  `fsExists: "function"`. Probe patched build artifacts only and was
+  removed by the following `npm run build`.
+- `npm test` (standard + depcheck): exit 0.
+- `npm run build` (Babel, FR-2): 64 files, still green.
+- Launch check: `init: 743ms`, both windows, no `getCurrentWindow`
+  error this run.
+- **The six-step manual smoke test was NOT run** -- non-interactive
+  session. It also would not exercise this change yet: the app still
+  loads the Babel build from `static/main.html`, and nothing points at
+  the Vite bundle until US-015/US-016. The risk this story carries is
+  therefore deferred to US-017, and it is concentrated in the
+  externals that no probe here exercised -- the config-persistence
+  stack under `lib/state.js` and the casting stack under `lib/cast.js`.
+
+**Learnings for future iterations:**
+
+- **`output.format: 'cjs'` is what makes an external real.** Marking a
+  module external only records "do not bundle this"; something has to
+  emit a working `require()` at the other end. Under the default ESM
+  output the same config produces `import` statements a classic
+  `<script>` renderer cannot execute. Verify by grepping the bundle,
+  not by reading the config.
+- **Count the externalization warnings, every time.** Going from 113 to
+  0 was the whole story, and the exit code was 0 both before and after.
+- **A separate list beats a `builtinModules` catch-all.** Externalizing
+  every builtin wholesale would work and would also erase the
+  distinction between "the renderer needs this" and "a dependency needs
+  this" -- which is exactly the inventory Phase 2 is scoped from. It
+  would also absorb a new dependency's builtin silently.
+- **Acceptance criteria can under-specify a build fix.** `events` and
+  the 14 dependency-only builtins were not listed but would have been
+  live throwing stubs the moment the bundle is actually loaded. When a
+  criterion enumerates examples of a class, measure the whole class.
+- **Probe Electron resolution in the renderer, never in Node.** In a
+  plain Node process `require('electron')` returns the CLI helper's
+  path string; inside a renderer with `nodeIntegration: true` the same
+  call returns the runtime API. Only the second one answers the
+  question, and `wc.executeJavaScript` from a `web-contents-created`
+  hook is how to ask it non-interactively.
 ---

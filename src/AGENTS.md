@@ -94,3 +94,33 @@ blocks the renderer for ~3.8 seconds.
 Measure with `git stash && npm run build && npx electron --no-sandbox .`
 for the before, and `performance.now()` either side of the `require` in
 `build/renderer/main.js` for the where.
+
+## Node builtins in `src/renderer/`
+
+Every builtin the renderer imports needs an entry in `vite.config.js`,
+or Rolldown silently swaps in a browser stub that throws on first use.
+A green `npx vite build` does not catch this -- it is a *warning*
+(`Module "x" has been externalized for browser compatibility`), not an
+error. So after adding any new builtin import, check the build's stderr
+for that warning; the expected count is 0.
+
+There are two strategies, and the choice is deliberate:
+
+- **Bundle** it, if a browser-safe implementation is equivalent. `path`
+  is aliased to `path-browserify` this way, which is why its 13 renderer
+  call sites need no shim and no change.
+- **Externalize** it, for anything that needs the real Node module.
+  Works because the Vite output format is `'cjs'` and the renderer runs
+  with `nodeIntegration: true`, so an emitted `require()` resolves
+  against Electron's module registry at load time. Do not change that
+  format without re-checking every external.
+
+`electron` and `@electron/remote` MUST stay external. A bundler resolves
+`require('electron')` to `node_modules/electron/index.js` -- the npm CLI
+helper, which exports a path string, not the runtime API -- and emits no
+warning at all, so `ipcRenderer` ends up `undefined` while the build
+reports success.
+
+`vite.config.js` keeps first-party externals and dependency-only ones in
+separate lists on purpose: the first list is the inventory of what the
+Phase 2 platform shim has to cover. Add to the right one.

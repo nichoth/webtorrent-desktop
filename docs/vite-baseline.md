@@ -357,3 +357,153 @@ This predates the ESM conversion and is out of scope for US-013. It was
 worked around for verification by patching the built artifact only. The
 casting code itself is fine: with that one line bypassed, `Cast.init()`
 completes in the real renderer and installs all three device players.
+
+## Node builtin and Electron resolution (US-014)
+
+Every builtin the renderer graph reaches now has an explicit strategy,
+and the externalization-to-browser-stub warning count is **0** (it was
+113). Section 4's "20 builtins externalized to throwing stubs" is
+resolved; the tables above are left as measured on 2026-07-27.
+
+Two mechanisms, both in `vite.config.js`:
+
+1. **Bundled** -- `path`, aliased to `path-browserify` 1.0.1 (a new
+   devDependency).
+2. **Externalized** -- everything else, plus `electron` and
+   `@electron/remote`, listed in `rollupOptions.external` in both the
+   bare and `node:`-prefixed spellings.
+
+Externals only work because `build.rollupOptions.output.format` is now
+`'cjs'`. The bundle is loaded by an Electron renderer with
+`nodeIntegration: true`, so the emitted `require()` calls resolve
+against the real Node/Electron module registry at load time. Verified
+in the output bundle: no `import`/`export` statements, 19 distinct
+`require("...")` specifiers, and no `require("path")`.
+
+### `path` -- bundled, not externalized
+
+13 first-party renderer files import it:
+
+```
+src/config.js                                      src/renderer/lib/sound.js
+src/renderer/components/path-selector.js           src/renderer/lib/state.js
+src/renderer/controllers/playback-controller.js    src/renderer/lib/torrent-player.js
+src/renderer/controllers/subtitles-controller.js   src/renderer/lib/torrent-poster.js
+src/renderer/controllers/torrent-controller.js     src/renderer/lib/torrent-summary.js
+src/renderer/controllers/torrent-list-controller.js
+src/renderer/lib/migrations.js
+src/renderer/pages/create-torrent-page.js
+```
+
+(`src/renderer/webtorrent.js` also imports it and `src/main/` has five
+more importers, but neither goes through Vite.)
+
+Bundling per FR-7 means none of those 13 call sites changes and none of
+them needs a Phase 2 shim -- every use is pure string manipulation
+(`join`, `basename`, `extname`, `parse`), which `path-browserify`
+implements identically. Confirmed present in the output by grepping the
+minified bundle for `Path must be a string`, a string literal unique to
+`path-browserify`.
+
+### `fs` -- external, Phase 2 shim work
+
+Six first-party renderer importers:
+
+| File |
+| --- |
+| `src/config.js` |
+| `src/renderer/main.js` |
+| `src/renderer/controllers/subtitles-controller.js` |
+| `src/renderer/controllers/torrent-list-controller.js` |
+| `src/renderer/lib/migrations.js` |
+| `src/renderer/lib/state.js` |
+
+These are **Phase 2 shim work** -- US-023 (`implement fs.js`) and
+US-028 (`migrate the fs call sites`). Externalizing is the holding
+position that keeps them working until then; it is not the destination.
+
+### `http` -- external, deferred casualty
+
+One importer: `src/renderer/lib/cast.js:4`. The PRD designates
+`lib/cast.js` a deferred casualty and exempts it from the shim, so this
+external is permanent for as long as that exemption holds. No Phase 2
+story owns it.
+
+### `events` -- external
+
+One importer: `src/renderer/lib/state.js`, for `EventEmitter`. Not
+named in the US-014 acceptance criteria, but it is a first-party
+builtin import and a stub here would throw on the first state event, so
+it gets the same treatment as `fs`.
+
+### `crypto` -- no external entry needed
+
+Grep over `src/` for `require('crypto')`/`from 'crypto'` returns
+exactly one hit:
+
+```
+src/renderer/webtorrent.js:5:const crypto = require('crypto')
+```
+
+`webtorrent.js` is exempt from the Vite build by FR-4 -- it is the
+hidden window and stays CommonJS -- so `crypto` never enters this
+module graph. Confirmed by its absence from the build's externalization
+warnings even before US-014's changes. **No external entry, no alias,
+no shim.**
+
+### `os` -- no renderer usage remains
+
+Grep over `src/` for `require('os')`/`from 'os'` returns **zero** hits.
+The renderer's only importer was `src/renderer/lib/telemetry.js`, and
+US-002 deleted that file. `os` still appears in the external list, but
+purely for dependencies -- `application-config-path`, `multicast-dns`,
+`rimraf`, `upnp-device-client` -- and **not for any renderer file**, so
+it needs nothing from the Phase 2 shim.
+
+### `electron` and `@electron/remote` -- external
+
+This is the fix for section 5, the worst finding in the baseline. Both
+are now in `rollupOptions.external`, so `require("electron")` survives
+into the output instead of being resolved to
+`node_modules/electron/index.js` (the npm CLI helper that exports a
+path string).
+
+Verified empirically rather than by build exit code, since the whole
+point of section 5 is that a green build proves nothing here. A
+temporary `web-contents-created` hook in `build/main/index.js` ran
+`require('electron')` inside both live renderers:
+
+```
+US014-PROBE: main.html       {"typeofExport":"object","hasIpcRenderer":"object","hasRemote":"object","fsExists":"function"}
+US014-PROBE: webtorrent.html {"typeofExport":"object","hasIpcRenderer":"object","hasRemote":"object","fsExists":"function"}
+```
+
+`ipcRenderer` is a real object, `@electron/remote`'s `app` resolves,
+and the externalized `fs` gives a real `existsSync`. The probe patched
+build artifacts only and was removed by the following `npm run build`.
+
+### Dependency-only externals
+
+Reached through `node_modules`, with no first-party importer, and
+therefore outside the shim's scope. Kept in a separate list in
+`vite.config.js` so the first-party inventory above stays an accurate
+statement of what Phase 2 must cover:
+
+`assert`, `constants`, `dgram`, `fs/promises`, `https`, `net`, `os`,
+`querystring`, `stream`, `timers`, `tls`, `url`, `util`,
+`worker_threads`
+
+They come from two subtrees: the config-persistence stack under
+`lib/state.js` (`application-config`, `write-file-atomic`,
+`graceful-fs`, `rimraf`) and the casting stack under `lib/cast.js`. The
+list is enumerated from measured warnings rather than taken from
+`module.builtinModules`, so a dependency reaching for a *new* builtin
+still surfaces as a warning instead of being silently absorbed.
+
+### Remaining build warnings
+
+Two, both pre-existing and neither a resolution failure:
+
+- `[EVAL]` direct `eval` in `node_modules/@protobufjs/inquire` (a
+  `castv2` dependency).
+- Chunk size over 500 kB -- the bundle is 1.45 MB / 431 kB gzipped.

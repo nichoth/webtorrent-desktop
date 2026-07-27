@@ -258,8 +258,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck)"
       ],
       "priority": 14,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "path is bundled from path-browserify (13 call sites, no shim needed); fs, http, events, electron and @electron/remote are external, plus 14 dependency-only builtins in a separate list so the first-party inventory stays Phase 2's shim scope. Output format is now cjs, which is what makes the externals resolve under nodeIntegration. Externalization warnings 113 -> 0, unresolved imports 0. crypto (webtorrent.js only, FR-4 exempt) and os (zero renderer hits after US-002) need no entry; both recorded in docs/vite-baseline.md. Electron resolution verified by evaluating require('electron') inside both live renderers, not by exit code. Smoke test not run (non-interactive, and nothing loads the Vite bundle until US-015/US-016)."
     },
     {
       "id": "US-015",
