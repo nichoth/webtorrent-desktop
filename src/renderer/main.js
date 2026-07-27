@@ -22,6 +22,7 @@ import TorrentListController from './controllers/torrent-list-controller'
 import AudioTracksController from './controllers/audio-tracks-controller'
 import FolderWatcherController from './controllers/folder-watcher-controller'
 import MediaController from './controllers/media-controller'
+import PlaybackController from './controllers/playback-controller'
 import PrefsController from './controllers/prefs-controller'
 import SubtitlesController from './controllers/subtitles-controller'
 import TorrentController from './controllers/torrent-controller'
@@ -71,14 +72,10 @@ function onState (err, _state) {
   sound.init(state)
 
   // Create controllers. createGetter still defers construction until the first
-  // dispatch that needs the controller. playback-controller is the last one
-  // still loaded by require(); it becomes an import in US-010.
+  // dispatch that needs the controller.
   controllers = {
     media: createGetter(() => new MediaController(state)),
-    playback: createGetter(() => {
-      const PlaybackController = require('./controllers/playback-controller')
-      return new PlaybackController(state, config, update)
-    }),
+    playback: createGetter(() => new PlaybackController(state, config, update)),
     prefs: createGetter(() => new PrefsController(state, config)),
     subtitles: createGetter(() => new SubtitlesController(state)),
     audioTracks: createGetter(() => new AudioTracksController(state)),

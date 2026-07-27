@@ -112,6 +112,14 @@ it tight.
   minified: grep `build-vite/assets/main-*.js` for a string literal
   unique to that file. Identifiers are mangled; string literals are
   not.
+- **A pre-existing renderer error is always in the launch log.**
+  `src/renderer/main.js` calls `electron.remote.getCurrentWindow()`
+  (lines 145, 406, 418), but `electron.remote` was removed from
+  Electron, so every launch logs a severity-3 `Cannot read properties
+  of undefined (reading 'getCurrentWindow')`. It is on master, not
+  something you broke. `@electron/remote` is the working module.
+  Whenever a launch check surfaces an error, `git stash` your diff,
+  rebuild, and relaunch before believing it is yours.
 - **`docs/vite-baseline.md`** is the measured inventory of what Vite
   cannot handle in the renderer, grouped by cause. Consult it before
   guessing at scope for any Phase 1 story.
@@ -1011,4 +1019,57 @@ app.
   with `deleteData: false`, and assert the count came back. Also: probe
   output includes the user's torrent names -- don't paste raw probe
   logs into `progress.log`.
+---
+
+## 2026-07-27 - US-010
+- Converted `src/renderer/controllers/torrent-list-controller.js` and
+  `src/renderer/controllers/playback-controller.js` from CommonJS to
+  ESM (`import` / `export default class`). This completes the
+  controller layer: `grep -rn "module.exports\|require(" 
+  src/renderer/controllers/` now returns nothing.
+- `src/renderer/main.js`: replaced the last lazy
+  `require('./controllers/playback-controller')` inside the `createGetter`
+  thunk with a hoisted static `import PlaybackController from
+  './controllers/playback-controller'`, so the thunk is now the same
+  one-liner shape as the other eight. No `.default` access anywhere.
+- Files changed: `src/renderer/controllers/torrent-list-controller.js`,
+  `src/renderer/controllers/playback-controller.js`,
+  `src/renderer/main.js`, `src/renderer/controllers/AGENTS.md`,
+  `specs/prd.json`, `progress.log`.
+- **Tests:** no test was written. There is still no unit test runner for
+  renderer modules (that is US-019), and this is a pure
+  module-format change with no behaviour to assert. Evidence came from
+  the launch check plus a targeted runtime probe instead (below).
+- `npm test` (standard + depcheck) passes. `npm run build` compiles all
+  64 files.
+- **Verification:** launched via `npx electron --no-sandbox .` after
+  `npm run build`. App reached `'Main Window'` and `init: 745ms`, and a
+  `did-finish-load` probe reported
+  `{hasHeader: true, selectionChanged: true, restored: true,
+  previewSet: 0.5, previewCleared: true}` -- i.e. both converted
+  controllers loaded, constructed, and handled real dispatches.
+- **Smoke test NOT run.** The six-step manual smoke test needs an
+  interactive session. The acceptance criterion calls out the torrent
+  row context menu, torrent delete, and video playback start/stop;
+  those three specifically were not exercised, because each is either
+  blocking (native menu) or destructive (delete) or needs real media.
+  The residual risk is concentrated in
+  `TorrentListController.openTorrentContextMenu`, which is the only
+  path in the two files that touches `remote.Menu` -- and it is
+  untouched apart from the import line.
+- **Learnings for future iterations:**
+  - **`electron.remote.getCurrentWindow()` in `src/renderer/main.js`
+    (lines 145, 406, 418) already throws at runtime on master.** It
+    logs `Uncaught (in promise) TypeError: Cannot read properties of
+    undefined (reading 'getCurrentWindow')` -- `electron.remote` was
+    removed from Electron; the working module is `@electron/remote`,
+    which the controllers import correctly. This is PRE-EXISTING (I
+    confirmed it by `git stash`-ing my diff, rebuilding, and relaunching
+    the baseline, which logs the same error). Do not mistake it for
+    breakage introduced by an ESM conversion, and do not fix it here --
+    it belongs to the Phase 2 window/shim work (US-024).
+  - When probing the renderer, remember **torrent selection lives on
+    `state.selectedInfoHash`, not on a `selected` flag on the torrent
+    object**. Reading `torrent.selected` returns `undefined` and makes a
+    working dispatch look like a no-op.
 ---

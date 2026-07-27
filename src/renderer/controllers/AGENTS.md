@@ -24,6 +24,19 @@ Consequences when editing a controller:
   `require`, so if that ever matters the fix is a bundler-level split,
   not an inner `require`.
 
+Every file in this directory is ESM (`import` / `export default`) as of
+US-010. Keep it that way -- `module.exports` or a top-level `require(`
+here breaks the Vite renderer bundle.
+
+To exercise a controller non-interactively without touching the user's
+saved data, dispatch a pure state-mutating action and undo it:
+`toggleSelectTorrent(infoHash)` twice (torrent-list) and
+`preview(x)` then `clearPreview()` (playback) each round-trip through a
+real controller method while only reading/writing in-memory state.
+Avoid `addTorrent` / `deleteTorrent` / `openTorrentContextMenu` -- the
+first two write the real saved-state file and the third opens a
+blocking native menu.
+
 Controllers reach the main process through `ipcRenderer` today. Phase 2
 of the renderer-decoupling work replaces those calls with the platform
 shim -- check `specs/prd.json` before adding a new direct `electron`

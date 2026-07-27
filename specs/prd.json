@@ -186,7 +186,7 @@
         "Smoke test passes, with attention to the torrent row context menu, torrent delete, and video playback start/stop"
       ],
       "priority": 10,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

@@ -1,18 +1,18 @@
-const { ipcRenderer } = require('electron')
-const path = require('path')
+import { ipcRenderer } from 'electron'
+import path from 'path'
 
-const Cast = require('../lib/cast')
-const { dispatch } = require('../lib/dispatcher')
-const { UnplayableFileError, UnplayableTorrentError } = require('../lib/errors')
-const sound = require('../lib/sound')
-const TorrentPlayer = require('../lib/torrent-player')
-const TorrentSummary = require('../lib/torrent-summary')
-const Playlist = require('../lib/playlist')
-const State = require('../lib/state')
+import Cast from '../lib/cast'
+import { dispatch } from '../lib/dispatcher'
+import { UnplayableFileError, UnplayableTorrentError } from '../lib/errors'
+import sound from '../lib/sound'
+import TorrentPlayer from '../lib/torrent-player'
+import TorrentSummary from '../lib/torrent-summary'
+import Playlist from '../lib/playlist'
+import State from '../lib/state'
 
 // Controls playback of torrents and files within torrents
 // both local (<video>,<audio>,external player) and remote (cast)
-module.exports = class PlaybackController {
+export default class PlaybackController {
   constructor (state, config, update) {
     this.state = state
     this.config = config
