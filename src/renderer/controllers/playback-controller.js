@@ -1,7 +1,7 @@
 import { ipcRenderer } from 'electron'
 import path from 'path'
 
-import Cast from '../lib/cast'
+import * as Cast from '../lib/cast'
 import { dispatch } from '../lib/dispatcher'
 import { UnplayableFileError, UnplayableTorrentError } from '../lib/errors'
 import * as sound from '../lib/sound'

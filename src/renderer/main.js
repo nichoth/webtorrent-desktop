@@ -7,6 +7,7 @@ import React from 'react'
 import ReactDOM from 'react-dom'
 
 import config from '../config'
+import * as Cast from './lib/cast'
 import State from './lib/state'
 import * as sound from './lib/sound'
 import * as TorrentPlayer from './lib/torrent-player'
@@ -49,8 +50,11 @@ setDispatch(dispatch)
 // From dispatch(...), events are sent to one of the controllers
 let controllers = null
 
-// This dependency is the slowest-loading, so we lazy load it
-let Cast = null
+// Cast is the slowest-loading dependency, so it used to be require()d inside
+// lazyLoadCast() below. ESM has no synchronous conditional import, so the
+// module is loaded at startup now; only Cast.init() -- the local network scan
+// -- is still deferred to delayedInit().
+let castInitialized = false
 
 // All state lives in state.js. `state.saved` is read from and written to a file.
 // All other state is ephemeral. First we load state.saved then initialize the app.
@@ -167,8 +171,8 @@ function delayedInit () {
 
 // Lazily loads Chromecast and Airplay support
 function lazyLoadCast () {
-  if (!Cast) {
-    Cast = require('./lib/cast')
+  if (!castInitialized) {
+    castInitialized = true
     Cast.init(state, update) // Search the local network for Chromecast and Airplays
   }
   return Cast

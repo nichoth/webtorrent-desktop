@@ -48,7 +48,37 @@ it tight.
   converting a module that lazy-loads siblings, replace the thunks with
   static imports and say so in the log; `import()` is async and does
   not fit the synchronous call sites. Check `fn-getter` is still used
-  somewhere afterwards or depcheck fails.
+  somewhere afterwards or depcheck fails. **But measure first** -- see
+  the next two entries.
+- **Dynamic `import()` never settles in the renderer.** No resolve, no
+  reject, no console error, and control never returns to the caller
+  (observed over a 60s launch). `static/main.html` loads
+  `build/renderer/main.js` from a classic `<script>` in a `file://`
+  document, so `import()` is Chromium's loader, not Node's. It is not
+  an available deferral mechanism anywhere in `src/renderer/`, in
+  Phase 2 or otherwise. A `require()` inside a function is the only
+  one that works.
+- **Hoisting a lazy `require()` to a static import can be expensive.**
+  Cheap for most modules, but the casting stack in `lib/cast.js` costs
+  3.85s of blocking load in the Electron renderer -- it takes startup
+  from `init: 665ms` to `init: 4.5s`. A/B it: `git stash &&
+  npm run build && npx electron --no-sandbox .` for the baseline
+  number, and `performance.now()` either side of the `require` in
+  `build/renderer/main.js` to locate the cost. "The app still launches"
+  is not a startup measurement.
+- **`delayedInit()` in `src/renderer/main.js` is dead code today.** The
+  `electron.remote.getCurrentWindow()` call just above the
+  `window.setTimeout(delayedInit, ...)` throws (`electron.remote` was
+  removed in Electron 14), aborting the rest of `onState`. So
+  `checkDownloadPath()`, the visibility listener and `lazyLoadCast()`
+  never run, and cast discovery never starts on its own. Pre-existing
+  and unowned; bypass it in the build artifact if you need to verify
+  anything downstream of it.
+- **The renderer `init:` line in the launch log comes from
+  `webtorrent.js`** (the hidden window), not from `main.js`, whose
+  `console.timeEnd('init')` is unreachable for the reason above. Use
+  `a.slice(1, 5)` in the console-message hook so you capture
+  `sourceId`, or you will attribute renderer output to the wrong file.
 - **Verifying the app launches non-interactively:** run
   `npx electron --no-sandbox .` in the background, sleep ~12s, check
   the process is alive and that the log shows `'Main Window'` and
@@ -1303,4 +1333,147 @@ details under Verification.
   `ipcMain.on('setDefaultFileHandler')` listener in `build/main/ipc.js`
   to log and return instead -- that still proves the renderer sent the
   message, which is the part under test.
+---
+
+## 2026-07-27 - US-013 - Convert lib/cast.js to ESM
+
+**Testing note (execution rule 3)**
+
+Still no unit test runner in the repo (US-019), so no failing test was
+written first. The acceptance criteria were checked with Node probes
+against the Babel build plus six real Electron launches, including two
+baseline launches on stashed changes for a before/after startup
+comparison. Details under Verification.
+
+**What was implemented**
+
+- `src/renderer/lib/cast.js`: the `module.exports = { ... }` block at
+  the top became nine `export function` declarations with exactly the
+  same names. `require('http')`, `require('../../config')` and
+  `require('./errors')` became `import` statements. The three
+  casting-library `require()` calls inside `init()` were deliberately
+  left as `require()` -- see below -- with a comment recording why and
+  what was measured.
+- `src/renderer/controllers/playback-controller.js:4`:
+  `import Cast from '../lib/cast'` -> `import * as Cast`, since the
+  module now has named exports and no default.
+- `src/renderer/main.js`: `Cast = require('./lib/cast')` inside
+  `lazyLoadCast()` became a top-level `import * as Cast`, and the
+  `let Cast = null` sentinel became a `castInitialized` boolean.
+  `lazyLoadCast()` still defers `Cast.init()` -- only the module load
+  moved. This is free now that the heavy libraries stay lazy: the
+  module was already in the static graph via `playback-controller.js`.
+
+**The one thing that did not convert, and why**
+
+`airplayer`, `chromecasts` and `dlnacasts` stay `require()` calls
+inside `init()`. Both ESM-native alternatives were fully implemented
+and then reverted on evidence:
+
+1. Static imports cost **3.85 seconds** of blocking module load in the
+   Electron renderer, taking startup from `init: 665ms` to
+   `init: 4.5s`.
+2. `await Promise.all([import('airplayer'), ...])` with an async
+   `init()` works in Node but **never settles in the Electron
+   renderer** -- no resolve, no reject, no error, control never returns
+   to the caller, over a 60s launch.
+
+These are not top-level requires, so the story's grep criterion is
+still met, and `cast.js` is the module the PRD already designates a
+deferred casualty exempt from the Vite bundle.
+
+**Files changed**
+
+- `src/renderer/lib/cast.js`, `src/renderer/main.js`,
+  `src/renderer/controllers/playback-controller.js`
+- `docs/vite-baseline.md`, `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `npm test` (standard + depcheck) passes, exit 0. `npm run build`
+  compiles 64 files.
+- Grep over `src/renderer/**/*.js`: 0 `module.exports`, 0 top-level
+  `require(`. The only `require(` outside `webtorrent.js` are the three
+  in `cast.js:47-49` and mentions in comments. Recorded in
+  `docs/vite-baseline.md`.
+- Exports are byte-identical in shape to the old `module.exports`:
+  `init,pause,play,seek,selectDevice,setRate,setVolume,stop,toggleMenu`,
+  all functions, no `default`.
+- Module load is 19ms, so the heavy stack is confirmed still lazy;
+  `init()` then takes 118ms in Node to load and construct it.
+- **Discovery really runs**: monkeypatching `dgram.Socket.prototype.send`
+  before loading cast shows the queries going out --
+  `{"239.255.255.250:1900":2,"224.0.0.251:5353":2}`, i.e. SSDP for DLNA
+  and mDNS for Chromecast + AirPlay. Zero devices were found because
+  there is no cast hardware on this network; the packets are the
+  evidence, not the device count.
+- **The `http` import works**: drove `chromecastPlayer().open()` with a
+  fake device and a real base64 WebVTT track. `serveSubtitles` started
+  the server, `device.play` received
+  `subtitles: ["http://127.0.0.1:<port>/"]` with `autoSubtitles: true`,
+  and fetching that URL returned `content-type: text/vtt;charset=utf-8`
+  with a byte-exact body. `state.playing.location` became
+  `'chromecast'` with no errors pushed.
+- **Test-mode path**: under `NODE_ENV=test`, `init()` installs the three
+  `testPlayer`s synchronously; `toggleMenu('chromecast')` builds the
+  menu, `selectDevice(1)` sets `location='chromecast-pending'` and
+  `castName='chromecast-2'`, `stop()` returns to `'local'`, and an
+  unknown location throws a real `CastingError` (`instanceof` holds
+  across the module boundary).
+- **Startup**: `init: 739ms` against a stash-measured baseline of
+  `init: 665ms` -- within noise, versus `init: 4.5s` for the static
+  import version.
+- **Real renderer**: with build artifacts patched to log, `Cast.init()`
+  completes in the Electron renderer, all three libraries load, and
+  `state.devices` ends up as `chromecast,dlna,airplay`. No severity-3
+  renderer errors other than the pre-existing `getCurrentWindow` one.
+- **The six-step manual smoke test was NOT run** -- non-interactive
+  session. Steps needing a human at the UI (adding a torrent, playing
+  media, clicking a cast button) were not exercised. What this diff
+  touches was verified empirically as above.
+
+**Pre-existing bug found, not fixed (out of scope)**
+
+`delayedInit()` never runs. `main.js` calls
+`electron.remote.getCurrentWindow().isVisible()` to decide whether to
+play the startup sound, but `electron.remote` was removed in Electron
+14, so it throws and aborts the rest of `onState` -- including the
+`window.setTimeout(delayedInit, ...)` two lines below. So
+`checkDownloadPath()`, the visibility listener and `lazyLoadCast()` are
+all dead at startup today, and cast discovery never starts on its own.
+Written up in `docs/vite-baseline.md`; it predates this story and
+belongs to whoever owns the `@electron/remote` migration.
+
+**Learnings for future iterations:**
+
+- **Dynamic `import()` never settles in this Electron renderer.** The
+  renderer loads `build/renderer/main.js` from a classic `<script>` in
+  a `file://` document, so `import()` is Chromium's loader, not
+  Node's, and a bare specifier just hangs -- silently, with no
+  rejection and no console error. It is therefore NOT an available
+  substitute for a lazy `require()` anywhere in the renderer. Do not
+  reach for it in Phase 2.
+- **"Lazy require has no ESM equivalent, so hoist it" has a limit.**
+  That rule held for US-011/US-012 because those modules were cheap.
+  Measure before applying it: the casting stack costs 3.85s. Timestamp
+  either side of the `require` in `build/renderer/main.js` with
+  `performance.now()` and read it back through the console-message
+  hook.
+- **Always A/B startup against a stashed baseline.** `git stash &&
+  npm run build && npx electron .` gives a real number to compare
+  against; without it the 4.5s regression would have read as "the app
+  launches fine".
+- **The renderer's `init:` line you see in the log is from
+  `webtorrent.js`, the hidden window** -- not from `main.js`, whose
+  `console.timeEnd('init')` is unreachable because of the
+  `getCurrentWindow` bug above. Capture `sourceId` in the
+  console-message hook (`a.slice(1, 5)`, not `slice(1, 4)`) or you will
+  attribute renderer messages to the wrong file, as happened here.
+- **A missing log line is evidence too.** Working backwards from "my
+  probe didn't print" is what surfaced the dead `delayedInit()`. Probe
+  the caller before concluding the callee is broken.
+- **Proving a network scan runs without cast hardware**: monkeypatch
+  `dgram.Socket.prototype.send` before requiring the module and count
+  packets by destination. SSDP is `239.255.255.250:1900`, mDNS is
+  `224.0.0.251:5353`. A device count of 0 proves nothing either way.
 ---

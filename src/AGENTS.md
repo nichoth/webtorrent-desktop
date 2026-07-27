@@ -68,3 +68,29 @@ is.
 
 Exempt from all of the above (FR-4): it stays CommonJS, is never passed
 through Vite, and loads via `static/webtorrent.html`.
+
+## Deferring a module load in the renderer
+
+**Do not use dynamic `import()` in `src/renderer/`.** It never settles
+there -- no resolve, no reject, no console error, and control never
+returns to the caller. `static/main.html` loads
+`build/renderer/main.js` from a classic `<script>` in a `file://`
+document, so `import()` goes through Chromium's module loader rather
+than Node's, and a bare specifier just hangs.
+
+That leaves only two ways to load a module, and the choice is a
+measurement, not a preference:
+
+- A static `import` is right for anything cheap, which is nearly
+  everything. This is what US-005..US-013 did for the lazy `require()`
+  and `fn-getter` thunks they replaced.
+- A `require()` inside a function is the only working deferral. It is a
+  deliberate exception, so it needs a comment saying what it cost to
+  load and confirming a static import was actually measured.
+
+`lib/cast.js:47-49` is the only such exception today: the casting stack
+blocks the renderer for ~3.8 seconds.
+
+Measure with `git stash && npm run build && npx electron --no-sandbox .`
+for the before, and `performance.now()` either side of the `require` in
+`build/renderer/main.js` for the where.

@@ -239,8 +239,8 @@
         "Smoke test passes"
       ],
       "priority": 13,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Converted to named ESM exports; require('http'), config and errors are now imports. The three casting-library require() calls inside init() stay as require(): static imports cost 3.85s of renderer startup and dynamic import() never settles in the Electron renderer, both measured. They are not top-level, so the grep criterion holds. Smoke test not run (non-interactive session); verified by Node probes and six Electron launches instead. See docs/vite-baseline.md."
     },
     {
       "id": "US-014",

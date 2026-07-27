@@ -280,3 +280,80 @@ Revised first-party counts after US-002: 21 Node-builtin import sites
 (was 23), 14 `electron` import sites (was 15). The tables above are
 left as measured on 2026-07-27 so the baseline stays a faithful record
 of the starting state; this section is the delta.
+
+## End of the ESM conversion (US-013)
+
+`src/renderer/lib/cast.js` was the last renderer module on
+`module.exports`. With it converted, the conversion that US-005 through
+US-013 carried out is complete, verified by grep over
+`src/renderer/**/*.js` on 2026-07-27:
+
+| Pattern | Matches |
+| --- | --- |
+| `module.exports` | 0 |
+| top-level `require(` (column 0) | `src/renderer/webtorrent.js` only |
+| any `require(` | `src/renderer/webtorrent.js`, plus `cast.js:47-49` (below) and comments |
+
+`webtorrent.js` is exempt by FR-4 -- Vite never builds it, so it stays
+CommonJS.
+
+### The one deliberate `require()` exception
+
+`lib/cast.js` keeps three lazy `require()` calls inside `init()`:
+
+```js
+airplayer = require('airplayer')()
+chromecasts = require('chromecasts')()
+dlnacasts = require('dlnacasts')()
+```
+
+They are not top-level, so they do not affect the grep criterion above,
+and they are confined to the module the PRD already designates a
+deferred casualty and exempts from the Vite bundle.
+
+Both ESM-native alternatives were implemented and measured against the
+Babel build in a real Electron 27 renderer, and both fail:
+
+1. **Static imports.** Loading the casting stack (`chromecasts`,
+   `dlnacasts`, `airplayer` and their `castv2`/`bonjour`/`upnp`
+   dependency trees) blocks the renderer for **3.85 seconds**
+   -- timestamped either side of the `require` at
+   `build/renderer/main.js`: `t-before-cast 231ms`,
+   `t-after-cast 4080ms`. Startup went from `init: 665ms` to
+   `init: 4.5s`. That is the "~300ms improvement in startup time" the
+   original comment claimed, except an order of magnitude larger.
+2. **Dynamic `import()`.** `await Promise.all([import('airplayer'),
+   ...])` inside an `async init()` works in plain Node (resolves in
+   119ms, correct `.default` interop) but **never settles at all in the
+   Electron renderer** -- no resolve, no reject, no console error, and
+   control never returns to the caller, observed over a 60-second
+   launch. The renderer loads `build/renderer/main.js` from a classic
+   `<script>` in a `file://` document, so `import()` is Chromium's, not
+   Node's.
+
+The lazy `require()` keeps startup at `init: 739ms`, within noise of
+the 665ms baseline.
+
+This matters beyond `cast.js`: **dynamic `import()` is not a usable
+deferral mechanism anywhere in this renderer** as long as it is loaded
+as a classic script. Phase 2 should not reach for it.
+
+### Pre-existing bug found while verifying (not fixed here)
+
+`delayedInit()` never runs in the current build. `main.js` does
+`electron.remote.getCurrentWindow().isVisible()` (the `sound.play('STARTUP')`
+guard), and `electron.remote` was removed in Electron 14 in favour of
+`@electron/remote`, so it throws `TypeError: Cannot read properties of
+undefined (reading 'getCurrentWindow')` and aborts the rest of
+`onState` -- including the `window.setTimeout(delayedInit, ...)` two
+lines below it. Consequences: `checkDownloadPath()`, the
+`webkitvisibilitychange` listener and `lazyLoadCast()` are all dead
+code at startup today, so **cast device discovery never starts on its
+own**, and `console.timeEnd('init')` never fires in the main window
+(the `init:` line seen in the renderer console comes from
+`webtorrent.js`, the hidden window).
+
+This predates the ESM conversion and is out of scope for US-013. It was
+worked around for verification by patching the built artifact only. The
+casting code itself is fine: with that one line bypassed, `Cast.init()`
+completes in the real renderer and installs all three device players.
