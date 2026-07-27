@@ -15,6 +15,18 @@ import { setDispatch } from './lib/dispatcher'
 // Perf optimization: Needed immediately, so do not lazy load it below
 import TorrentListController from './controllers/torrent-list-controller'
 
+// These used to be lazy require() calls inside the createGetter thunks below.
+// ESM has no synchronous equivalent -- import() is async and does not fit the
+// synchronous controllers map -- so they are static imports now. The thunks
+// still defer *construction*; only module loading moved to startup.
+import AudioTracksController from './controllers/audio-tracks-controller'
+import FolderWatcherController from './controllers/folder-watcher-controller'
+import MediaController from './controllers/media-controller'
+import PrefsController from './controllers/prefs-controller'
+import SubtitlesController from './controllers/subtitles-controller'
+import TorrentController from './controllers/torrent-controller'
+import UpdateController from './controllers/update-controller'
+
 import App from './pages/app'
 
 console.time('init')
@@ -58,44 +70,22 @@ function onState (err, _state) {
 
   sound.init(state)
 
-  // Create controllers. These stay on require() rather than becoming imports
-  // because they are deliberately lazy -- an import would be hoisted and load
-  // every controller at startup. Babel compiles this module to CommonJS, so
-  // require() is still available at runtime.
+  // Create controllers. createGetter still defers construction until the first
+  // dispatch that needs the controller. playback-controller is the last one
+  // still loaded by require(); it becomes an import in US-010.
   controllers = {
-    media: createGetter(() => {
-      const MediaController = require('./controllers/media-controller')
-      return new MediaController(state)
-    }),
+    media: createGetter(() => new MediaController(state)),
     playback: createGetter(() => {
       const PlaybackController = require('./controllers/playback-controller')
       return new PlaybackController(state, config, update)
     }),
-    prefs: createGetter(() => {
-      const PrefsController = require('./controllers/prefs-controller')
-      return new PrefsController(state, config)
-    }),
-    subtitles: createGetter(() => {
-      const SubtitlesController = require('./controllers/subtitles-controller')
-      return new SubtitlesController(state)
-    }),
-    audioTracks: createGetter(() => {
-      const AudioTracksController = require('./controllers/audio-tracks-controller')
-      return new AudioTracksController(state)
-    }),
-    torrent: createGetter(() => {
-      const TorrentController = require('./controllers/torrent-controller')
-      return new TorrentController(state)
-    }),
+    prefs: createGetter(() => new PrefsController(state, config)),
+    subtitles: createGetter(() => new SubtitlesController(state)),
+    audioTracks: createGetter(() => new AudioTracksController(state)),
+    torrent: createGetter(() => new TorrentController(state)),
     torrentList: createGetter(() => new TorrentListController(state)),
-    update: createGetter(() => {
-      const UpdateController = require('./controllers/update-controller')
-      return new UpdateController(state)
-    }),
-    folderWatcher: createGetter(() => {
-      const FolderWatcherController = require('./controllers/folder-watcher-controller')
-      return new FolderWatcherController()
-    })
+    update: createGetter(() => new UpdateController(state)),
+    folderWatcher: createGetter(() => new FolderWatcherController())
   }
 
   // Add first page to location history

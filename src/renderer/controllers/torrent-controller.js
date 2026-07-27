@@ -1,11 +1,11 @@
-const path = require('path')
-const { ipcRenderer } = require('electron')
+import path from 'path'
+import { ipcRenderer } from 'electron'
 
-const TorrentSummary = require('../lib/torrent-summary')
-const sound = require('../lib/sound')
-const { dispatch } = require('../lib/dispatcher')
+import TorrentSummary from '../lib/torrent-summary'
+import sound from '../lib/sound'
+import { dispatch } from '../lib/dispatcher'
 
-module.exports = class TorrentController {
+export default class TorrentController {
   constructor (state) {
     this.state = state
   }

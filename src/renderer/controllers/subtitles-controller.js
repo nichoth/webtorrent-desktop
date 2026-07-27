@@ -1,11 +1,15 @@
-const remote = require('@electron/remote')
-const fs = require('fs')
-const path = require('path')
-const parallel = require('run-parallel')
+import remote from '@electron/remote'
+import fs from 'fs'
+import path from 'path'
+import parallel from 'run-parallel'
+import concat from 'simple-concat'
+import LanguageDetect from 'languagedetect'
+import srtToVtt from 'srt-to-vtt'
+import iso639 from 'iso-639-1'
 
-const { dispatch } = require('../lib/dispatcher')
+import { dispatch } from '../lib/dispatcher'
 
-module.exports = class SubtitlesController {
+export default class SubtitlesController {
   constructor (state) {
     this.state = state
   }
@@ -83,11 +87,6 @@ module.exports = class SubtitlesController {
 }
 
 function loadSubtitle (file, cb) {
-  // Lazy load to keep startup fast
-  const concat = require('simple-concat')
-  const LanguageDetect = require('languagedetect')
-  const srtToVtt = require('srt-to-vtt')
-
   // Read the .SRT or .VTT file, parse it, add subtitle track
   const filePath = file.path || file
 
@@ -116,7 +115,6 @@ function loadSubtitle (file, cb) {
 // Checks whether a language name like 'English' or 'German' matches the system
 // language, aka the current locale
 function isSystemLanguage (language) {
-  const iso639 = require('iso-639-1')
   const osLangISO = window.navigator.language.split('-')[0] // eg 'en'
   const langIso = iso639.getCode(language) // eg 'de' if language is 'German'
   return langIso === osLangISO

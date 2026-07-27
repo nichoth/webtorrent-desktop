@@ -16,9 +16,13 @@ Consequences when editing a controller:
 - Renaming a method means grepping for the string, not for the
   identifier. Check `src/renderer/pages/`, `src/renderer/components/`
   and `src/main/` too.
-- Controllers are lazily constructed via `fn-getter` in `main.js`, so a
-  `require` added here is not paid at startup. That laziness is
-  deliberate; keep new heavy imports inside the controller.
+- Controllers are lazily *constructed* via `fn-getter` in `main.js`, but
+  since the ESM conversion they are no longer lazily *loaded* -- their
+  `import` in `main.js` is hoisted, so every module-level import here is
+  paid at startup. A heavy new dependency in a controller now costs
+  startup time. There is no synchronous ESM equivalent of the old lazy
+  `require`, so if that ever matters the fix is a bundler-level split,
+  not an inner `require`.
 
 Controllers reach the main process through `ipcRenderer` today. Phase 2
 of the renderer-decoupling work replaces those calls with the platform

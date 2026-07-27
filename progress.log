@@ -885,3 +885,130 @@ and `docs/vite-baseline.md`.
   switching to named imports means editing `colors.greyNNN` at each
   use too. Grep for `colors\.` before assuming a file is header-only.
 ---
+
+## 2026-07-27 - US-009
+
+Convert the seven smaller controllers to ESM.
+
+**Interpretation:** a mechanical module-format conversion with no
+behaviour change, and there is still no unit test runner (US-019), so
+per execution rule 3 no failing test was written first. Every
+behavioural claim below was verified empirically against the running
+app.
+
+**What was implemented**
+
+- All 7 controllers converted from `require` to `import` and from
+  `module.exports = class X` to `export default class X`:
+  audio-tracks, folder-watcher, update, prefs, media, subtitles,
+  torrent.
+- `subtitles-controller.js` had four *inner* lazy `require()` calls
+  inside function bodies (`simple-concat`, `languagedetect`,
+  `srt-to-vtt`, `iso-639-1`). Those are now static top-level imports;
+  the "lazy load to keep startup fast" comment went with them.
+- `src/renderer/main.js`: the seven `require('./controllers/...')` calls
+  inside the `createGetter` thunks became static imports at the top of
+  the file. This was forced, not cosmetic -- Babel compiles an ESM
+  controller to `exports.default = class`, so `require()` would have
+  returned the namespace object and `new MediaController(state)` would
+  have thrown. The acceptance criteria forbid a `.default` access, so
+  static imports are the only option. `createGetter` still defers
+  *construction*; only module loading moved to startup.
+  `playback-controller` stays on `require()` -- it is still CommonJS
+  until US-010.
+- Updated the stale laziness bullet in
+  `src/renderer/controllers/AGENTS.md`.
+
+**Files changed**
+
+- 7 files in `src/renderer/controllers/`
+- `src/renderer/main.js`
+- `src/renderer/controllers/AGENTS.md`
+- `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `grep -rn "module\.exports\|require("` over the 7 files returns
+  nothing (exit 1). `torrent-list-controller.js` and
+  `playback-controller.js` are untouched, as scoped.
+- `npm test` (standard + depcheck) passes, exit 0. depcheck stays green
+  because the four hoisted subtitle deps are still imported.
+- `npm run build` (Babel) compiles 64 files.
+- `npx vite build` succeeds, and the externalized-builtin warning count
+  is **149 before and 149 after** the change -- hoisting the four
+  subtitle deps to top level introduced no new Node-builtin edge.
+  Bundle contains one occurrence each of `Select a subtitles file.`,
+  `start folder watcher`, `new version skipped by user` and
+  `Download Complete`, proving subtitles/folder-watcher/update/torrent
+  all reached the bundle.
+- App launched via `npx electron --no-sandbox .` (`init: 726.045ms`)
+  with a temporary probe appended to `build/main/index.js` (never to
+  source) that dispatched one action per controller and read the state
+  back. All ten returned real values, none threw:
+  `toggleAudioTracksMenu` -> `showMenu true`; `toggleSubtitlesMenu` ->
+  `true`; `checkForSubtitles` -> no throw; `mediaMouseMoved` ->
+  timestamp; `mediaStalled` -> `isStalled true`; `updateAvailable
+  '99.0.0'` -> `modal.id === 'update-available-modal'`; `skipVersion` ->
+  `skippedVersions ['99.0.0']`; folder watcher start+stop -> sent;
+  `preferences` -> `location.url() === 'preferences'`;
+  `updatePreferences` -> pref round-tripped.
+- `torrent-controller` got a real end-to-end check rather than a
+  synthetic dispatch: it is constructed inside `setupIpc()` before
+  `console.timeEnd('init')`, so the `init:` line alone proves the
+  default export resolves. On top of that the probe dispatched
+  `addTorrent` with the Sintel magnet link; `torrentParsed` and
+  `torrentMetadata` both fired (the new entry came back with its
+  infoHash and 11 files). The probe then deleted it and the saved
+  torrent count returned to its baseline of 11.
+- The only severity-3 renderer console lines are the two pre-existing
+  ones already recorded under US-005/US-008 (the `electron.remote`
+  `getCurrentWindow` failure and the Material-UI TextField id
+  warning). Neither is new.
+- `npm run build` was re-run afterwards; `build/main/index.js` has 0
+  `PROBE` matches and no dev electron process is left running.
+- The six-step manual smoke test was **not** run -- this session is
+  non-interactive. Residual risk sits on the three areas the criteria
+  call out: preferences changes were exercised only via a no-op
+  round-trip of one pref (the real `setDefaultFileHandler` /`setStartup`
+  IPC branches were not hit), subtitles was exercised via the menu
+  toggle and an early-returning `checkForSubtitles` but no actual .srt
+  file was ever parsed through the hoisted `srt-to-vtt` /
+  `simple-concat` path, and the torrent add stopped at metadata --
+  nothing was downloaded or played.
+
+**Learnings for future iterations:**
+
+- **Converting a controller to ESM forces `main.js` to change too.**
+  The `createGetter(() => { const X = require(...); return new X() })`
+  shape silently breaks the moment the required module becomes ESM:
+  Babel's `exports.default` makes `require()` return the namespace
+  object, so `new X()` throws `X is not a constructor` at first
+  dispatch, not at startup. US-010 has the same coupling for
+  `playback-controller` -- convert the file and its `main.js` thunk in
+  the same commit.
+- **`import` in `main.js` deletes the startup-laziness optimisation,
+  not just the syntax.** Worth stating plainly because the old comment
+  claimed the laziness was deliberate perf work. Measured cost: `init:`
+  went 664ms (US-008) -> 726ms (now), inside run-to-run noise, so the
+  laziness was not buying much. Don't reintroduce inner `require`s to
+  chase it.
+- **Externalized-builtin warning *count* is the cheap regression check
+  for hoisting deps.** `npx vite build 2>&1 | grep -c externalized`
+  before and after a change is a one-line way to prove a newly-static
+  import did not drag a Node builtin into the graph. Much faster than
+  re-reading `docs/vite-baseline.md`.
+- **`window.dispatch` plus a state read is enough evidence for any
+  controller story.** Every controller action is reachable as
+  `window.dispatch('<actionName>', ...)` (the names are the keys of
+  `dispatchHandlers` in `main.js`), and most mutate something readable
+  under `window.state`. Wrap each in try/catch inside one
+  `executeJavaScript` call and return JSON -- a thrown
+  `X is not a constructor` is exactly what a broken default export
+  looks like.
+- **The dev app shares the real saved-state file.** `addTorrent` in a
+  probe writes to the user's actual torrent list, so read the baseline
+  count first, filter by the infoHash you added, `deleteTorrent` it
+  with `deleteData: false`, and assert the count came back. Also: probe
+  output includes the user's torrent names -- don't paste raw probe
+  logs into `progress.log`.
+---
