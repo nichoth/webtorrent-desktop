@@ -1,15 +1,15 @@
-const React = require('react')
-const PropTypes = require('prop-types')
+import React from 'react'
+import PropTypes from 'prop-types'
 
-const colors = require('material-ui/styles/colors')
-const Checkbox = require('material-ui/Checkbox').default
-const RaisedButton = require('material-ui/RaisedButton').default
-const TextField = require('material-ui/TextField').default
-const Heading = require('../components/heading')
-const PathSelector = require('../components/path-selector')
+import { grey400 } from 'material-ui/styles/colors'
+import Checkbox from 'material-ui/Checkbox'
+import RaisedButton from 'material-ui/RaisedButton'
+import TextField from 'material-ui/TextField'
+import Heading from '../components/heading'
+import PathSelector from '../components/path-selector'
 
-const { dispatch } = require('../lib/dispatcher')
-const config = require('../../config')
+import { dispatch } from '../lib/dispatcher'
+import config from '../../config'
 
 class PreferencesPage extends React.Component {
   constructor (props) {
@@ -274,7 +274,7 @@ class PreferencesPage extends React.Component {
 
   render () {
     const style = {
-      color: colors.grey400,
+      color: grey400,
       marginLeft: 25,
       marginRight: 25
     }
@@ -333,4 +333,4 @@ class Preference extends React.Component {
   }
 }
 
-module.exports = PreferencesPage
+export default PreferencesPage

@@ -1,32 +1,39 @@
-const colors = require('material-ui/styles/colors')
-const createGetter = require('fn-getter')
-const React = require('react')
+import React from 'react'
 
-const darkBaseTheme = require('material-ui/styles/baseThemes/darkBaseTheme').default
-const getMuiTheme = require('material-ui/styles/getMuiTheme').default
-const MuiThemeProvider = require('material-ui/styles/MuiThemeProvider').default
+import { grey50, grey600, redA100, redA200, redA400 } from 'material-ui/styles/colors'
+import darkBaseTheme from 'material-ui/styles/baseThemes/darkBaseTheme'
+import lightBaseTheme from 'material-ui/styles/baseThemes/lightBaseTheme'
+import getMuiTheme from 'material-ui/styles/getMuiTheme'
+import MuiThemeProvider from 'material-ui/styles/MuiThemeProvider'
 
-const Header = require('../components/header')
+import Header from '../components/header'
 
-// Perf optimization: Needed immediately, so do not lazy load it below
-const TorrentListPage = require('./torrent-list-page')
+import TorrentListPage from './torrent-list-page'
+import PlayerPage from './player-page'
+import CreateTorrentPage from './create-torrent-page'
+import PreferencesPage from './preferences-page'
 
+import OpenTorrentAddressModal from '../components/open-torrent-address-modal'
+import RemoveTorrentModal from '../components/remove-torrent-modal'
+import UpdateAvailableModal from '../components/update-available-modal'
+import UnsupportedMediaModal from '../components/unsupported-media-modal'
+import DeleteAllTorrentsModal from '../components/delete-all-torrents-modal'
+
+// These used to be lazy `require()` calls wrapped in fn-getter. ESM has no
+// synchronous import, so every view and modal is now loaded up front.
 const Views = {
-  home: createGetter(() => TorrentListPage),
-  player: createGetter(() => require('./player-page')),
-  'create-torrent': createGetter(() => require('./create-torrent-page')),
-  preferences: createGetter(() => require('./preferences-page'))
+  home: TorrentListPage,
+  player: PlayerPage,
+  'create-torrent': CreateTorrentPage,
+  preferences: PreferencesPage
 }
 
 const Modals = {
-  'open-torrent-address-modal': createGetter(
-    () => require('../components/open-torrent-address-modal')
-  ),
-  'remove-torrent-modal': createGetter(() => require('../components/remove-torrent-modal')),
-  'update-available-modal': createGetter(() => require('../components/update-available-modal')),
-  'unsupported-media-modal': createGetter(() => require('../components/unsupported-media-modal')),
-  'delete-all-torrents-modal':
-      createGetter(() => require('../components/delete-all-torrents-modal'))
+  'open-torrent-address-modal': OpenTorrentAddressModal,
+  'remove-torrent-modal': RemoveTorrentModal,
+  'update-available-modal': UpdateAvailableModal,
+  'unsupported-media-modal': UnsupportedMediaModal,
+  'delete-all-torrents-modal': DeleteAllTorrentsModal
 }
 
 const fontFamily = process.platform === 'win32'
@@ -35,12 +42,12 @@ const fontFamily = process.platform === 'win32'
 
 darkBaseTheme.fontFamily = fontFamily
 darkBaseTheme.userAgent = false
-darkBaseTheme.palette.primary1Color = colors.grey50
-darkBaseTheme.palette.primary2Color = colors.grey50
-darkBaseTheme.palette.primary3Color = colors.grey600
-darkBaseTheme.palette.accent1Color = colors.redA200
-darkBaseTheme.palette.accent2Color = colors.redA400
-darkBaseTheme.palette.accent3Color = colors.redA100
+darkBaseTheme.palette.primary1Color = grey50
+darkBaseTheme.palette.primary2Color = grey50
+darkBaseTheme.palette.primary3Color = grey600
+darkBaseTheme.palette.accent1Color = redA200
+darkBaseTheme.palette.accent2Color = redA400
+darkBaseTheme.palette.accent3Color = redA100
 
 let darkMuiTheme
 let lightMuiTheme
@@ -103,13 +110,12 @@ class App extends React.Component {
     if (!state.modal) return
 
     if (!lightMuiTheme) {
-      const lightBaseTheme = require('material-ui/styles/baseThemes/lightBaseTheme').default
       lightBaseTheme.fontFamily = fontFamily
       lightBaseTheme.userAgent = false
       lightMuiTheme = getMuiTheme(lightBaseTheme)
     }
 
-    const ModalContents = Modals[state.modal.id]()
+    const ModalContents = Modals[state.modal.id]
     return (
       <MuiThemeProvider muiTheme={lightMuiTheme}>
         <div key='modal' className='modal'>
@@ -124,9 +130,9 @@ class App extends React.Component {
 
   getView () {
     const state = this.props.state
-    const View = Views[state.location.url()]()
+    const View = Views[state.location.url()]
     return (<View state={state} />)
   }
 }
 
-module.exports = App
+export default App

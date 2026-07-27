@@ -31,6 +31,24 @@ it tight.
 - **`npm start` = `npm run build && electron --no-sandbox .`** where
   `npm run build` is `babel src --out-dir build`. The Babel build must
   keep working at every commit (FR-2), independently of Vite.
+- **`material-ui` import shapes.** Every `material-ui/**` submodule the
+  renderer uses is CJS ending in `.default`, so a plain default import
+  is correct (`import Checkbox from 'material-ui/Checkbox'`). The one
+  exception is `material-ui/styles/colors`, which sets
+  `__esModule` and exports each colour by name with **no default** --
+  it needs named imports (`import { grey400 } from ...`). A default
+  import there silently yields `undefined` and the colour just goes
+  missing.
+- **Renderer modules still on `module.exports = X` import cleanly as
+  default imports** under both Babel's interop and Rolldown, and
+  multi-value ones (`lib/dispatcher`) as named imports. Converting a
+  file to ESM therefore never requires touching its
+  not-yet-converted dependencies.
+- **`fn-getter`-wrapped lazy `require()` has no ESM equivalent.** When
+  converting a module that lazy-loads siblings, replace the thunks with
+  static imports and say so in the log; `import()` is async and does
+  not fit the synchronous call sites. Check `fn-getter` is still used
+  somewhere afterwards or depcheck fails.
 - **Verifying the app launches non-interactively:** run
   `npx electron --no-sandbox .` in the background, sleep ~12s, check
   the process is alive and that the log shows `'Main Window'` and
@@ -583,4 +601,92 @@ so `src/config.js` reads `__dirname` through a documented guard with a
   `require('build/config')` to JSON, restore, dump again, compare in
   Python. It catches a dropped or mistyped key instantly and it is the
   only cheap check that covers all 8 main-process consumers at once.
+---
+
+## 2026-07-27 - US-006
+
+Convert `pages/app.js`, `pages/create-torrent-page.js` and
+`pages/preferences-page.js` to ESM.
+
+**Interpretation:** a mechanical module-format conversion with no unit
+test runner in the repo yet (US-019), so per execution rule 3 no
+failing test was written first. The behavioural claims -- the
+preferences page and the create-torrent page still render -- were
+verified empirically against the running app instead; see Verification.
+
+**What was implemented**
+
+- `pages/app.js`: `require` -> `import`, `module.exports = App` ->
+  `export default App`. `colors.*` became named imports
+  (`grey50`, `grey600`, `redA100/200/400`). The lazy
+  `require('material-ui/styles/baseThemes/lightBaseTheme')` inside
+  `getModal()` is now a top-level import.
+- Dropped `fn-getter` from `app.js`. The `Views` and `Modals` maps now
+  hold the components directly instead of `createGetter(() =>
+  require(...))` thunks, and the two call sites lost their `()`.
+  Consequence: all four views and all five modals load at startup
+  rather than on first use. There is no synchronous ESM import, so the
+  old laziness is not expressible; the Vite bundle would include them
+  all regardless. `fn-getter` stays a dependency -- `main.js` still
+  uses it for `Cast`.
+- `pages/create-torrent-page.js` and `pages/preferences-page.js`:
+  imports and `export default` only, plus `colors.grey400` ->
+  `grey400` in preferences.
+- Added `src/renderer/pages/AGENTS.md` documenting the two registries
+  and the material-ui import shapes.
+
+**Files changed**
+
+- `src/renderer/pages/app.js`
+- `src/renderer/pages/create-torrent-page.js`
+- `src/renderer/pages/preferences-page.js`
+- `src/renderer/pages/AGENTS.md` (new)
+- `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `npm test` (standard + depcheck) passes, exit 0.
+- `npm run build` (Babel) compiles 64 files; the three outputs are
+  `"use strict"` ESM-interop modules.
+- `npx vite build` succeeds.
+- App launched via `npx electron --no-sandbox .` with a temporary
+  probe appended to `build/main/index.js` (never to source), reaching
+  `init: 908.813ms`. The probe drove the renderer:
+  `.header` outerHTML present (463 chars); `dispatch('preferences')`
+  rendered the full preferences page (Folders / Download location /
+  Watch for new .torrent files / Playback / External player / Highest
+  Playback Priority / Default torrent app);
+  `dispatch('showCreateTorrent', ['/tmp/wt-probe'])` on a throwaway
+  2-file directory rendered "Create torrent wt-probe / 2 files, 12 B /
+  Path:/tmp/wt-probe/ / SHOW ADVANCED SETTINGS... / CANCEL / CREATE
+  TORRENT". No new renderer errors: the only severity-3 line is the
+  pre-existing `electron.remote` /`getCurrentWindow` failure already
+  recorded under US-005. `npm run build` was re-run afterwards to
+  discard the probe.
+- The six-step manual smoke test was **not** run -- this session is
+  non-interactive. The residual risk is the interactive paths the DOM
+  probe cannot reach: clicking CHANGE on a path selector (opens a real
+  native dialog through `@electron/remote`) and actually completing
+  CREATE TORRENT.
+
+**Learnings for future iterations:**
+
+- **`state.location.go` + `window.dispatch` is enough to render the
+  create-torrent page non-interactively.**
+  `dispatch('showCreateTorrent', ['<dir>'])` with a real directory path
+  walks the folder with `fs` and lands on the page, so a throwaway
+  `/tmp` directory with two files is a complete probe fixture. It only
+  works from the home route -- `showCreateTorrent` bails with an error
+  toast otherwise, so `dispatch('back')` first if the probe navigated
+  away.
+- **Two web contents means two probe runs.** The `did-finish-load`
+  hook fires for the hidden webtorrent window too, where
+  `document.querySelector('.header')` is null and
+  `document.querySelector('.content')` throws. Expect one `no-header`
+  and one script failure per run and do not read them as regressions;
+  guard the probe or just tolerate the noise.
+- **Grep the launch log for `PROBE` specifically.** Filtering with a
+  combined pattern and `head -40` buried all 8 probe lines under ~150
+  lines of `webtorrent: queueing` chatter and looked exactly like "the
+  probe never ran".
 ---

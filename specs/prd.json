@@ -120,7 +120,7 @@
         "Smoke test passes, with attention to the preferences page and the create-torrent page"
       ],
       "priority": 6,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
