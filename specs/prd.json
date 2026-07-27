@@ -1,0 +1,612 @@
+{
+  "project": "WebTorrent Desktop",
+  "branchName": "renderer-decoupling",
+  "description": "Renderer Decoupling (Vite Build + Platform Shim) -- get src/renderer/ building under Vite, then collapse every Electron and Node import in the renderer into a single replaceable platform shim implemented against Electron. Source PRD: tasks/prd-renderer-decoupling.md",
+  "conventions": {
+    "typecheck": "This repo has no TypeScript. 'Typecheck passes' means `npm test`, which runs `standard` and `depcheck`.",
+    "smokeTest": "'Smoke test passes' means the six-step manual smoke test defined under 'Standard smoke test' in tasks/prd-renderer-decoupling.md. This is an Electron desktop app, so UI verification is that manual smoke test run via `npm start` -- NOT browser automation and NOT the dev-browser skill.",
+    "babelConfig": "The Babel JSX config lives in the `babel` key of package.json, not in a `.babelrc` file. It is `@babel/plugin-transform-react-jsx` with `useBuiltIns: true`.",
+    "esmOrder": "ESM conversion runs TOP-DOWN (entry point first, lib/ last). Babel compiles `export default X` to `exports.default = X`, so a still-CommonJS consumer that does `require('./x')` breaks. The reverse (ESM importing CommonJS) is safe via Babel's `_interopRequireDefault`. Converting consumers before their dependencies is therefore the only order that keeps the app launchable at every commit per FR-2.",
+    "invariant": "FR-2: the Electron app must launch and pass the smoke test at every commit. A commit that leaves the app broken is not a valid commit.",
+    "cssFrozen": "FR-14: no CSS file may be modified. No change to visual design or user-facing behaviour beyond the telemetry removal in US-002. This is otherwise a pure refactor.",
+    "webtorrentJsExempt": "FR-4: src/renderer/webtorrent.js is never converted to ESM, never passed through Vite, and never migrated to the shim. It keeps building through Babel and loading via static/webtorrent.html unchanged.",
+    "deferredCasualties": "After US-002 deletes telemetry, exactly two deferred-casualty files remain exempt from the shim and the lint rule: `src/renderer/webtorrent.js` and `src/renderer/lib/cast.js`. `controllers/audio-tracks-controller.js` is also a deferred casualty but imports nothing restricted, so it needs no exemption."
+  },
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Create branch and capture the Vite baseline failure inventory",
+      "description": "As a developer, I want a recorded list of every module Vite cannot resolve, so that the remaining Phase 1 stories are driven by measured facts rather than guesses.",
+      "acceptanceCriteria": [
+        "Branch `renderer-decoupling` created off the current `redesign` HEAD",
+        "`vite` added to devDependencies in package.json",
+        "A minimal `vite.config.js` exists at the repo root with `src/renderer/main.js` as the build entry point",
+        "`npx vite build` is run and its complete stdout and stderr are captured verbatim into `docs/vite-baseline.md`",
+        "`docs/vite-baseline.md` groups every reported failure under four headings: CommonJS, JSX, Node builtin, Electron",
+        "The build is EXPECTED to fail at this stage; a failing build plus a captured inventory is a passing story",
+        "`npm start` still launches the app through the existing Babel build",
+        "Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-002",
+      "title": "Delete the telemetry module and its call sites",
+      "description": "As a developer, I want telemetry removed outright, because it reports to WebTorrent's own endpoints, nothing in the app reads its data, and it is the renderer's only user of Node `os` and of @electron/remote `screen`.",
+      "acceptanceCriteria": [
+        "`src/renderer/lib/telemetry.js` deleted",
+        "All 7 telemetry call sites in `src/renderer/main.js` removed: the import at line 32, `telemetry.init(state)`, the `window.addEventListener('error', ...)` telemetry handler, `telemetry.send(state)`, the 12-hour `setInterval` send, the `uncaughtError` dispatcher entry, and the `wt-uncaught-error` ipcRenderer handler",
+        "The `uncaughtError` dispatcher action is either removed entirely or left as a no-op that still prevents a dispatcher lookup failure -- whichever keeps `lib/dispatcher.js` resolving every action by name",
+        "`controllers/playback-controller.js` telemetry import and the `logPlayAttempt('abandoned')` call removed",
+        "`controllers/media-controller.js` telemetry import and the three `logPlayAttempt` calls removed",
+        "`TELEMETRY_URL` removed from `src/config.js`",
+        "Grep confirms zero references to `telemetry` remain under `src/`",
+        "Nothing else reads `state.saved.telemetry`, verified by grep before deleting; no state migration is needed for existing users",
+        "`docs/vite-baseline.md` gets a short note recording that the telemetry-related entries in the inventory are resolved by deletion rather than by porting",
+        "`npm start` launches the app through the Babel build",
+        "Uncaught errors still surface in the devtools console; confirm by triggering one",
+        "Typecheck passes (`npm test` -- standard + depcheck)",
+        "Smoke test passes, with attention to step 3 (video playback), since media-controller and playback-controller were both edited"
+      ],
+      "priority": 2,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-003",
+      "title": "Remove the Module.prototype.require monkey patch",
+      "description": "As a developer, I need the require-hook removed so that the renderer entry point can be processed by a bundler at all.",
+      "acceptanceCriteria": [
+        "The `Module.prototype.require` override at the top of `src/renderer/main.js` is deleted, along with any now-unused `module` import it required",
+        "A committed empty stub module exists (for example `stubs/inline-style-prefixer.js`) exporting a no-op",
+        "`vite.config.js` maps `inline-style-prefixer` to that stub via `resolve.alias`",
+        "`npm start` launches the app through the existing Babel build",
+        "material-ui components render unchanged on the torrent list page and the preferences page",
+        "No CSS file modified",
+        "Typecheck passes (`npm test` -- standard + depcheck)",
+        "Smoke test passes"
+      ],
+      "priority": 3,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-004",
+      "title": "Configure the JSX transform for .js files in Vite",
+      "description": "As a developer, I want Vite to compile JSX inside .js files, because every component in this codebase uses that combination and esbuild does not handle it by default.",
+      "acceptanceCriteria": [
+        "`vite.config.js` configures esbuild with `loader: 'jsx'` and an `include` matching `src/**/*.js`, or an equivalent plugin configuration",
+        "The `useBuiltIns: true` behaviour from the `babel` key in package.json is either preserved or its removal is justified in a comment inside `vite.config.js`",
+        "`npx vite build` reports no JSX syntax errors for `src/renderer/components/header.js`, verified in the build output",
+        "The Babel build path is unchanged and `npm start` still works",
+        "Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 4,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-005",
+      "title": "Convert src/renderer/main.js and src/config.js to ESM",
+      "description": "As a developer, I want the renderer entry point and the shared config module in ESM, so the top-down conversion has a starting point that does not break the CommonJS main process.",
+      "acceptanceCriteria": [
+        "`src/renderer/main.js` uses `import` syntax exclusively; no top-level `require(` remains",
+        "`src/config.js` uses named ESM exports AND `export default { ...all named values }`, so Babel-compiled CommonJS consumers keep working via both `config.APP_NAME` and destructuring",
+        "All 8 `src/main/` files that require `../config` still work unchanged (`updater.js`, `startup.js`, `handlers.js`, `tray.js`, `thumbar.js`, `index.js`, `menu.js`, `announcement.js`)",
+        "`src/renderer/webtorrent.js` still requires `../config` successfully and is otherwise untouched",
+        "A comment in `src/config.js` documents the dual-consumption approach",
+        "`src/main/` remains CommonJS; not one main-process file is converted",
+        "`npm start` launches the app through the Babel build",
+        "Typecheck passes (`npm test` -- standard + depcheck)",
+        "Smoke test passes"
+      ],
+      "priority": 5,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-006",
+      "title": "Convert pages/app.js, create-torrent-page.js, and preferences-page.js to ESM",
+      "description": "As a developer, I want the smaller page modules in ESM, continuing the top-down conversion one layer below the entry point.",
+      "acceptanceCriteria": [
+        "`pages/app.js`, `pages/create-torrent-page.js`, and `pages/preferences-page.js` use `import` / `export default` instead of `require` / `module.exports`",
+        "`src/renderer/main.js` imports `App` correctly from the converted `pages/app.js`",
+        "The still-CommonJS modules these three import (components, controllers, lib, player-page, torrent-list-page) are imported via default or named imports that match how each module exports today",
+        "No consumer of these three files is left doing a bare `require()` that would receive an `exports.default` wrapper",
+        "`npm start` launches the app through the Babel build",
+        "Typecheck passes (`npm test` -- standard + depcheck)",
+        "Smoke test passes, with attention to the preferences page and the create-torrent page"
+      ],
+      "priority": 6,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-007",
+      "title": "Convert pages/player-page.js and pages/torrent-list-page.js to ESM",
+      "description": "As a developer, I want the two large page modules in ESM, completing the page layer.",
+      "acceptanceCriteria": [
+        "`pages/player-page.js` (993 LOC) and `pages/torrent-list-page.js` (414 LOC) use `import` / `export default`",
+        "`pages/app.js` imports both correctly with no `.default` access left over",
+        "Zero files under `src/renderer/pages/` contain `module.exports` or a top-level `require(`, verified by grep",
+        "`npm start` launches the app through the Babel build",
+        "Typecheck passes (`npm test` -- standard + depcheck)",
+        "Smoke test passes, with attention to opening a video, play/pause, seek, and the torrent list rendering"
+      ],
+      "priority": 7,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-008",
+      "title": "Convert src/renderer/components/ to ESM",
+      "description": "As a developer, I need the component layer in ESM so that the page layer above it no longer relies on interop shims.",
+      "acceptanceCriteria": [
+        "All 11 files in `src/renderer/components/` use `import` / `export default`: create-torrent-error-page, delete-all-torrents-modal, header, heading, modal-ok-cancel, open-torrent-address-modal, path-selector, remove-torrent-modal, show-more, unsupported-media-modal, update-available-modal",
+        "Every one currently uses `module.exports = <single value>`, so each becomes an `export default`",
+        "All page-layer and component-layer import sites are updated to match",
+        "Zero files under `src/renderer/components/` contain `module.exports` or a top-level `require(`, verified by grep",
+        "`npm start` launches the app through the Babel build",
+        "Typecheck passes (`npm test` -- standard + depcheck)",
+        "Smoke test passes, with specific attention to the modals: remove-torrent, unsupported-media, open-torrent-address, update-available, delete-all-torrents"
+      ],
+      "priority": 8,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-009",
+      "title": "Convert the seven smaller controllers to ESM",
+      "description": "As a developer, I need the smaller controller modules in ESM, splitting the controller layer so each conversion fits one session.",
+      "acceptanceCriteria": [
+        "These 7 files use `import` / `export default`: `audio-tracks-controller.js`, `folder-watcher-controller.js`, `update-controller.js`, `prefs-controller.js`, `media-controller.js`, `subtitles-controller.js`, `torrent-controller.js`",
+        "Each currently exports a class via `module.exports = class X`, so each becomes `export default class X`",
+        "`src/renderer/main.js` instantiates every converted controller without a `.default` access left over",
+        "`lib/dispatcher.js` still resolves every controller method by name at runtime",
+        "`npm start` launches the app through the Babel build",
+        "Typecheck passes (`npm test` -- standard + depcheck)",
+        "Smoke test passes, with attention to preferences changes, subtitles, and adding a torrent"
+      ],
+      "priority": 9,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-010",
+      "title": "Convert torrent-list-controller.js and playback-controller.js to ESM",
+      "description": "As a developer, I need the two large controllers in ESM, completing the controller layer.",
+      "acceptanceCriteria": [
+        "`controllers/torrent-list-controller.js` (413 LOC) and `controllers/playback-controller.js` (395 LOC) use `import` / `export default`",
+        "`src/renderer/main.js` instantiates both without a `.default` access left over",
+        "Zero files under `src/renderer/controllers/` contain `module.exports` or a top-level `require(`, verified by grep",
+        "`npm start` launches the app through the Babel build",
+        "Typecheck passes (`npm test` -- standard + depcheck)",
+        "Smoke test passes, with attention to the torrent row context menu, torrent delete, and video playback start/stop"
+      ],
+      "priority": 10,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-011",
+      "title": "Convert the nine pure lib/ utility modules to ESM",
+      "description": "As a developer, I need the stateless lib modules in ESM, starting the lowest layer with the files that have no cross-process consumers.",
+      "acceptanceCriteria": [
+        "These 9 files use ESM syntax: `time.js`, `media-extensions.js`, `errors.js`, `dispatcher.js`, `playlist.js`, `torrent-summary.js`, `torrent-player.js`, `sound.js`, `torrent-poster.js`",
+        "Modules that export an object literal (`time`, `errors`, `dispatcher`, `playlist`, `torrent-summary`, `torrent-player`, `sound`) become named exports; `media-extensions.js` and `torrent-poster.js` export a single value and become `export default`",
+        "Named vs default choice at each module matches how its call sites consume it, and every call site is updated in the same commit",
+        "None of these 9 files is required by `src/main/`, verified by grep before converting",
+        "`npm start` launches the app through the Babel build",
+        "Typecheck passes (`npm test` -- standard + depcheck)",
+        "Smoke test passes, with attention to sounds, torrent posters, and playlist next/previous"
+      ],
+      "priority": 11,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-012",
+      "title": "Convert lib/state.js and lib/migrations.js to ESM and fix the main-process require",
+      "description": "As a developer, I need the stateful lib modules in ESM, and I need the CommonJS main process to keep consuming lib/state.js, because src/main/index.js requires it across the process boundary.",
+      "acceptanceCriteria": [
+        "`lib/state.js` and `lib/migrations.js` use ESM syntax",
+        "`lib/state.js` exports its EventEmitter singleton as `export default State`",
+        "`src/main/index.js:16` is updated to `require('../renderer/lib/state').default` so that `State.load(cb)` at line 76 still works; `src/main/index.js` otherwise stays CommonJS",
+        "The lazy/conditional requires at `lib/migrations.js:46,52,173` and `lib/state.js:121` are hoisted to top-level imports, or the reason each stays dynamic is recorded in a code comment at that line",
+        "App state still persists across quit and relaunch",
+        "Migrations still run correctly on a fresh config directory, verified by launching with a clean profile",
+        "`npm start` launches the app through the Babel build",
+        "Typecheck passes (`npm test` -- standard + depcheck)",
+        "Smoke test passes, with explicit verification of step 6 (quit and relaunch, torrent list state persisted)"
+      ],
+      "priority": 12,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-013",
+      "title": "Convert lib/cast.js to ESM",
+      "description": "As a developer, I need the cast module in ESM last and on its own, because at 527 LOC it runs an http server inside the renderer and is the single most likely point of Phase 1 failure.",
+      "acceptanceCriteria": [
+        "`lib/cast.js` uses ESM syntax with named exports matching its current `module.exports = { ... }` shape",
+        "Its `require('http')` becomes an `import` and the module is left otherwise functionally unchanged",
+        "Zero files under `src/renderer/` except `webtorrent.js` contain `module.exports` or a top-level `require(`, verified by grep and recorded in `docs/vite-baseline.md`",
+        "Chromecast/DLNA/AirPlay device discovery still runs; `cast.js` is a deferred casualty and is not deleted",
+        "`npm start` launches the app through the Babel build",
+        "Typecheck passes (`npm test` -- standard + depcheck)",
+        "Smoke test passes"
+      ],
+      "priority": 13,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-014",
+      "title": "Resolve Node builtins and Electron externals in the Vite build",
+      "description": "As a developer, I want each Node builtin in the renderer given an explicit resolution strategy, so the bundle can be produced and so Phase 2 knows what it must replace.",
+      "acceptanceCriteria": [
+        "`path` is resolved by bundling `path-browserify` via `resolve.alias`, not externalized (FR-7); it is imported by 13 files",
+        "`fs` is marked external and listed in `docs/vite-baseline.md` as Phase 2 shim work",
+        "`http` is marked external and annotated in `docs/vite-baseline.md` as used by the deferred casualty `lib/cast.js`",
+        "`crypto` is confirmed by grep to be used only by `src/renderer/webtorrent.js`, which Vite never builds; if so it needs no external entry, and that finding is recorded in `docs/vite-baseline.md`",
+        "`os` is confirmed by grep to have no remaining renderer usage after the US-002 telemetry deletion, and that finding is recorded in `docs/vite-baseline.md`",
+        "`electron` and `@electron/remote` are marked external",
+        "Build output format is CommonJS so Electron with `nodeIntegration: true` can resolve the externals at runtime",
+        "`npx vite build` completes with zero unresolved-import errors",
+        "Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 14,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-015",
+      "title": "Serve the renderer HTML through the Vite bundle",
+      "description": "As a developer, I want static/main.html to load the Vite bundle instead of a hand-written require() call.",
+      "acceptanceCriteria": [
+        "`static/main.html` uses a normal `<script>` tag referencing the Vite entry output, not `require('../build/renderer/main.js')`",
+        "`static/webtorrent.html` is left byte-for-byte unchanged and still loads the Babel-built `build/renderer/webtorrent.js`",
+        "`static/main.css` is still applied and is not modified",
+        "The app launches from the Vite output",
+        "Typecheck passes (`npm test` -- standard + depcheck)",
+        "Smoke test passes"
+      ],
+      "priority": 15,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-016",
+      "title": "Wire the npm scripts to the Vite build",
+      "description": "As a developer, I want npm start and npm run build to produce and run the Vite bundle, so the new path is the default and cannot silently rot.",
+      "acceptanceCriteria": [
+        "`npm run build` runs Vite for the renderer AND Babel for `src/main/` and `src/renderer/webtorrent.js`",
+        "`npm start` launches Electron against the Vite output",
+        "`npm run watch` still rebuilds on change across both build paths",
+        "`npm run package` still produces a working app bundle on the current platform",
+        "Typecheck passes (`npm test` -- standard + depcheck)",
+        "Smoke test passes"
+      ],
+      "priority": 16,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-017",
+      "title": "Phase 1 verification pass",
+      "description": "As a developer, I want a documented confirmation that the Vite-built app is functionally identical to the Babel-built one, so Phase 2 starts from a known-good state.",
+      "acceptanceCriteria": [
+        "Full six-step smoke test executed and its results recorded in `docs/vite-baseline.md`",
+        "`npm run test-integration` passes",
+        "Startup time measured against `master` and recorded; any regression greater than 25% is written up as a known issue with an identified cause",
+        "Audio-track switching confirmed working on a multi-track file",
+        "Cast device discovery confirmed working",
+        "`docs/vite-baseline.md` ends with an explicit Phase 1 sign-off section",
+        "Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 17,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-018",
+      "title": "Design the platform shim API surface",
+      "description": "As a developer, I want the shim's module layout and function signatures agreed before any call site moves, so that the migration is mechanical rather than exploratory.",
+      "acceptanceCriteria": [
+        "`src/renderer/lib/platform/` created with `index.js` plus one module per concern: `ipc-os.js`, `ipc-engine.js`, `shell.js`, `clipboard.js`, `dialog.js`, `window.js`, `menu.js`, `fs.js`",
+        "Every exported function has a JSDoc signature",
+        "Every exported function is declared `async`, including wrappers around currently-synchronous Electron APIs (FR-10)",
+        "`ipc-engine.js` covers only the `wt-*` channels and `ipc-os.js` covers only the rest; the two modules share no exports (FR-9)",
+        "`docs/platform-shim.md` created, listing each function against the specific call sites it will replace, with file and line references",
+        "No call site is changed in this story; it is design and stubs only",
+        "Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 18,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-019",
+      "title": "Add a unit test runner for renderer modules",
+      "description": "As a developer, I want a way to run unit tests, because the repo today only has standard, depcheck, and spectron integration tests, and the shim stories require unit coverage.",
+      "acceptanceCriteria": [
+        "A `test-unit` npm script runs tape over `test/unit/*.js`",
+        "`tape` is already a devDependency; no new test framework is added",
+        "`npm test` runs `test-unit` in addition to `standard` and `depcheck`",
+        "One placeholder or real passing test exists so the runner exits 0",
+        "The runner works against the ESM renderer sources, either by pointing at the Babel `build/` output or by an equivalent documented mechanism",
+        "`npm run test-integration` still passes",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 19,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-020",
+      "title": "Implement ipc-os.js against ipcRenderer",
+      "description": "As a developer, I want the OS-facing IPC module implemented over ipcRenderer, so the non-wt-* call sites have somewhere to go.",
+      "acceptanceCriteria": [
+        "`lib/platform/ipc-os.js` implemented using `ipcRenderer` internally",
+        "It covers only non-`wt-*` channels; it exports nothing for `wt-*`",
+        "Listener registration returns an unsubscribe function so callers never touch `removeListener`",
+        "All exports are async",
+        "Unit tests cover send, receive, and unsubscribe for one OS channel, with `ipcRenderer` stubbed",
+        "No call site is migrated in this story",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 20,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-021",
+      "title": "Implement ipc-engine.js against ipcRenderer",
+      "description": "As a developer, I want the engine-facing IPC module implemented over ipcRenderer, so the wt-* channels become a swappable unit.",
+      "acceptanceCriteria": [
+        "`lib/platform/ipc-engine.js` implemented using `ipcRenderer` internally",
+        "It covers only `wt-*` channels; it exports nothing for OS channels",
+        "Dynamic channel names (`wt-ready-${infoHash}`, `wt-server-${infoHash}`) are handled inside the module; no string concatenation leaks to callers",
+        "Listener registration returns an unsubscribe function",
+        "All exports are async",
+        "Unit tests cover send, receive, and unsubscribe for one static and one dynamic `wt-*` channel, with `ipcRenderer` stubbed",
+        "No call site is migrated in this story",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 21,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-022",
+      "title": "Implement shell.js and clipboard.js",
+      "description": "As a developer, I want the trivially-mappable parts of the shim implemented, since they map one to one onto Electron.",
+      "acceptanceCriteria": [
+        "`lib/platform/shell.js` covers `openExternal` and `showItemInFolder`",
+        "`lib/platform/clipboard.js` covers `readText` and `writeText`",
+        "All exports are async, even though the Electron implementations are synchronous",
+        "Unit tests cover each export with `electron` stubbed",
+        "No call site is migrated in this story",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 22,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-023",
+      "title": "Implement fs.js",
+      "description": "As a developer, I want the filesystem surface behind the shim, covering exactly the operations the renderer uses today and nothing more.",
+      "acceptanceCriteria": [
+        "`lib/platform/fs.js` covers exactly the fs operations the renderer uses, enumerated first by grepping `src/renderer/` excluding `webtorrent.js`",
+        "At minimum it covers `copyFileSync`, `mkdirSync`, and `readFileSync` (used by `lib/state.js:121` and `lib/migrations.js:52,173`), plus everything `main.js`, `controllers/torrent-list-controller.js`, and `controllers/subtitles-controller.js` require",
+        "The enumerated operation list is recorded in `docs/platform-shim.md`",
+        "All exports are async, even where the Node implementation is synchronous",
+        "Unit tests cover at least read and write paths with `fs` stubbed",
+        "No call site is migrated in this story",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 23,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-024",
+      "title": "Implement dialog.js and window.js",
+      "description": "As a developer, I want the @electron/remote dialog and window surfaces behind the shim, because these are the synchronous APIs whose async replacements carry the real Phase 2 risk.",
+      "acceptanceCriteria": [
+        "`lib/platform/dialog.js` covers `showOpenDialogSync` and `showSaveDialogSync` behind async functions",
+        "`lib/platform/window.js` covers `isVisible()`, `isMaximized()`, and current-window access, all async",
+        "`screen.getAllDisplays()` is NOT included; its only consumer was telemetry, deleted in US-002. Its absence is noted in `docs/platform-shim.md`",
+        "`docs/platform-shim.md` flags the window-bounds save path in `src/renderer/main.js` (around lines 443-455) as the sync-to-async risk site, where maximize state is read while saving bounds",
+        "Unit tests cover each export with `@electron/remote` stubbed",
+        "No call site is migrated in this story",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 24,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-025",
+      "title": "Implement the data-driven menu.js API",
+      "description": "As a developer, I want the context menu exposed as descriptor objects rather than MenuItem instances, because that is the part of the shim with no straightforward equivalent on another host.",
+      "acceptanceCriteria": [
+        "`lib/platform/menu.js` accepts an array of `{ label, click, enabled }` descriptors; callers never construct `remote.MenuItem` (FR-12)",
+        "Separators and submenus are representable if the existing menus use them, verified against `controllers/torrent-list-controller.js:258-310`",
+        "The API is async and internally builds `remote.Menu` / `remote.MenuItem`",
+        "`docs/platform-shim.md` documents the descriptor shape",
+        "A unit test asserts that the nine-item torrent context menu descriptor array produces nine menu items, with `@electron/remote` stubbed",
+        "No call site is migrated in this story",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 25,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-026",
+      "title": "Migrate the shell and clipboard call sites to the shim",
+      "description": "As a developer, I want every shell and clipboard use routed through the shim, starting with the smallest and least risky group of call sites.",
+      "acceptanceCriteria": [
+        "`components/update-available-modal.js` and `components/unsupported-media-modal.js` import `shell` from `lib/platform/` instead of `electron`",
+        "`components/open-torrent-address-modal.js` imports `clipboard` from `lib/platform/` instead of `electron`",
+        "The `clipboard` use in `controllers/torrent-list-controller.js` imports from `lib/platform/`",
+        "Callers correctly await the now-async shim functions; no floating promise swallows an error silently",
+        "Zero imports of `shell` or `clipboard` from `electron` remain outside `lib/platform/`, verified by grep",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)",
+        "Smoke test passes, with explicit checks on external link opening and copy magnet link"
+      ],
+      "priority": 26,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-027",
+      "title": "Migrate the dialog and window call sites to the shim",
+      "description": "As a developer, I want the @electron/remote dialog and window uses routed through the shim, absorbing the sync-to-async conversion at the call sites that assume an immediate return value.",
+      "acceptanceCriteria": [
+        "`components/path-selector.js`, `controllers/subtitles-controller.js`, and `controllers/torrent-list-controller.js` import from `lib/platform/` instead of `@electron/remote`",
+        "The window-bounds saving path in `src/renderer/main.js` is restructured to await the async maximize/visible state without dropping or reordering the save",
+        "Window maximize and visible state still persist correctly across quit and relaunch, verified manually",
+        "Zero `@electron/remote` imports remain under `src/renderer/` outside `lib/platform/`, verified by grep",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)",
+        "Smoke test passes, with explicit checks on the save-file dialog, the open-folder dialog in preferences, and window maximize state persistence"
+      ],
+      "priority": 27,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-028",
+      "title": "Migrate the fs call sites to the shim",
+      "description": "As a developer, I want every renderer filesystem call routed through the shim, so no renderer module outside the shim touches Node fs.",
+      "acceptanceCriteria": [
+        "`src/renderer/main.js`, `controllers/torrent-list-controller.js`, `controllers/subtitles-controller.js`, `lib/state.js`, and `lib/migrations.js` use `lib/platform/fs.js`",
+        "Callers correctly await the now-async fs functions; migrations still run in the correct order on a fresh config directory",
+        "`src/renderer/webtorrent.js` still requires `fs` directly and is untouched",
+        "Zero `fs` imports remain under `src/renderer/` outside `lib/platform/` and `webtorrent.js`, verified by grep",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)",
+        "Smoke test passes, with explicit verification that state persists across quit and relaunch and that a fresh-profile launch runs migrations"
+      ],
+      "priority": 28,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-029",
+      "title": "Rewrite the torrent context menu against the descriptor API",
+      "description": "As a developer, I want the nine-item torrent context menu expressed as descriptors, proving the menu shim API is sufficient.",
+      "acceptanceCriteria": [
+        "`controllers/torrent-list-controller.js:258-310` is rewritten to pass an array of `{ label, click, enabled }` descriptors to `lib/platform/menu.js`",
+        "No `remote.Menu` or `remote.MenuItem` construction remains in the controller",
+        "All nine menu items retain their exact labels, enabled conditions, and click behaviour",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)",
+        "Smoke test passes, with every item in the torrent row context menu exercised"
+      ],
+      "priority": 29,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-030",
+      "title": "Migrate the controllers' OS-channel ipcRenderer call sites to ipc-os.js",
+      "description": "As a developer, I want the controller-layer OS IPC calls routed through the shim, ahead of the larger main.js migration.",
+      "acceptanceCriteria": [
+        "Non-`wt-*` `ipcRenderer` calls in `controllers/media-controller.js`, `controllers/torrent-controller.js`, `controllers/folder-watcher-controller.js`, `controllers/prefs-controller.js`, `controllers/torrent-list-controller.js`, and `controllers/playback-controller.js` use `lib/platform/ipc-os.js`",
+        "`wt-*` calls in these files are left alone; they are migrated in US-032",
+        "Any listener previously torn down with `removeListener` now uses the unsubscribe function returned by the shim",
+        "The `ipcRenderer` use in `lib/migrations.js` is also migrated",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)",
+        "Smoke test passes, with attention to preferences changes taking effect and folder-watcher pickup"
+      ],
+      "priority": 30,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-031",
+      "title": "Migrate main.js OS-channel ipcRenderer call sites to ipc-os.js",
+      "description": "As a developer, I want the ipcRenderer calls in the renderer entry point routed through the shim, removing the last direct electron import from main.js.",
+      "acceptanceCriteria": [
+        "All non-`wt-*` `ipcRenderer` calls in `src/renderer/main.js` use `lib/platform/ipc-os.js`",
+        "`src/renderer/main.js` no longer imports `electron` directly",
+        "Any listener previously torn down with `removeListener` uses the unsubscribe function returned by the shim",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)",
+        "Smoke test passes in full, all six steps"
+      ],
+      "priority": 31,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-032",
+      "title": "Migrate the wt-* engine call sites to ipc-engine.js",
+      "description": "As a developer, I want the engine channels routed through the shim, so the torrent engine becomes a swappable unit.",
+      "acceptanceCriteria": [
+        "Every `wt-*` call site in the renderer UI uses `lib/platform/ipc-engine.js`",
+        "Dynamic `wt-ready-${infoHash}` and `wt-server-${infoHash}` subscriptions go through the shim's dynamic-channel API",
+        "`src/renderer/webtorrent.js` is NOT migrated; it remains a direct `ipcRenderer` consumer as the counterparty slated for replacement by librqbit (FR-4)",
+        "Zero `electron` or `@electron/remote` imports remain under `src/renderer/` outside `lib/platform/`, `webtorrent.js`, and `lib/cast.js`, verified by grep",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)",
+        "Smoke test passes, with attention to torrent add, progress updates, file selection, and streaming server start/stop"
+      ],
+      "priority": 32,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-033",
+      "title": "Document the wt-* protocol at the shim boundary",
+      "description": "As a developer, I want the complete wt-* protocol written down, because it is the contract any librqbit implementation must satisfy.",
+      "acceptanceCriteria": [
+        "`docs/platform-shim.md` records every `wt-*` channel crossing the shim boundary, in both directions",
+        "Each channel entry lists its direction, payload shape, and whether it is a one-shot or a subscription",
+        "Dynamic channel families (`wt-ready-*`, `wt-server-*`) are documented as families, not as individual instances",
+        "The document states plainly that this is the contract a librqbit implementation must satisfy",
+        "The channel list is cross-checked against the distinct channels the renderer actually sends, and any omission is explained",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 33,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-034",
+      "title": "Enforce the shim boundary with a lint rule",
+      "description": "As a developer, I want a lint rule preventing new direct Electron or Node imports in the renderer, so the decoupling does not erode.",
+      "acceptanceCriteria": [
+        "A `no-restricted-imports` rule (or equivalent for `standard` with `@babel/eslint-parser`) bans `electron`, `@electron/remote`, `fs`, `os`, `crypto`, and `http` under `src/renderer/` (FR-11)",
+        "`src/renderer/lib/platform/` is exempt",
+        "Exactly two per-file overrides exist -- `src/renderer/webtorrent.js` and `src/renderer/lib/cast.js` -- each with a comment naming it as a deferred casualty",
+        "`os` and `crypto` stay in the banned list as preventive rules even though no renderer file uses them after US-002",
+        "The rule is wired into `npm test` and fails the build when violated, verified by temporarily adding a bad import, observing the failure, and reverting",
+        "No other eslint or standard setting is changed",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 34,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-035",
+      "title": "Phase 2 verification pass",
+      "description": "As a developer, I want confirmation that the shim is complete and the app is unregressed, so the branch is a valid base for a future host swap.",
+      "acceptanceCriteria": [
+        "Grep confirms zero direct `electron` / `@electron/remote` imports under `src/renderer/` outside `lib/platform/`, `webtorrent.js`, and `lib/cast.js`",
+        "Grep confirms zero direct `fs`, `os`, `crypto`, or `http` imports under `src/renderer/` outside `lib/platform/`, `webtorrent.js`, and `lib/cast.js`",
+        "Full six-step smoke test executed and results recorded in `docs/platform-shim.md`",
+        "`npm run test-integration` passes",
+        "`npm run package` produces a working bundle on the current platform",
+        "`docs/platform-shim.md` updated with the final API surface and a 'What a new host must implement' section",
+        "Startup time re-measured against `master` and recorded",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 35,
+      "passes": false,
+      "notes": ""
+    }
+  ]
+}
