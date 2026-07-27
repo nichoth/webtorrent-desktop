@@ -1,11 +1,7 @@
-module.exports = {
-  init,
-  play
-}
+import path from 'path'
 
-const config = require('../../config')
-const { InvalidSoundNameError } = require('./errors')
-const path = require('path')
+import config from '../../config'
+import { InvalidSoundNameError } from './errors'
 
 const VOLUME = 0.25
 
@@ -50,11 +46,11 @@ const sounds = {
   }
 }
 
-function init (appState) {
+export function init (appState) {
   state = appState
 }
 
-function play (name) {
+export function play (name) {
   if (state == null) {
     return
   }

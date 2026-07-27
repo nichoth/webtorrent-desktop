@@ -9,4 +9,4 @@ const mediaExtensions = {
   image: ['.gif', '.jpg', '.jpeg', '.png']
 }
 
-module.exports = mediaExtensions
+export default mediaExtensions

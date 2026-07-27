@@ -5,8 +5,8 @@ import remote from '@electron/remote'
 
 import { dispatch } from '../lib/dispatcher'
 import { TorrentKeyNotFoundError } from '../lib/errors'
-import sound from '../lib/sound'
-import TorrentSummary from '../lib/torrent-summary'
+import * as sound from '../lib/sound'
+import * as TorrentSummary from '../lib/torrent-summary'
 
 const instantIoRegex = /^(https:\/\/)?instant\.io\/#/
 

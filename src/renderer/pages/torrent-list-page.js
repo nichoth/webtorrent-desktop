@@ -4,8 +4,8 @@ import prettyBytes from 'prettier-bytes'
 import Checkbox from 'material-ui/Checkbox'
 import LinearProgress from 'material-ui/LinearProgress'
 
-import TorrentSummary from '../lib/torrent-summary'
-import TorrentPlayer from '../lib/torrent-player'
+import * as TorrentSummary from '../lib/torrent-summary'
+import * as TorrentPlayer from '../lib/torrent-player'
 import { dispatcher } from '../lib/dispatcher'
 import { calculateEta } from '../lib/time'
 

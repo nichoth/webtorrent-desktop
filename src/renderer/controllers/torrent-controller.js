@@ -1,8 +1,8 @@
 import path from 'path'
 import { ipcRenderer } from 'electron'
 
-import TorrentSummary from '../lib/torrent-summary'
-import sound from '../lib/sound'
+import * as TorrentSummary from '../lib/torrent-summary'
+import * as sound from '../lib/sound'
 import { dispatch } from '../lib/dispatcher'
 
 export default class TorrentController {

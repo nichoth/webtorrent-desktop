@@ -42,6 +42,20 @@ than through Babel. That is why `__dirname` is read through the
 Anything new added here that depends on a CommonJS-only global will
 break those three npm scripts, and nothing else will notice.
 
+## `src/renderer/lib/`
+
+The utility modules that used to do `module.exports = { fnA, fnB }` now
+use plain named exports, and their call sites import them as namespaces
+(`import * as TorrentSummary from '../lib/torrent-summary'`) because
+every call site uses them namespace-style (`TorrentSummary.getByKey`).
+Do not reintroduce a default export object for these -- a default and a
+namespace would drift apart.
+
+The two single-value modules (`media-extensions.js`,
+`torrent-poster.js`) use `export default`. Their remaining CommonJS
+consumers therefore have to say `require('...').default`; see
+`src/renderer/webtorrent.js` and `test/test-select-poster.js`.
+
 ## `src/renderer/webtorrent.js`
 
 Exempt from all of the above (FR-4): it stays CommonJS, is never passed

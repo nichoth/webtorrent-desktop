@@ -1,13 +1,5 @@
-module.exports = {
-  hasNext,
-  getNextIndex,
-  hasPrevious,
-  getPreviousIndex,
-  getCurrentLocalURL
-}
-
-const TorrentSummary = require('./torrent-summary')
-const TorrentPlayer = require('./torrent-player')
+import * as TorrentSummary from './torrent-summary'
+import * as TorrentPlayer from './torrent-player'
 
 const cache = {
   infoHash: null,
@@ -16,27 +8,27 @@ const cache = {
   nextIndex: null
 }
 
-function hasNext (state) {
+export function hasNext (state) {
   updateCache(state)
   return cache.nextIndex !== null
 }
 
-function getNextIndex (state) {
+export function getNextIndex (state) {
   updateCache(state)
   return cache.nextIndex
 }
 
-function hasPrevious (state) {
+export function hasPrevious (state) {
   updateCache(state)
   return cache.previousIndex !== null
 }
 
-function getPreviousIndex (state) {
+export function getPreviousIndex (state) {
   updateCache(state)
   return cache.previousIndex
 }
 
-function getCurrentLocalURL (state) {
+export function getCurrentLocalURL (state) {
   return state.server
     ? state.server.localURL + '/' + state.playing.fileIndex + '/' +
       encodeURIComponent(state.playing.fileName)

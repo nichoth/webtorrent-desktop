@@ -1,13 +1,11 @@
-module.exports = torrentPoster
+import captureFrame from 'capture-frame'
+import path from 'path'
 
-const captureFrame = require('capture-frame')
-const path = require('path')
-
-const mediaExtensions = require('./media-extensions')
+import mediaExtensions from './media-extensions'
 
 const msgNoSuitablePoster = 'Cannot generate a poster from any files in the torrent'
 
-function torrentPoster (torrent, cb) {
+export default function torrentPoster (torrent, cb) {
   // First, try to use a poster image if available
   const posterFile = torrent.files.filter(file => /^poster\.(jpg|png|gif)$/.test(file.name))[0]
   if (posterFile) return extractPoster(posterFile, cb)

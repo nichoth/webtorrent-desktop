@@ -1,24 +1,17 @@
-module.exports = {
-  getPosterPath,
-  getTorrentPath,
-  getByKey,
-  getTorrentId,
-  getFileOrFolder
-}
+import path from 'path'
 
-const path = require('path')
-const config = require('../../config')
+import config from '../../config'
 
 // Expects a torrentSummary
 // Returns an absolute path to the torrent file, or null if unavailable
-function getTorrentPath (torrentSummary) {
+export function getTorrentPath (torrentSummary) {
   if (!torrentSummary || !torrentSummary.torrentFileName) return null
   return path.join(config.TORRENT_PATH, torrentSummary.torrentFileName)
 }
 
 // Expects a torrentSummary
 // Returns an absolute path to the poster image, or null if unavailable
-function getPosterPath (torrentSummary) {
+export function getPosterPath (torrentSummary) {
   if (!torrentSummary || !torrentSummary.posterFileName) return null
   const posterPath = path.join(config.POSTER_PATH, torrentSummary.posterFileName)
   // Work around a Chrome bug (reproduced in vanilla Chrome, not just Electron):
@@ -28,7 +21,7 @@ function getPosterPath (torrentSummary) {
 
 // Expects a torrentSummary
 // Returns a torrentID: filename, magnet URI, or infohash
-function getTorrentId (torrentSummary) {
+export function getTorrentId (torrentSummary) {
   const s = torrentSummary
   if (s.torrentFileName) { // Load torrent file from disk
     return getTorrentPath(s)
@@ -39,7 +32,7 @@ function getTorrentId (torrentSummary) {
 
 // Expects a torrentKey or infoHash
 // Returns the corresponding torrentSummary, or undefined
-function getByKey (state, torrentKey) {
+export function getByKey (state, torrentKey) {
   if (!torrentKey) return undefined
   return state.saved.torrents.find((x) =>
     x.torrentKey === torrentKey || x.infoHash === torrentKey)
@@ -50,7 +43,7 @@ function getByKey (state, torrentKey) {
 // WARNING: assumes that multi-file torrents consist of a SINGLE folder.
 // TODO: make this assumption explicit, enforce it in the `create-torrent`
 // module. Store root folder explicitly to avoid hacky path processing below.
-function getFileOrFolder (torrentSummary) {
+export function getFileOrFolder (torrentSummary) {
   const ts = torrentSummary
   if (!ts.path || !ts.files || ts.files.length === 0) return null
   const dirname = ts.files[0].path.split(path.sep)[0]

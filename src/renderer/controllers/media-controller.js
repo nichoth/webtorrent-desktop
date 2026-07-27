@@ -1,6 +1,6 @@
 import { ipcRenderer } from 'electron'
 
-import Playlist from '../lib/playlist'
+import * as Playlist from '../lib/playlist'
 
 // Controls local play back: the <video>/<audio> tag and VLC
 // Does not control remote casting (Chromecast etc)

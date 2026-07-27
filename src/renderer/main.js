@@ -8,8 +8,8 @@ import ReactDOM from 'react-dom'
 
 import config from '../config'
 import State from './lib/state'
-import sound from './lib/sound'
-import TorrentPlayer from './lib/torrent-player'
+import * as sound from './lib/sound'
+import * as TorrentPlayer from './lib/torrent-player'
 import { setDispatch } from './lib/dispatcher'
 
 // Perf optimization: Needed immediately, so do not lazy load it below

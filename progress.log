@@ -1073,3 +1073,107 @@ app.
     object**. Reading `torrent.selected` returns `undefined` and makes a
     working dispatch look like a no-op.
 ---
+
+## 2026-07-27 - US-011
+
+Convert the nine pure `lib/` utility modules to ESM.
+
+**Interpretation:** per execution rule 3 this is a mechanical module
+system refactor with no behaviour change, and the repo still has no
+unit test runner (that arrives in US-019), so no new failing test was
+written first. Instead the conversion was verified empirically: a Node
+probe over the Babel output, the existing `tape` integration test
+`test/test-select-poster.js` (which exercises `torrent-poster.js` and
+`media-extensions.js` end to end), and a renderer-console probe against
+the running app.
+
+**What was implemented**
+
+- Converted to named exports: `time.js`, `errors.js`, `dispatcher.js`,
+  `playlist.js`, `torrent-summary.js`, `torrent-player.js`, `sound.js`.
+- Converted to `export default`: `media-extensions.js`,
+  `torrent-poster.js`.
+- Updated every call site. The modules that were consumed
+  namespace-style (`TorrentSummary.getByKey(...)`, `sound.play(...)`,
+  `Playlist.hasNext(...)`, `TorrentPlayer.isPlayable(...)`) moved from
+  default imports to `import * as X from ...`. Call sites already using
+  named imports (`errors`, `dispatcher`, `time`) needed no change.
+- Fixed the two CommonJS consumers of the now-default `torrent-poster`
+  export: `src/renderer/webtorrent.js` and `test/test-select-poster.js`
+  now say `require(...).default`.
+
+**Files changed**
+
+- `src/renderer/lib/`: `time.js`, `media-extensions.js`, `errors.js`,
+  `dispatcher.js`, `playlist.js`, `torrent-summary.js`,
+  `torrent-player.js`, `sound.js`, `torrent-poster.js`
+- `src/renderer/main.js`, `src/renderer/webtorrent.js`
+- `src/renderer/controllers/`: `media-controller.js`,
+  `torrent-list-controller.js`, `torrent-controller.js`,
+  `playback-controller.js`
+- `src/renderer/pages/`: `torrent-list-page.js`, `player-page.js`
+- `test/test-select-poster.js`
+- `src/AGENTS.md`, `progress.log`, `specs/prd.json`
+
+**Verification**
+
+- Grep confirmed none of the nine files is required by `src/main/`.
+  The only `src/main/` -> renderer edge is
+  `src/main/index.js:16` requiring `../renderer/lib/state`, which
+  belongs to US-012.
+- `npm test` (standard + depcheck) passes, exit 0.
+- `npm run build` (Babel) compiles 64 files.
+- Node probe over `build/renderer/lib/*`: every module's export keys are
+  as intended, `calculateEta(100, 10)` -> `'  10 s remaining'`,
+  `isVideo/isAudio/isMagnetLink` correct, `getPosterPath` correct, and
+  `playlist.hasNext/getNextIndex` correctly skips a non-playable file
+  (`a.mp4`, `b.txt`, `c.mp3` from index 0 -> next index 2).
+- `node test/test-select-poster.js` passes (`ok 1`), proving the
+  `export default` on `torrent-poster.js` plus its `.default` call
+  sites work against a real torrent.
+- App launches: `init: 762ms`, both windows up.
+- Renderer-console probe against the running app returned
+  `sound-keys=init,play | sound-play-ok |
+  playlist-keys=getCurrentLocalURL,getNextIndex,getPreviousIndex,hasNext,hasPrevious
+  | poster=<real Posters/*.jpg path>`, and the torrent list page
+  rendered 11 torrents (so `torrent-list-page.js` consumed
+  `TorrentSummary`, `TorrentPlayer` and `calculateEta` through the new
+  namespace imports). The only severity-3 renderer error is the
+  pre-existing `electron.remote ... getCurrentWindow` one.
+- **The six-step manual smoke test was NOT run** -- this session is
+  non-interactive. The residual risk is concentrated in the sound and
+  poster criteria: `sound.play` was exercised but the preference gate
+  means no audio was actually confirmed audible, and poster
+  *generation* (as opposed to poster *path resolution*) was only
+  covered by the tape test, not by adding a fresh torrent in the UI.
+
+**Learnings for future iterations:**
+
+- **Babel's CJS output keeps named exports as plain properties**, so a
+  still-CommonJS consumer doing `const { CastingError } =
+  require('./errors')` or `const TS = require('./torrent-summary')`
+  keeps working after those files convert to named exports. Only
+  `export default` breaks CommonJS consumers. That is why US-011 could
+  touch `errors.js` and `torrent-summary.js` without touching
+  `cast.js` (US-013) or `migrations.js` (US-012), but had to patch the
+  two `torrent-poster` requires.
+- **`import * as X` is the right conversion for the
+  `module.exports = { ... }` utility modules**, not a default export
+  object. Every call site already used them namespace-style, and the
+  acceptance criteria ask for named exports; keeping a default too
+  would create two shapes that drift.
+- **Renderer-side module probing:** `nodeIntegration` is on, so
+  `wc.executeJavaScript` can `require()` a build artifact directly.
+  Interpolate the absolute path from the main process
+  (`${JSON.stringify(__dirname + '/../renderer/lib')}`) -- deriving it
+  from `window.location.pathname` fails, because the main window is
+  served from `static/main.html`, not from `build/renderer/`.
+- **Appending a probe to `build/main/index.js` must be redone after
+  every `npm run build`**, and a `python3` string replace against that
+  file is fragile (the heredoc's backslashes do not survive). Rebuild
+  and re-append the whole block instead of patching it in place.
+- `test/test-select-poster.js` runs standalone in ~15s with network
+  (`node test/test-select-poster.js`) and is the only existing
+  automated coverage of any renderer `lib/` module. Worth re-running
+  whenever `torrent-poster.js` or `media-extensions.js` changes.
+---
