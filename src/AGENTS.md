@@ -3,8 +3,26 @@
 ## Module systems
 
 `src/renderer/` is being converted to ESM; `src/main/` stays CommonJS.
-Both are compiled by `npm run build` (`babel src --out-dir build`) and
-loaded by Electron as CommonJS.
+Both reach Electron as CommonJS, but by two different routes, and
+`npm run build` runs both:
+
+- `npm run build:renderer` (`vite build`) bundles the renderer entry
+  `src/renderer/main.js` and everything it reaches into
+  `build-vite/renderer/main.js`, which `static/main.html` loads.
+- `npm run build:main` (`babel src --out-dir build`) compiles
+  everything else: `src/config.js`, `src/main/**`,
+  `src/renderer/webtorrent.js` (FR-4 exempts it from Vite) and
+  `src/renderer/lib/**`, which both `webtorrent.js` and
+  `src/main/index.js` require.
+
+`build:main` therefore passes `--ignore` for the four paths Vite now
+owns exclusively -- `src/renderer/main.js`, `components/`,
+`controllers/` and `pages/`. Nothing outside the Vite bundle requires
+them, so Babel emitting them again would only leave a stale second copy
+of the renderer that nothing loads. If a *new* non-Vite consumer ever
+needs one of those files, shrink the ignore list rather than adding a
+second build step. `src/renderer/lib/**` is deliberately NOT ignored:
+it is shared, so it is built both ways.
 
 The `babel` key in `package.json` carries
 `@babel/plugin-transform-modules-commonjs` with

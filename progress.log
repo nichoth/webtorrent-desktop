@@ -28,9 +28,31 @@ it tight.
 - **`node -e` leaks `__dirname` (`'.'`) into ESM modules it loads.**
   Probe module scope from a real `.cjs`/`.mjs` file instead, or you
   will chase paths that only look wrong.
-- **`npm start` = `npm run build && electron --no-sandbox .`** where
-  `npm run build` is `babel src --out-dir build`. The Babel build must
-  keep working at every commit (FR-2), independently of Vite.
+- **`npm start` = `npm run build && electron --no-sandbox .`**, and
+  since US-016 `npm run build` is two halves:
+  `build:main` (Babel -> `build/`, with `src/renderer/main.js`,
+  `components/`, `controllers/` and `pages/` ignored) then
+  `build:renderer` (`vite build` -> `build-vite/`). Both must keep
+  working at every commit (FR-2). The set Babel must still compile is
+  fixed by the three non-Vite `require()` callers: `index.js` ->
+  `build/main`, `static/webtorrent.html` ->
+  `build/renderer/webtorrent.js`, and `src/main/index.js` ->
+  `../renderer/lib/state` -- which is why `src/renderer/lib/**` is
+  built by both. Details in `src/AGENTS.md`.
+- **A new generated directory needs five registrations:** `.gitignore`,
+  nodemon's `--ignore` list in the `watch` script, depcheck's
+  `--ignore-dirs` in the `test` script, the `rimraf` block in
+  `bin/package.js`, and `bin/clean.js`. Missing the nodemon one is the
+  only failure that is silent at build time and breaks dev -- `watch`
+  runs `--ext js,css`, so an emitted `.js` file restarts it forever.
+- **`npm run package` cannot be run as-is in a session** -- `build()`
+  in `bin/package.js` opens with `rimraf(node_modules)` + `npm ci`.
+  Copy its `all` + `darwin` option objects into a throwaway script and
+  call `electronPackager` directly instead; `prune: true` works on
+  electron-packager's own temp copy and never touches the working
+  `node_modules`. Then prove what shipped with
+  `npx asar list app.asar` -- the `ignore` option is a 700-char
+  alternation and reading it is not verification.
 - **`material-ui` import shapes.** Every `material-ui/**` submodule the
   renderer uses is CJS ending in `.default`, so a plain default import
   is correct (`import Checkbox from 'material-ui/Checkbox'`). The one
@@ -1719,4 +1741,119 @@ of the running renderer.
   stylesheet actually declares the value you assert on before treating
   a match as proof -- `#282828` appears in `webtorrent.html`'s inline
   style too, and that coincidence would have made the check vacuous.
+---
+
+## 2026-07-27 - US-016
+
+Wire the npm scripts to the Vite build.
+
+**Interpretation:** no failing test was written first. Per execution
+rule 3 this is a pure build-configuration story, and the repo still has
+no unit test runner (US-019 owns that). The meaningful verification is
+empirical, so the evidence below is a from-scratch build, a launch
+check, a real `electron-packager` run with an asar inventory, and a
+timed `npm run watch` observation.
+
+**What was implemented**
+
+- `npm run build` is now
+  `npm run build:main && npm run build:renderer`.
+  - `build:main` is the old `babel src --out-dir build` plus an
+    `--ignore` list covering the four paths Vite now owns exclusively:
+    `src/renderer/main.js`, `components/**`, `controllers/**`,
+    `pages/**`. Babel still compiles `src/config.js`, `src/main/**`,
+    `src/renderer/webtorrent.js` and `src/renderer/lib/**` (38 files),
+    which is exactly the set something still `require()`s: `index.js`
+    -> `build/main`, `static/webtorrent.html` -> `build/renderer/
+    webtorrent.js`, and `src/main/index.js` -> `../renderer/lib/state`.
+  - `build:renderer` is `vite build`.
+- `npm start` is unchanged (`npm run build && electron ...`); it now
+  picks up the Vite output because `build` does.
+- `npm run watch` gains `--ignore build-vite/`. Without it nodemon --
+  which already watches `--ext js,css` -- would see the freshly emitted
+  `build-vite/renderer/main.js` and restart itself forever. `build/`
+  was already ignored for the same reason.
+- `npm test` gains `build-vite` to `--ignore-dirs`, matching `build`
+  and `dist`. depcheck passed either way; this just keeps it from
+  parsing a 1.4 MB bundle.
+- `bin/package.js` nukes `build-vite/` alongside `build/` and `dist/`
+  before building, via a new `BUILD_VITE_PATH`. The packager `ignore`
+  regex needed no change -- verified by running it against
+  `/build-vite/renderer/main.js`.
+- `bin/clean.js` removes `build-vite/` too.
+- `src/AGENTS.md`: the "Module systems" section said `npm run build` is
+  `babel src --out-dir build`, which is no longer true. Rewritten to
+  describe both halves and why the ignore list is what it is.
+
+**Files changed**
+
+- `package.json`, `bin/package.js`, `bin/clean.js`, `src/AGENTS.md`,
+  `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- From-scratch `rm -rf build build-vite && npm run build`: exit 0,
+  Babel reports 38 files, Vite emits `build-vite/renderer/main.js`.
+  `build/main/index.js`, `build/config.js` and
+  `build/renderer/webtorrent.js` are present; `build/renderer/main.js`
+  is correctly absent.
+- Bundle invariants held: 0 `has been externalized` warnings, 0 lines
+  matching `^import|^export`, and the emitted `require()` set is
+  exactly the configured external list.
+- `npm start` launch check: process alive after 14s, log shows
+  `'Main Window'` and `init: 4.456s`.
+- `npm run package`, the packager step: run for real via a throwaway
+  script that reuses `bin/package.js`'s exact `all` + `darwin` option
+  objects, skipping only the `rimraf(node_modules)` + `npm ci`
+  prelude. `electron-packager` succeeded. `asar list` on the resulting
+  `app.asar` confirms `/build-vite/renderer/main.js`,
+  `/build/main/index.js`, `/build/renderer/webtorrent.js`,
+  `/static/main.html` and `/index.js` are all inside. Launching the
+  packaged `WebTorrent.app` binary: alive after 15s, log shows
+  `'Main Window'`, `init: 4.278s`, and `'WebTorrent Hidden Window'` --
+  so both the Vite half and the Babel half work from inside the asar.
+- `npm run watch`: started from a clean tree, 0 restarts in the first
+  30s (proving `--ignore build-vite/` works), then `touch
+  src/renderer/components/header.js` produced exactly 1 restart, with
+  both halves re-running (2 `Successfully compiled` from Babel, 2
+  `built in` from Vite). Killed afterwards; no stray processes left.
+- `npm test` (standard + depcheck) passes.
+- **Smoke test not run.** Non-interactive session. The launch checks
+  cover "the window opens and renders" for both the dev build and the
+  packaged bundle; what they do not cover is interaction -- adding a
+  torrent, playback, the menus. US-017 is the Phase 1 verification pass
+  that owns that risk.
+
+**Learnings for future iterations**
+
+- **`npm run package` cannot be run as-is in a session:** `build()` in
+  `bin/package.js` starts with `rimraf(node_modules)` + `npm ci`. To
+  verify the packaging path, copy the `all` + `darwin` option objects
+  into a throwaway script and call `electronPackager` directly. That
+  exercises the parts a build-config change can actually break (the
+  `ignore` regex, what lands in the asar) without a several-minute
+  reinstall. `prune: true` operates on electron-packager's own temp
+  copy, so it does not touch the working `node_modules`.
+- **`asar list` is the real proof that a new build directory ships.**
+  The `ignore` regex in `bin/package.js` is a single 700-char
+  alternation with `^\/src|^\/dist` anchors and a trailing
+  `\.[^/]*|.*\.md` group; reading it is not verification. Either test
+  the regex against literal paths in `node -e`, or list the asar.
+- **A new generated directory needs four registrations, not one:**
+  `.gitignore`, nodemon's `--ignore` list in the `watch` script
+  (anything under `--ext js,css` otherwise causes an infinite restart
+  loop), depcheck's `--ignore-dirs`, and the `rimraf` block in
+  `bin/package.js`. `bin/clean.js` is a fifth. Missing the nodemon one
+  is the only silent-at-build-time, broken-at-dev-time failure.
+- **Babel's `--ignore` takes one comma-separated string of globs** and
+  a bare directory name does not match files inside it -- use
+  `dir/**/*`. Verify by compiling to a temp `--out-dir` and diffing the
+  file list; the exit code is 0 whether the ignore matched anything or
+  not.
+- **The set of files Babel must still compile is defined by the
+  non-Vite `require()` callers**, and there are exactly three today:
+  `index.js` -> `build/main`, `static/webtorrent.html` ->
+  `build/renderer/webtorrent.js`, and `src/main/index.js` ->
+  `../renderer/lib/state`. That last one is easy to miss and is why
+  `src/renderer/lib/**` is built by both Vite and Babel.
 ---
