@@ -1,27 +1,28 @@
-console.time('init')
+import createGetter from 'fn-getter'
+import debounce from 'debounce'
+import dragDrop from 'drag-drop'
+import electron from 'electron'
+import fs from 'fs'
+import React from 'react'
+import ReactDOM from 'react-dom'
 
-// Perf optimization: Start asynchronously read on config file before all the
-// blocking require() calls below.
-
-const State = require('./lib/state')
-State.load(onState)
-
-const createGetter = require('fn-getter')
-const debounce = require('debounce')
-const dragDrop = require('drag-drop')
-const electron = require('electron')
-const fs = require('fs')
-const React = require('react')
-const ReactDOM = require('react-dom')
-
-const config = require('../config')
-const sound = require('./lib/sound')
-const TorrentPlayer = require('./lib/torrent-player')
+import config from '../config'
+import State from './lib/state'
+import sound from './lib/sound'
+import TorrentPlayer from './lib/torrent-player'
+import { setDispatch } from './lib/dispatcher'
 
 // Perf optimization: Needed immediately, so do not lazy load it below
-const TorrentListController = require('./controllers/torrent-list-controller')
+import TorrentListController from './controllers/torrent-list-controller'
 
-const App = require('./pages/app')
+import App from './pages/app'
+
+console.time('init')
+
+// This used to sit above the module's other require() calls, so that the
+// asynchronous config file read overlapped with them. ESM hoists every import
+// to the top of the module, so that overlap is no longer expressible here.
+State.load(onState)
 
 // Electron apps have two processes: a main process (node) runs first and starts
 // a renderer process (essentially a Chrome window). We're in the renderer process,
@@ -30,7 +31,7 @@ const ipcRenderer = electron.ipcRenderer
 
 // Yo-yo pattern: state object lives here and percolates down thru all the views.
 // Events come back up from the views via dispatch(...)
-require('./lib/dispatcher').setDispatch(dispatch)
+setDispatch(dispatch)
 
 // From dispatch(...), events are sent to one of the controllers
 let controllers = null
@@ -57,7 +58,10 @@ function onState (err, _state) {
 
   sound.init(state)
 
-  // Create controllers
+  // Create controllers. These stay on require() rather than becoming imports
+  // because they are deliberately lazy -- an import would be hoisted and load
+  // every controller at startup. Babel compiles this module to CommonJS, so
+  // require() is still available at runtime.
   controllers = {
     media: createGetter(() => {
       const MediaController = require('./controllers/media-controller')

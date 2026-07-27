@@ -8,13 +8,15 @@
     "url": "https://webtorrent.io"
   },
   "babel": {
+    "sourceType": "unambiguous",
     "plugins": [
       [
         "@babel/plugin-transform-react-jsx",
         {
           "useBuiltIns": true
         }
-      ]
+      ],
+      "@babel/plugin-transform-modules-commonjs"
     ]
   },
   "bugs": {
@@ -61,6 +63,7 @@
     "@babel/cli": "7.29.7",
     "@babel/core": "7.29.7",
     "@babel/eslint-parser": "7.29.7",
+    "@babel/plugin-transform-modules-commonjs": "7.29.7",
     "@babel/plugin-transform-react-jsx": "7.29.7",
     "cross-zip": "4.0.0",
     "depcheck": "1.4.7",

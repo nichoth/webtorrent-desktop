@@ -6,10 +6,28 @@ it tight.
 - **No lint script.** `npm run lint` does not exist. The lint+dep gate
   is `npm test`, which runs `standard && depcheck`. There is no unit
   test runner yet; one arrives in US-019.
-- **Babel JSX config lives in the `babel` key of `package.json`**, not
-  a `.babelrc`. It is `@babel/plugin-transform-react-jsx` with
-  `useBuiltIns: true`. Reuse those exact options anywhere JSX has to be
-  compiled.
+- **Babel config lives in the `babel` key of `package.json`**, not a
+  `.babelrc`. It is `@babel/plugin-transform-react-jsx` with
+  `useBuiltIns: true` (reuse those exact options anywhere JSX has to be
+  compiled) plus, since US-005,
+  `@babel/plugin-transform-modules-commonjs` with
+  `sourceType: "unambiguous"`. Without the modules plugin Babel leaves
+  `import`/`export` untouched and Electron 27 (Node 18) cannot
+  `require()` the result -- the app dies at startup. `unambiguous`
+  keeps the still-CommonJS files compiling as scripts instead of
+  gaining `"use strict"`.
+- **`src/config.js` exports every value twice** -- as a named export
+  (for CommonJS `src/main/`) and inside `export default {...}` (for ESM
+  renderer code). Add to both or the value is silently missing for half
+  the codebase. Details in `src/AGENTS.md`.
+- **`bin/clean.js`, `bin/package.js` and `bin/open-config.js` require
+  `../src/config` from raw source**, so plain Node loads it as real
+  ESM, not through Babel. CommonJS-only globals (`__dirname`,
+  `require`) do not exist on that path. Nothing else in the repo
+  notices when they break.
+- **`node -e` leaks `__dirname` (`'.'`) into ESM modules it loads.**
+  Probe module scope from a real `.cjs`/`.mjs` file instead, or you
+  will chase paths that only look wrong.
 - **`npm start` = `npm run build && electron --no-sandbox .`** where
   `npm run build` is `babel src --out-dir build`. The Babel build must
   keep working at every commit (FR-2), independently of Vite.
@@ -420,4 +438,149 @@ reproduced first instead: `npx vite build` aborting with
 - The module count is now **723**, down from the 724 of the US-001
   probe -- US-002 deleted `lib/telemetry.js` and US-003 removed the
   `module` import, offset by the `inline-style-prefixer` stub.
+---
+
+## 2026-07-27 - US-005
+
+Convert `src/renderer/main.js` and `src/config.js` to ESM.
+
+**Interpretation:** per execution rule 3 this is a mechanical module
+system refactor with no behavioural delta to assert, and the repo still
+has no unit test runner (US-019). Instead of a test I used two
+empirical before/after probes and kept their output as evidence -- see
+Verification. The "no top-level `require(`" criterion is taken
+literally: the nine lazy `require()` calls inside function bodies in
+`main.js` (the `fn-getter` controller factories and `lazyLoadCast`)
+stay, because hoisted imports would destroy the deliberate laziness
+that `src/renderer/controllers/AGENTS.md` documents.
+
+**Blocker found first: Babel was not transforming ESM at all.**
+The `babel` key in `package.json` only had
+`@babel/plugin-transform-react-jsx`, so `import`/`export` passed
+through to `build/` unchanged. Electron 27 is Node 18 and cannot
+`require()` an ES module, so the first ESM conversion would have
+bricked the app at startup. Added
+`@babel/plugin-transform-modules-commonjs` (7.29.7, exact pin) plus
+`sourceType: "unambiguous"`. This is the enabling change for every
+remaining conversion story, US-006 through US-013.
+
+**Second problem: `bin/` loads `src/config.js` as real ESM.**
+`bin/clean.js`, `bin/package.js` and `bin/open-config.js` require
+`../src/config` from raw source under plain Node, which means Node's
+ESM loader, not Babel. `__dirname` does not exist there, so the naive
+conversion breaks `npm run clean`, `npm run package` and
+`npm run open-config` -- none of which any acceptance criterion covers.
+Pointing them at `build/config.js` is wrong (`ROOT_PATH` would become
+`<repo>/build`, and `bin/package.js` builds `ROOT_PATH/build` from it),
+so `src/config.js` reads `__dirname` through a documented guard with a
+`process.cwd()`-based fallback that only fires on that path.
+
+**What was implemented**
+
+- `package.json`: `sourceType: "unambiguous"` and
+  `@babel/plugin-transform-modules-commonjs` in the `babel` key; the
+  plugin added to devDependencies.
+- `src/config.js`: every value is now both a named `export const` and a
+  member of `export default {...}`. A header comment documents the
+  dual-consumption contract and the three module systems that consume
+  the file. `require('../package.json')` became
+  `import pkg from '../package.json' with { type: 'json' }`,
+  `require('electron')` became a default import (see Learnings),
+  and the `require('fs')` inside `isPortable()` became a top-level
+  import. The `require('@electron/remote')` inside `getPath()` stays --
+  it is process-conditional and unreachable outside a renderer.
+- `src/renderer/main.js`: all 13 top-level requires became imports;
+  `require('./lib/dispatcher').setDispatch(dispatch)` became a named
+  import. Comments record why `State.load()` no longer overlaps the
+  module loads and why the controller factories keep `require()`.
+- `src/AGENTS.md` (new): the module-system contract for this directory.
+
+**Files changed**
+
+- `package.json`, `package-lock.json`
+- `src/config.js`
+- `src/renderer/main.js`
+- `src/AGENTS.md` (new)
+- `specs/prd.json` (US-005 `passes: true`)
+- `progress.log`
+
+**Verification**
+
+- Compiled-config equivalence: dumped `build/config.js` before (git
+  stash) and after. The default export object is **identical** to the
+  old `module.exports` -- same 36 keys, same values, zero diffs -- and
+  every named export is `===` its counterpart in the default object.
+  This is the direct evidence for the 8 `src/main/` consumers and for
+  `src/renderer/webtorrent.js`, all of which read `config.<KEY>`.
+- Raw-source consumers: a CommonJS probe mirroring `bin/package.js`,
+  `bin/clean.js` and `bin/open-config.js` (`require('../src/config')`,
+  `const { CONFIG_PATH } = require('../src/config')`, and
+  `require('../src/main/handlers')`) resolves `ROOT_PATH` to the repo
+  root, `BUILD_PATH` to `<repo>/build`, `STATIC_PATH`, `APP_ICON`,
+  `APP_COPYRIGHT` and `CONFIG_PATH` all correctly.
+- Renderer probe, before vs after, via the documented
+  `web-contents-created` patch on `build/main/index.js`:
+  `PROBE-DOM` is byte-identical --
+  `{"header":463,"torrents":11,"hasState":"object",
+  "hasDispatch":"function","title":"WebTorrent"}` in both runs. The one
+  severity-3 renderer error
+  (`Cannot read properties of undefined (reading 'getCurrentWindow')`,
+  from `electron.remote` at `main.js:154`) is present **before and
+  after**, at the same source line -- pre-existing, not a regression.
+- `npm run build` compiles 64 files; only `config.js` and
+  `renderer/main.js` gained `"use strict"`, confirming `unambiguous`
+  left the other 62 files as scripts.
+- App launches via `npx electron --no-sandbox .`, `init: 757ms`, both
+  windows up.
+- `npx vite build` still exits 0 at **723 modules** -- unchanged from
+  US-004. The lazy `require()` calls inside the now-ESM `main.js` do
+  not break Rolldown, and `config.js` is still in the bundle (its
+  unique `'Cosmos Laundromat (Preview)'` literal appears in
+  `build-vite/assets/main-*.js`).
+- `npm test` (standard + depcheck) passes, exit 0. depcheck sees the
+  new Babel plugin through the `babel` key.
+- No CSS file touched. No `src/main/` file touched.
+- **The six-step manual smoke test was NOT run** -- non-interactive
+  session. The renderer probe covers app launch, the torrent list
+  render and the dispatcher wiring. The steps that carry residual risk
+  are playing a torrent and the create-torrent flow, both of which
+  reach `main.js` only through `dispatch()`, whose handler table is
+  unchanged.
+
+**Learnings for future iterations:**
+
+- **`import { app } from 'electron'` is a trap in `src/config.js`.**
+  Under real Node ESM (the `bin/` path), `electron` resolves to the npm
+  CLI helper, which is CommonJS exporting a *path string*. Node's
+  cjs-module-lexer finds no `app` named export and the module fails to
+  link -- a hard SyntaxError, not an undefined. `import electron from
+  'electron'` + `electron.app` always links, and degrades to the same
+  `undefined` the old `const { app } = require('electron')` produced.
+  Use default imports for `electron` in any file `bin/` can reach.
+- **JSON imports need the attribute.** `import pkg from
+  '../package.json' with { type: 'json' }` parses under Babel 7.29 and
+  under `standard`'s `@babel/eslint-parser` with no extra syntax
+  plugin, compiles to a plain `require('../package.json')`, and is what
+  Node's ESM loader requires. A bare JSON import throws
+  `ERR_IMPORT_ATTRIBUTE_MISSING` in Node 22+.
+- **`node -e` leaks `__dirname` into ESM modules it loads.** A
+  `typeof __dirname !== 'undefined'` guard evaluates true and yields
+  `'.'` under `node -e`, giving nonsense relative paths. Probe module
+  scope from a real `.cjs`/`.mjs` file, never from `-e`, or you will
+  chase a bug that does not exist.
+- **ESM hoisting silently kills load-order perf tricks.** `main.js`
+  deliberately started the async config read before its blocking
+  requires. Imports hoist, so that overlap is gone. Watch for the same
+  pattern in the remaining conversion stories; it is a comment-worthy
+  behaviour change, not a bug.
+- **`sourceType: "unambiguous"` is the safe way to add the commonjs
+  transform mid-migration.** The default (`"module"`) would parse all
+  64 files as modules and prepend `"use strict"` to the 62 that are
+  still CommonJS scripts. Verified: after the change exactly two build
+  outputs contain `"use strict"`.
+- **Prove config equivalence by diffing the compiled object, not by
+  reading the diff.** `git stash`, `npm run build`, dump
+  `require('build/config')` to JSON, restore, dump again, compare in
+  Python. It catches a dropped or mistyped key instantly and it is the
+  only cheap check that covers all 8 main-process consumers at once.
 ---
