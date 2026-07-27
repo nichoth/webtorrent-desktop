@@ -51,10 +51,18 @@ every call site uses them namespace-style (`TorrentSummary.getByKey`).
 Do not reintroduce a default export object for these -- a default and a
 namespace would drift apart.
 
-The two single-value modules (`media-extensions.js`,
-`torrent-poster.js`) use `export default`. Their remaining CommonJS
-consumers therefore have to say `require('...').default`; see
-`src/renderer/webtorrent.js` and `test/test-select-poster.js`.
+The single-value modules (`media-extensions.js`, `torrent-poster.js`,
+`state.js`) use `export default`. Their remaining CommonJS consumers
+therefore have to say `require('...').default`; see
+`src/renderer/webtorrent.js`, `test/test-select-poster.js` and
+`src/main/index.js`.
+
+`state.js` is the only renderer module the **main** process consumes
+(`src/main/index.js` calls `State.load(cb)`). It is also imported by
+both processes at once, so it must stay free of renderer-only globals:
+anything that needs the renderer belongs behind the
+`process.type === 'renderer'` guard in `load()`, the way `migrations.run`
+is.
 
 ## `src/renderer/webtorrent.js`
 

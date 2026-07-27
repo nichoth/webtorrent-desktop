@@ -222,7 +222,7 @@
         "Smoke test passes, with explicit verification of step 6 (quit and relaunch, torrent list state persisted)"
       ],
       "priority": 12,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

@@ -1,21 +1,27 @@
-const appConfig = require('application-config')('WebTorrent')
-const path = require('path')
-const { EventEmitter } = require('events')
+import applicationConfig from 'application-config'
+import path from 'path'
+import { EventEmitter } from 'events'
+import { copyFileSync, mkdirSync, readFileSync } from 'fs'
+import debounce from 'debounce'
+import LocationHistory from 'location-history'
+import parseTorrent from 'parse-torrent'
+import createTorrent from 'create-torrent'
 
-const config = require('../../config')
-const defaultAnnounceList = require('create-torrent').announceList.map((arr) => arr[0])
+import config from '../../config'
+import * as migrations from './migrations'
+
+const appConfig = applicationConfig('WebTorrent')
+const defaultAnnounceList = createTorrent.announceList.map((arr) => arr[0])
 
 const SAVE_DEBOUNCE_INTERVAL = 1000
 
 appConfig.filePath = path.join(config.CONFIG_PATH, 'config.json')
 
-const State = module.exports = Object.assign(new EventEmitter(), {
+const State = Object.assign(new EventEmitter(), {
   getDefaultPlayState,
   load,
   // state.save() calls are rate-limited. Use state.saveImmediate() to skip limit.
   save (...args) {
-    // Perf optimization: Lazy-require debounce (and it's dependencies)
-    const debounce = require('debounce')
     // After first State.save() invokation, future calls go straight to the
     // debounced function
     State.save = debounce(saveImmediate, SAVE_DEBOUNCE_INTERVAL)
@@ -24,9 +30,9 @@ const State = module.exports = Object.assign(new EventEmitter(), {
   saveImmediate
 })
 
-function getDefaultState () {
-  const LocationHistory = require('location-history')
+export default State
 
+function getDefaultState () {
   return {
     /*
      * Temporary state disappears once the program exits.
@@ -118,9 +124,6 @@ function getDefaultPlayState () {
 
 /* If the saved state file doesn't exist yet, here's what we use instead */
 function setupStateSaved () {
-  const { copyFileSync, mkdirSync, readFileSync } = require('fs')
-  const parseTorrent = require('parse-torrent')
-
   const saved = {
     prefs: {
       downloadPath: config.DEFAULT_DOWNLOAD_PATH,
@@ -232,9 +235,10 @@ async function load (cb) {
     const state = getDefaultState()
     state.saved = saved
 
+    // Migrations only make sense in the renderer, which owns the config file
+    // and the ipcRenderer channel installHandlers() uses. The import is now
+    // static (ESM has no conditional import), so only the call stays guarded.
     if (process.type === 'renderer') {
-      // Perf optimization: Save require() calls in the main process
-      const migrations = require('./migrations')
       migrations.run(state)
     }
 

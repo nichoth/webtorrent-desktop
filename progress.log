@@ -1177,3 +1177,130 @@ the running app.
   automated coverage of any renderer `lib/` module. Worth re-running
   whenever `torrent-poster.js` or `media-extensions.js` changes.
 ---
+
+## 2026-07-27 - US-012
+
+Convert `lib/state.js` and `lib/migrations.js` to ESM and fix the
+main-process require.
+
+**Interpretation:** a syntax conversion with no unit test runner in the
+repo yet (US-019), so per execution rule 3 no failing test was written
+first. Instead the behavioural acceptance criteria were checked with
+Node probes against the Babel build plus four real Electron launches --
+details under Verification.
+
+**What was implemented**
+
+- `src/renderer/lib/migrations.js`: `module.exports = { run }` ->
+  `export function run`. All four lazy/conditional requires hoisted to
+  top-level imports: `electron`'s `ipcRenderer` (was line 46),
+  `fs.copyFileSync` + `path` (was 52), `./torrent-summary` (was 120),
+  and `fs.copyFileSync` + `rimraf` (was 173). `rimraf.sync` became
+  `import { sync as rimrafSync }`, which exists under both the CJS and
+  the ESM build of rimraf 5.
+- `src/renderer/lib/state.js`: converted to ESM with
+  `export default State`. Hoisted `debounce` (was line 18),
+  `location-history` (28), `fs` + `parse-torrent` (121) and
+  `./migrations` (237). The `process.type === 'renderer'` guard around
+  `migrations.run(state)` stays -- only the import hoisted -- with a
+  comment at that line explaining why the call is still conditional.
+  The self-replacing `State.save` memoization is unchanged.
+- `src/main/index.js:16`: now
+  `require('../renderer/lib/state').default`, with a comment. The file
+  otherwise stays CommonJS.
+- `src/AGENTS.md`: recorded `state.js` as the one renderer module the
+  main process consumes, and the dual-process constraint that follows.
+
+**Files changed**
+
+- `src/renderer/lib/state.js`, `src/renderer/lib/migrations.js`
+- `src/main/index.js`
+- `src/AGENTS.md`, `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `npm test` (standard + depcheck) passes, exit 0.
+  `npm run build` compiles 64 files.
+- Node probe: `require('build/renderer/lib/state').default` is an
+  EventEmitter with `getDefaultPlayState/load/save/saveImmediate`;
+  `build/renderer/lib/migrations` exports exactly `run`.
+- Migrations, pre-0.7.0 synthetic state: version 1 -> `0.24.0`,
+  `posterURL` -> `posterFileName`, `defaultPlayFileIndex` dropped,
+  `playInVlc` -> `openExternalPlayer`, `soundNotifications` and
+  `externalPlayerPath` defaults applied.
+- Migrations, targeted probes for each hoisted require (run under
+  `NODE_ENV=test` so `CONFIG_PATH` is `/tmp/WebTorrentTest`):
+  `migrate_0_12_0` cleared the missing `path` via
+  `TorrentSummary.getFileOrFolder`; `migrate_0_17_2` rewrote the WIRED
+  CD hash/name/magnetURI, `rimrafSync`'d the old torrent file and
+  `copyFileSync`'d the new one.
+- `state.js` on a clean `/tmp/WebTorrentTest`: `setupStateSaved()` built
+  5 default torrents with real parsed infoHashes and magnet URIs
+  (hoisted `fs` + `parse-torrent`), `state.location.url` is a function
+  (hoisted `location-history`), `saveImmediate` wrote the file and
+  emitted `stateSaved`, and two back-to-back `State.save()` calls
+  collapsed into one write (hoisted `debounce`). A second `load()`
+  read the marker back.
+- **Clean-profile launch** (`rm -rf /tmp/WebTorrentTest`,
+  `NODE_ENV=test npx electron .`): "Missing config file: Creating new
+  one", renderer state came up with version `0.24.0` and the 5 default
+  torrents.
+- **Quit-and-relaunch persistence (smoke step 6)**: launch 2 set
+  `torrents[0].displayName = 'PERSIST-CHECK-42'` in the renderer and
+  called `State.saveImmediate`; after quit, `config.json` on disk held
+  the marker; launch 3 read it back into the renderer's `window.state`
+  and logged no "Missing config file".
+- **installHandlers / hoisted `ipcRenderer`**: with the test profile
+  forced to `version: '0.20.0'` and `isFileHandler: true`, launch 4
+  logged `PROBE-FILE-HANDLER: true` in the main process, so the
+  top-level `import { ipcRenderer } from 'electron'` sends correctly
+  from the renderer. The receiving side was patched to log-only for
+  this probe so it would not actually register the dev Electron binary
+  as the system magnet handler.
+- Final launch on the user's real profile after `npm run build`
+  restored the artifacts: `init: 527.945ms`, both windows up. The only
+  severity-3 renderer error is the pre-existing `electron.remote ...
+  getCurrentWindow` one.
+- **The six-step manual smoke test was NOT run** -- this session is
+  non-interactive. Step 6 (quit and relaunch, list state persisted) was
+  verified empirically as described above; the residual risk is in the
+  steps that need a human at the UI (adding a torrent, playing media),
+  none of which this diff touches.
+
+**Learnings for future iterations:**
+
+- **`process.type === 'renderer'` guards survive the ESM conversion,
+  but their perf rationale does not.** The old comment claimed the lazy
+  `require('./migrations')` saved work in the main process; ESM has no
+  conditional import, so the module now loads in both processes. That
+  is safe here only because nothing in `migrations.js`'s import graph
+  touches a renderer-only global at module scope -- `electron` resolves
+  in the main process too, `ipcRenderer` is just `undefined` there, and
+  nothing reads it until `installHandlers` runs. Check that property
+  before hoisting any other guarded require.
+- **`rimraf` 5 exposes `sync` under both its CJS and its ESM build**
+  (verify with `node --input-type=module -e "import * as r from 'x'"`
+  alongside a plain `require`), so
+  `import { sync as rimrafSync } from 'rimraf'` is safe now and after
+  Vite starts resolving the `import` condition. Do the same two-way
+  check for any other package whose `exports` map splits CJS/ESM.
+- **`NODE_ENV=test` gives you a disposable profile for free.**
+  `src/config.js` makes `IS_TEST` imply `IS_PORTABLE`, which points
+  `CONFIG_PATH` at `/tmp/WebTorrentTest`. `rm -rf` it and relaunch to
+  test any first-run or migration path without touching the user's real
+  config. Its only other effects are cosmetic (`cast.js:40`,
+  `player-page.js:927`, `main/index.js:203`).
+- **Probing a real quit-and-relaunch cycle** is three launches: write a
+  marker from the renderer and `saveImmediate`, quit, read `config.json`
+  off disk, relaunch and read `window.state` back. Editing
+  `build/main/index.js`'s `did-finish-load` hook with a `setTimeout` of
+  ~4s is enough for `window.state` to exist; the hidden webtorrent
+  window fires the same hook and reports `no-state` -- that is expected,
+  not a failure.
+- **Never let a probe call `handlers.install()`.** On darwin it runs
+  `app.setAsDefaultProtocolClient('magnet')`, which would register the
+  dev Electron binary as the user's system magnet handler. Patch the
+  `ipcMain.on('setDefaultFileHandler')` listener in `build/main/ipc.js`
+  to log and return instead -- that still proves the renderer sent the
+  message, which is the part under test.
+---

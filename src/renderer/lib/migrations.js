@@ -1,18 +1,17 @@
 /* eslint-disable camelcase */
 
-module.exports = {
-  run
-}
+import fs, { copyFileSync } from 'fs'
+import path from 'path'
+import semver from 'semver'
+import { ipcRenderer } from 'electron'
+import { sync as rimrafSync } from 'rimraf'
 
-const fs = require('fs')
-const path = require('path')
-const semver = require('semver')
-
-const config = require('../../config')
+import config from '../../config'
+import * as TorrentSummary from './torrent-summary'
 
 // Change `state.saved` (which will be saved back to config.json on exit) as
 // needed, for example to deal with config.json format changes across versions
-function run (state) {
+export function run (state) {
   // Replace '{ version: 1 }' with app version (semver)
   if (!semver.valid(state.saved.version)) {
     state.saved.version = '0.0.0' // Pre-0.7.0 version, so run all migrations
@@ -43,15 +42,11 @@ function run (state) {
 // enabled them.
 function installHandlers (saved) {
   if (saved.prefs.isFileHandler) {
-    const ipcRenderer = require('electron').ipcRenderer
     ipcRenderer.send('setDefaultFileHandler', true)
   }
 }
 
 function migrate_0_7_0 (saved) {
-  const { copyFileSync } = require('fs')
-  const path = require('path')
-
   saved.torrents.forEach(ts => {
     const infoHash = ts.infoHash
 
@@ -117,8 +112,6 @@ function migrate_0_11_0 (saved) {
 }
 
 function migrate_0_12_0 (saved) {
-  const TorrentSummary = require('./torrent-summary')
-
   if (saved.prefs.openExternalPlayer == null && saved.prefs.playInVlc != null) {
     saved.prefs.openExternalPlayer = saved.prefs.playInVlc
   }
@@ -170,9 +163,6 @@ function migrate_0_17_2 (saved) {
   // folders/files that end in a trailing dot (.) or space are not deletable from
   // Windows Explorer. See: https://github.com/webtorrent/webtorrent-desktop/issues/905
 
-  const { copyFileSync } = require('fs')
-  const rimraf = require('rimraf')
-
   const OLD_NAME = 'The WIRED CD - Rip. Sample. Mash. Share.'
   const NEW_NAME = 'The WIRED CD - Rip. Sample. Mash. Share'
 
@@ -202,7 +192,7 @@ function migrate_0_17_2 (saved) {
   } catch (err) {}
   ts.posterFileName = NEW_HASH + '.jpg'
 
-  rimraf.sync(path.join(config.TORRENT_PATH, ts.torrentFileName))
+  rimrafSync(path.join(config.TORRENT_PATH, ts.torrentFileName))
   copyFileSync(
     path.join(config.STATIC_PATH, 'wiredCd.torrent'),
     path.join(config.TORRENT_PATH, NEW_HASH + '.torrent')
