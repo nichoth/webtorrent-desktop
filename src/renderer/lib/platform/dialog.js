@@ -10,11 +10,11 @@
  * `remote.getCurrentWindow()` from `components/path-selector.js` and
  * `controllers/torrent-list-controller.js`.
  *
- * Design-only stubs (US-018). Implemented in US-024, call sites
- * migrated in US-027. See docs/platform-shim.md.
+ * Implemented in US-024; call sites are migrated in US-027. See
+ * docs/platform-shim.md.
  */
 
-const NOT_IMPLEMENTED = 'platform/dialog: not implemented yet (US-024)'
+import { dialog, getCurrentWindow } from '@electron/remote'
 
 /**
  * @typedef {object} FileFilter
@@ -50,7 +50,8 @@ const NOT_IMPLEMENTED = 'platform/dialog: not implemented yet (US-024)'
  *   `.length` check.
  */
 export async function showOpenDialog (options) {
-  throw new Error(NOT_IMPLEMENTED)
+  const filenames = dialog.showOpenDialogSync(getCurrentWindow(), options)
+  return Array.isArray(filenames) ? filenames : []
 }
 
 /**
@@ -61,5 +62,6 @@ export async function showOpenDialog (options) {
  *   user cancelled.
  */
 export async function showSaveDialog (options) {
-  throw new Error(NOT_IMPLEMENTED)
+  const savePath = dialog.showSaveDialogSync(getCurrentWindow(), options)
+  return savePath === undefined ? null : savePath
 }

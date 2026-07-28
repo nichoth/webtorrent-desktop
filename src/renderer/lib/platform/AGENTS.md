@@ -57,6 +57,16 @@ share code, so the engine seam can be reimplemented without touching
 - Request/response over `send` + `once` collapses into a single
   promise (`ipc-os.checkForExternalPlayer`). Register the reply
   listener *before* sending.
+- `@electron/remote` is imported by name too --
+  `import { dialog, getCurrentWindow } from '@electron/remote'`
+  (`dialog.js`, `window.js`, US-024). Its renderer entry sets
+  `__esModule` and defines every builtin (`dialog`, `clipboard`, ...)
+  as a lazy getter on `exports` with **no `default`**, so named
+  imports match its real shape and give the same per-call property
+  read Babel needs for the unit-test stub. The `import remote from
+  '@electron/remote'` form used by the not-yet-migrated call sites
+  survives only because Rolldown's CJS-external interop supplies a
+  default; do not copy it into this directory.
 
 ## Gotchas
 

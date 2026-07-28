@@ -6,9 +6,11 @@ the design agreed in US-018: it maps every exported function onto the
 call sites it will replace, so the migration stories (US-026 through
 US-032) are mechanical rather than exploratory.
 
-`ipc-os.js` is implemented as of US-020 and `ipc-engine.js` as of
-US-021. Every other module is still a stub that throws. Nothing
-imports the shim yet -- the call sites move in US-026 onwards.
+`ipc-os.js` is implemented as of US-020, `ipc-engine.js` as of
+US-021, `shell.js` and `clipboard.js` as of US-022, `fs.js` as of
+US-023, and `dialog.js` and `window.js` as of US-024. Only `menu.js`
+is still a stub that throws. Nothing imports the shim yet -- the call
+sites move in US-026 onwards.
 
 ## Rules the surface follows
 
@@ -92,7 +94,9 @@ Shape changes for the migration:
 - `showOpenDialog` resolves to `string[]`, empty on cancel, where
   `showOpenDialogSync` returns `undefined`. The two
   `Array.isArray(filenames)` guards become `filenames.length` checks.
-- `showSaveDialog` resolves to `string|null`.
+- `showSaveDialog` resolves to `string|null`, where
+  `showSaveDialogSync` returns `undefined`. `if (!savePath) return`
+  guards keep working unchanged.
 
 ## `window.js`
 
@@ -104,6 +108,14 @@ the window already goes over IPC and lives in `ipc-os.js`.
 | `isVisible()` | `main.js:149` |
 | `isMaximized()` | `main.js:410`, `main.js:422` |
 
+There is deliberately **no exported current-window handle**. Both
+reads resolve the window internally, per call, and only a boolean
+crosses the boundary: a `BrowserWindow` proxy is not serialisable, so
+handing one out would put an Electron object back in front of exactly
+the callers this shim exists to keep clean (FR-12). `dialog.js`
+parents its dialogs the same way, through its own
+`getCurrentWindow()` call rather than through `window.js`.
+
 `main.js:422` currently assigns `.isMaximized` without calling it, so
 `state.window.wasMaximized` is set to a function. That is a
 pre-existing bug. US-027 should await the call and note the behaviour
@@ -113,6 +125,39 @@ refactor.
 `screen.getAllDisplays()` is **excluded**. Its only consumer was
 `lib/telemetry.js`, which US-002 deleted, so there is nothing left to
 support.
+
+### Sync-to-async risk site: the window-bounds save path
+
+`setDimensions()` in `src/renderer/main.js` (lines 407-422 today; the
+PRD's "443-455" predates the US-002 deletions) is the one place where
+maximize state is read *while* window bounds are being saved, and it
+is the riskiest conversion in US-027:
+
+```js
+if (electron.remote.getCurrentWindow().isMaximized()) {
+  state.window.bounds = null
+  return
+}
+state.window.bounds = { x: window.screenX, ... }
+state.window.wasMaximized = electron.remote.getCurrentWindow().isMaximized
+```
+
+Today the guard, the four `window.screenX`/`outerWidth` reads and the
+`wasMaximized` write all happen in one synchronous turn, so they
+describe a single instant. Awaiting `window.isMaximized()` twice puts
+two suspension points in the middle of that, and `setDimensions` is
+called from the video-resize path while the user may still be
+dragging or maximizing. Three things follow for US-027:
+
+- The `window.screen*`/`outer*` reads must be taken *before* the
+  first `await`, or the saved bounds can belong to a different window
+  size than the maximize check they are guarded by.
+- `setDimensions` becomes `async`, so every caller has to await it or
+  accept that `state.window.bounds` is set after they return. Chase
+  the callers; do not stop at the function itself.
+- The two `isMaximized()` reads are one read. Await once and reuse
+  the boolean rather than awaiting twice -- that also fixes the
+  `wasMaximized`-is-a-function bug above.
 
 ## `menu.js`
 

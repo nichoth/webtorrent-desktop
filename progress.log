@@ -2167,3 +2167,58 @@ timed `npm run watch` observation.
     `ok` lines above it. The "every export is async" test has to stub
     enough for every export to actually resolve.
 ---
+
+## 2026-07-28 - US-024
+- Implemented `src/renderer/lib/platform/dialog.js` against
+  `@electron/remote`'s `dialog` + `getCurrentWindow`:
+  `showOpenDialog(options)` resolves to `string[]` (empty on cancel,
+  where `showOpenDialogSync` returns `undefined`) and
+  `showSaveDialog(options)` resolves to `string|null`. Both parent to
+  the current window internally, so no caller passes one.
+- Implemented `src/renderer/lib/platform/window.js`: `isVisible()`
+  and `isMaximized()`, each resolving the current window per call.
+- **Interpretation of the "current-window access" criterion.** The
+  criterion reads "covers `isVisible()`, `isMaximized()`, and
+  current-window access, all async". I took that to mean `window.js`
+  *owns* current-window access, not that it exports a handle. A
+  `BrowserWindow` proxy is not serialisable and exporting it would
+  put an Electron object back in front of callers, against FR-12 and
+  the directory's "nothing here returns a Node object" rule. A test
+  asserts the module's export list is exactly the two reads.
+- `screen.getAllDisplays()` stays excluded; its absence was already
+  recorded in `docs/platform-shim.md` and is unchanged.
+- Documented the sync-to-async risk site for US-027: `setDimensions()`
+  in `src/renderer/main.js`. The PRD cites lines 443-455; the code is
+  at 407-422 today (the US-002 telemetry deletion moved it), and the
+  doc says so rather than repeating the stale numbers.
+- Files changed: `src/renderer/lib/platform/dialog.js`,
+  `src/renderer/lib/platform/window.js`,
+  `src/renderer/lib/platform/AGENTS.md`, `test/AGENTS.md`,
+  `test/unit/platform-dialog.js` (new),
+  `test/unit/platform-window.js` (new), `docs/platform-shim.md`,
+  `specs/prd.json`.
+- **Learnings for future iterations:**
+  - `@electron/remote`'s renderer entry sets `__esModule: true` and
+    defines each builtin (`dialog`, `clipboard`, ...) as a lazy
+    getter on `exports` via `addBuiltinProperty`, with **no
+    `default`**. So `import { dialog } from '@electron/remote'` is
+    the correct shape inside the shim -- same situation as
+    `material-ui/styles/colors`. The `import remote from
+    '@electron/remote'` in `path-selector.js`,
+    `subtitles-controller.js` and `torrent-list-controller.js` works
+    only because Rolldown's CJS-external interop synthesises a
+    default; under Babel (which builds `lib/`) that form would be
+    `undefined`. Anything moved into `src/renderer/lib/` must use
+    named imports.
+  - Stubbing `@electron/remote` in a unit test needs
+    `__esModule: true` on the seeded `exports`, otherwise Babel's
+    interop wraps the stub in a `default` and the named import reads
+    `undefined`. `require.resolve('@electron/remote')` is safe: it
+    resolves without executing, so the real module's "cannot be
+    required in the browser process" throw never fires.
+  - The sync-to-async hazard in `setDimensions` is *ordering*, not
+    just plumbing: the `window.screenX`/`outerWidth` reads and the
+    maximize check currently describe one instant. US-027 must take
+    the DOM reads before the first `await` and collapse the two
+    `isMaximized()` calls into one.
+---

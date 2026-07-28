@@ -6,11 +6,17 @@
  * bounds, aspect ratio, full screen, dock badge) already goes to the
  * main process over IPC and therefore lives in `ipc-os.js`.
  *
- * Design-only stubs (US-018). Implemented in US-024, call sites
- * migrated in US-027. See docs/platform-shim.md.
+ * Current-window access is the module's own business: it resolves
+ * the window per call and never hands the handle out, because a
+ * `BrowserWindow` proxy is not serialisable and would put an
+ * Electron object back in front of the callers this shim exists to
+ * keep clean (FR-12). The two reads below are the whole surface.
+ *
+ * Implemented in US-024; call sites are migrated in US-027. See
+ * docs/platform-shim.md.
  */
 
-const NOT_IMPLEMENTED = 'platform/window: not implemented yet (US-024)'
+import { getCurrentWindow } from '@electron/remote'
 
 /**
  * Whether the current window is visible (not hidden or minimised).
@@ -18,7 +24,7 @@ const NOT_IMPLEMENTED = 'platform/window: not implemented yet (US-024)'
  * @returns {Promise<boolean>}
  */
 export async function isVisible () {
-  throw new Error(NOT_IMPLEMENTED)
+  return getCurrentWindow().isVisible()
 }
 
 /**
@@ -27,5 +33,5 @@ export async function isVisible () {
  * @returns {Promise<boolean>}
  */
 export async function isMaximized () {
-  throw new Error(NOT_IMPLEMENTED)
+  return getCurrentWindow().isMaximized()
 }

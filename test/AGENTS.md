@@ -53,6 +53,13 @@ with a getter per surface -- `shell.js` is stubbed with `shell` and
 `ipcRenderer` getters on the same `exports` object (see
 `test/unit/platform-shell.js`).
 
+`@electron/remote` is stubbed the same way, at
+`require.resolve('@electron/remote')` -- add `__esModule: true` to the
+stub's `exports` so Babel's interop treats it as a module rather than
+wrapping it in a `default` (see `test/unit/platform-dialog.js`).
+`require.resolve` never executes the module, so the real one's
+"cannot be required in the browser process" throw is not reached.
+
 `require.resolve('electron')` gives the same path the built module
 resolves (the npm CLI helper, which is never the real runtime API
 outside Electron anyway). Babel emits `_electron.ipcRenderer` as a
