@@ -193,6 +193,14 @@ it tight.
   `grep -c 'has been externalized' <stderr>` should be 0. Anything
   above that is a builtin resolved to a browser stub that throws on
   first use, which no exit code will tell you about.
+- **Unit-testing a module that imports `electron`.** Seed
+  `require.cache[require.resolve('electron')]` with a fake before the
+  first `require()` of the built module. Babel compiles a named
+  import into a per-call-site `_electron.ipcRenderer` property read,
+  so a getter in the fake's `exports` is re-consulted on every call
+  and the stub can be swapped between tests. Keep shim modules on
+  `import { ipcRenderer } from 'electron'` for this reason. Recipe in
+  `test/AGENTS.md`.
 - **depcheck sees `require.resolve('pkg')` in `vite.config.js`.** Use
   `createRequire(import.meta.url)` and `require.resolve()` for packages
   that only a bundler alias references, rather than a bare string
@@ -1979,4 +1987,51 @@ timed `npm run watch` observation.
     story (verified against stashed HEAD) rather than passing.
   - `test/index.js` requires each integration file by hand, so adding
     `test/unit/` cannot affect the integration run.
+---
+
+## 2026-07-28 - US-020
+- Implemented `src/renderer/lib/platform/ipc-os.js` over `ipcRenderer`.
+  Every stub body from US-018 now sends or listens on its real
+  channel; the JSDoc surface is unchanged, so `docs/platform-shim.md`
+  needed no signature edits. A private `listen(channel, listener,
+  options)` helper strips the Electron event object, honours
+  `{ once: true }` and returns the unsubscribe closure, so every
+  `on*` export resolves to a `() => void`.
+  `checkForExternalPlayer` collapses the existing send-then-`once`
+  pair into one promise, registering the reply listener before the
+  send (today's `media-controller.js` registers it after, which is a
+  race the shim closes).
+- Test-first: `test/unit/platform-ipc-os.js` was written and shown
+  failing 8/10 before any implementation. It stubs `ipcRenderer` via
+  `require.cache` and covers send, receive, unsubscribe, `once`, and
+  the request/response round trip, plus two structural assertions --
+  every export is an `AsyncFunction`, and calling every export touches
+  no `wt-*` channel (FR-9).
+- No call site was migrated, per the story.
+- Verified every channel the module sends on is registered in
+  `src/main/`: 22 via `ipcMain.on` in `src/main/ipc.js`, plus
+  `ipcReady` (`ipc.js:24`, `once`) and `stateSaved`
+  (`src/main/index.js:126`, `once`).
+- Files changed: `src/renderer/lib/platform/ipc-os.js`,
+  `test/unit/platform-ipc-os.js`, `docs/platform-shim.md`,
+  `src/renderer/lib/platform/AGENTS.md`, `test/AGENTS.md`,
+  `specs/prd.json`, `progress.log`.
+- Gates: `npm run lint` clean, `npm test` 18/18 (13 new), and
+  `npx vite build` still succeeds -- the shim is compiled by both
+  toolchains, so Babel passing alone would not prove it.
+- **Learnings for future iterations:**
+  - The `require.cache` stubbing recipe is promoted to Codebase
+    Patterns and written up in `test/AGENTS.md`. It is what makes the
+    rest of the shim (US-021 through US-025) unit-testable, so keep
+    every shim module on a top-level *named* import from `electron`;
+    a destructuring `require` binds eagerly and breaks it.
+  - The implementation shape US-021 should copy is recorded in
+    `src/renderer/lib/platform/AGENTS.md`, not here: one-line exports
+    over a shared `listen()` helper.
+  - The two structural tests (all-async, no-`wt-*`) are cheap and
+    directly encode FR-9/FR-10. Worth repeating verbatim in the
+    `ipc-engine.js` tests with the assertion inverted.
+  - The app was not launched this session: nothing imports the shim
+    yet, so a launch could not exercise the new code and would only
+    reproduce the known pre-existing `electron.remote` error.
 ---

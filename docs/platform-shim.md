@@ -6,8 +6,9 @@ the design agreed in US-018: it maps every exported function onto the
 call sites it will replace, so the migration stories (US-026 through
 US-032) are mechanical rather than exploratory.
 
-As of US-018 every module is a stub that throws. Nothing imports the
-shim yet.
+`ipc-os.js` is implemented as of US-020. Every other module is still
+a stub that throws. Nothing imports the shim yet -- the call sites
+move in US-026 onwards.
 
 ## Rules the surface follows
 

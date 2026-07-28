@@ -14,11 +14,11 @@
  * Every listener registration resolves to an unsubscribe function, so
  * no caller ever touches `removeListener`.
  *
- * Design-only stubs (US-018). Implemented in US-020, call sites
- * migrated in US-030 and US-031. See docs/platform-shim.md.
+ * Implemented in US-020; call sites are migrated in US-030 and
+ * US-031. See docs/platform-shim.md.
  */
 
-const NOT_IMPLEMENTED = 'platform/ipc-os: not implemented yet (US-020)'
+import { ipcRenderer } from 'electron'
 
 /**
  * @typedef {() => void} Unsubscribe
@@ -29,6 +29,22 @@ const NOT_IMPLEMENTED = 'platform/ipc-os: not implemented yet (US-020)'
  * @property {boolean} [once] Remove the listener after one event.
  */
 
+/**
+ * Register a listener on `channel`, hiding both the Electron event
+ * object and `removeListener` from the caller.
+ *
+ * @param {string} channel
+ * @param {(...args: any[]) => void} listener
+ * @param {ListenOptions} [options]
+ * @returns {Unsubscribe}
+ */
+function listen (channel, listener, options) {
+  const wrapped = (e, ...args) => listener(...args)
+  if (options && options.once) ipcRenderer.once(channel, wrapped)
+  else ipcRenderer.on(channel, wrapped)
+  return () => ipcRenderer.removeListener(channel, wrapped)
+}
+
 // -- Window chrome and OS integration -------------------------------
 
 /**
@@ -38,7 +54,7 @@ const NOT_IMPLEMENTED = 'platform/ipc-os: not implemented yet (US-020)'
  * @returns {Promise<void>}
  */
 export async function setTitle (title) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('setTitle', title)
 }
 
 /**
@@ -48,7 +64,7 @@ export async function setTitle (title) {
  * @returns {Promise<void>}
  */
 export async function setProgress (progress) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('setProgress', progress)
 }
 
 /**
@@ -58,7 +74,7 @@ export async function setProgress (progress) {
  * @returns {Promise<void>}
  */
 export async function setBadge (count) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('setBadge', count)
 }
 
 /**
@@ -79,7 +95,7 @@ export async function setBadge (count) {
  * @returns {Promise<void>}
  */
 export async function setBounds (bounds, maximize) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('setBounds', bounds, maximize)
 }
 
 /**
@@ -89,7 +105,7 @@ export async function setBounds (bounds, maximize) {
  * @returns {Promise<void>}
  */
 export async function setAspectRatio (aspectRatio) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('setAspectRatio', aspectRatio)
 }
 
 /**
@@ -99,7 +115,7 @@ export async function setAspectRatio (aspectRatio) {
  * @returns {Promise<void>}
  */
 export async function toggleFullScreen (setTo) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('toggleFullScreen', setTo)
 }
 
 /**
@@ -108,7 +124,7 @@ export async function toggleFullScreen (setTo) {
  * @returns {Promise<void>}
  */
 export async function show () {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('show')
 }
 
 // -- Renderer lifecycle ---------------------------------------------
@@ -120,7 +136,7 @@ export async function show () {
  * @returns {Promise<void>}
  */
 export async function signalReady () {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('ipcReady')
 }
 
 /**
@@ -130,7 +146,7 @@ export async function signalReady () {
  * @returns {Promise<void>}
  */
 export async function signalStateSaved () {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('stateSaved')
 }
 
 // -- Dialogs owned by the main process ------------------------------
@@ -142,7 +158,7 @@ export async function signalStateSaved () {
  * @returns {Promise<void>}
  */
 export async function openTorrentFileDialog () {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('openTorrentFile')
 }
 
 /**
@@ -152,7 +168,7 @@ export async function openTorrentFileDialog () {
  * @returns {Promise<void>}
  */
 export async function openFilesDialog () {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('openFiles')
 }
 
 // -- Preferences ----------------------------------------------------
@@ -165,7 +181,7 @@ export async function openFilesDialog () {
  * @returns {Promise<void>}
  */
 export async function setAllowNav (allow) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('setAllowNav', allow)
 }
 
 /**
@@ -176,7 +192,7 @@ export async function setAllowNav (allow) {
  * @returns {Promise<void>}
  */
 export async function setDefaultFileHandler (isFileHandler) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('setDefaultFileHandler', isFileHandler)
 }
 
 /**
@@ -186,7 +202,7 @@ export async function setDefaultFileHandler (isFileHandler) {
  * @returns {Promise<void>}
  */
 export async function setStartup (startup) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('setStartup', startup)
 }
 
 // -- Folder watcher -------------------------------------------------
@@ -197,7 +213,7 @@ export async function setStartup (startup) {
  * @returns {Promise<void>}
  */
 export async function startFolderWatcher () {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('startFolderWatcher')
 }
 
 /**
@@ -206,7 +222,7 @@ export async function startFolderWatcher () {
  * @returns {Promise<void>}
  */
 export async function stopFolderWatcher () {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('stopFolderWatcher')
 }
 
 // -- External media player ------------------------------------------
@@ -219,7 +235,11 @@ export async function stopFolderWatcher () {
  * @returns {Promise<boolean>}
  */
 export async function checkForExternalPlayer (path) {
-  throw new Error(NOT_IMPLEMENTED)
+  return await new Promise(resolve => {
+    ipcRenderer.once('checkForExternalPlayer',
+      (e, isInstalled) => resolve(isInstalled))
+    ipcRenderer.send('checkForExternalPlayer', path)
+  })
 }
 
 /**
@@ -231,7 +251,7 @@ export async function checkForExternalPlayer (path) {
  * @returns {Promise<void>}
  */
 export async function openExternalPlayer (path, url, title) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('openExternalPlayer', path, url, title)
 }
 
 /**
@@ -240,7 +260,7 @@ export async function openExternalPlayer (path, url, title) {
  * @returns {Promise<void>}
  */
 export async function quitExternalPlayer () {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('quitExternalPlayer')
 }
 
 // -- Player state notifications -------------------------------------
@@ -251,7 +271,7 @@ export async function quitExternalPlayer () {
  * @returns {Promise<void>}
  */
 export async function notifyPlayerPlay () {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('onPlayerPlay')
 }
 
 /**
@@ -260,7 +280,7 @@ export async function notifyPlayerPlay () {
  * @returns {Promise<void>}
  */
 export async function notifyPlayerPause () {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('onPlayerPause')
 }
 
 /**
@@ -269,7 +289,7 @@ export async function notifyPlayerPause () {
  * @returns {Promise<void>}
  */
 export async function notifyPlayerOpen () {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('onPlayerOpen')
 }
 
 /**
@@ -280,7 +300,7 @@ export async function notifyPlayerOpen () {
  * @returns {Promise<void>}
  */
 export async function notifyPlayerUpdate (hasNext, hasPrevious) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('onPlayerUpdate', hasNext, hasPrevious)
 }
 
 /**
@@ -289,7 +309,7 @@ export async function notifyPlayerUpdate (hasNext, hasPrevious) {
  * @returns {Promise<void>}
  */
 export async function notifyPlayerClose () {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('onPlayerClose')
 }
 
 /**
@@ -300,7 +320,7 @@ export async function notifyPlayerClose () {
  * @returns {Promise<void>}
  */
 export async function notifyDownloadFinished (path) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('downloadFinished', path)
 }
 
 // -- Inbound events -------------------------------------------------
@@ -313,7 +333,7 @@ export async function notifyDownloadFinished (path) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onLog (listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('log', listener, options)
 }
 
 /**
@@ -324,7 +344,7 @@ export async function onLog (listener, options) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onError (listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('error', listener, options)
 }
 
 /**
@@ -336,7 +356,7 @@ export async function onError (listener, options) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onDispatch (listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('dispatch', listener, options)
 }
 
 /**
@@ -347,7 +367,7 @@ export async function onDispatch (listener, options) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onFullscreenChanged (listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('fullscreenChanged', listener, options)
 }
 
 /**
@@ -358,5 +378,5 @@ export async function onFullscreenChanged (listener, options) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onWindowBoundsChanged (listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('windowBoundsChanged', listener, options)
 }

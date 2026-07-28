@@ -31,6 +31,30 @@ source. This is the same route `src/main/index.js` and
 `static/webtorrent.html` already use, so no extra transform dependency
 is needed.
 
+### Stubbing `electron` in a unit test
+
+Modules that `import { ipcRenderer } from 'electron'` are testable
+without Electron by seeding `require.cache` before the first require
+of the module under test:
+
+```js
+const electronPath = require.resolve('electron')
+require.cache[electronPath] = {
+  id: electronPath,
+  filename: electronPath,
+  loaded: true,
+  exports: { get ipcRenderer () { return stub } }
+}
+const mod = require('../../build/renderer/lib/platform/ipc-os')
+```
+
+`require.resolve('electron')` gives the same path the built module
+resolves (the npm CLI helper, which is never the real runtime API
+outside Electron anyway). Babel emits `_electron.ipcRenderer` as a
+property read at each call site, so the getter is consulted per call
+and the stub can be swapped between tests. See
+`test/unit/platform-ipc-os.js`.
+
 Only `src/renderer/lib/**` and `src/main/**` are reachable this way.
 `build:main` deliberately ignores `src/renderer/main.js`,
 `components/`, `controllers/` and `pages/` (Vite owns those), so those

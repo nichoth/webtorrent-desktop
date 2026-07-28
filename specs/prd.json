@@ -359,8 +359,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 20,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Implemented over ipcRenderer with a shared listen() helper; unsubscribe closures returned from every on* export. checkForExternalPlayer collapses send+once into one promise. Unit tests stub ipcRenderer via require.cache (recipe in test/AGENTS.md). No call sites migrated."
     },
     {
       "id": "US-021",

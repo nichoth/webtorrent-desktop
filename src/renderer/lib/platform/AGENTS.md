@@ -28,6 +28,22 @@ commit when the surface changes.
   are descriptor objects, not `MenuItem` instances (FR-12). Anything
   crossing the boundary has to be serialisable.
 
+## Implementation pattern (set by `ipc-os.js`, US-020)
+
+- Import the Electron surface at module top level with a named
+  import: `import { ipcRenderer } from 'electron'`. Babel compiles
+  that to a lazy `_electron.ipcRenderer` property read at each call
+  site, which is what makes the module unit-testable (see
+  `test/AGENTS.md`). A destructured `const { ipcRenderer } =
+  require('electron')` would bind eagerly and defeat that.
+- Each listener export is a one-liner over a private `listen(channel,
+  listener, options)` helper that wraps the caller's function to drop
+  the Electron event object, honours `{ once: true }`, and returns the
+  `removeListener` closure.
+- Request/response over `send` + `once` collapses into a single
+  promise (`ipc-os.checkForExternalPlayer`). Register the reply
+  listener *before* sending.
+
 ## Gotchas
 
 - `index.js` uses `import * as x` plus `export { x }`, not
