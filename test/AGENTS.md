@@ -48,6 +48,11 @@ require.cache[electronPath] = {
 const mod = require('../../build/renderer/lib/platform/ipc-os')
 ```
 
+A module that imports several Electron surfaces needs one cache entry
+with a getter per surface -- `shell.js` is stubbed with `shell` and
+`ipcRenderer` getters on the same `exports` object (see
+`test/unit/platform-shell.js`).
+
 `require.resolve('electron')` gives the same path the built module
 resolves (the npm CLI helper, which is never the real runtime API
 outside Electron anyway). Babel emits `_electron.ipcRenderer` as a

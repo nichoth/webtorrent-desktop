@@ -22,7 +22,10 @@ commit when the surface changes.
   engine is swapped at.
 - **`shell.js` owns `showItemInFolder`, `openPath` and
   `moveItemToTrash`**, even though they are IPC channels, because they
-  are one concern. Do not move them to `ipc-os.js`.
+  are one concern. Do not move them to `ipc-os.js`. Those three stay
+  on `ipcRenderer.send` rather than calling `shell` directly:
+  `moveItemToTrash` is main-process-only in Electron, and the main
+  handlers already exist. Only `openExternal` runs in the renderer.
 - **Nothing here returns a Node object.** `fs.stat` resolves to a
   plain `{ size, isDirectory, isFile }`, not a `Stats` instance; menus
   are descriptor objects, not `MenuItem` instances (FR-12). Anything

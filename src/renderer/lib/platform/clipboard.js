@@ -1,11 +1,16 @@
 /**
  * Platform shim: system clipboard.
  *
- * Design-only stubs (US-018). Implemented in US-022, call sites
- * migrated in US-026. See docs/platform-shim.md.
+ * Electron's clipboard is synchronous and available in the renderer,
+ * so both exports are thin async wrappers -- a host that has to cross
+ * a process boundary can fill them in without a caller changing
+ * (FR-10).
+ *
+ * Implemented in US-022; call sites are migrated in US-026. See
+ * docs/platform-shim.md.
  */
 
-const NOT_IMPLEMENTED = 'platform/clipboard: not implemented yet (US-022)'
+import { clipboard } from 'electron'
 
 /**
  * Read the clipboard's plain-text contents.
@@ -13,7 +18,7 @@ const NOT_IMPLEMENTED = 'platform/clipboard: not implemented yet (US-022)'
  * @returns {Promise<string>}
  */
 export async function readText () {
-  throw new Error(NOT_IMPLEMENTED)
+  return clipboard.readText()
 }
 
 /**
@@ -23,5 +28,5 @@ export async function readText () {
  * @returns {Promise<void>}
  */
 export async function writeText (text) {
-  throw new Error(NOT_IMPLEMENTED)
+  clipboard.writeText(text)
 }

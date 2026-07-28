@@ -61,6 +61,13 @@ exports none of them.
 | `openPath(path)` | `controllers/playback-controller.js:66` (`openPath` channel) |
 | `moveItemToTrash(path)` | `controllers/torrent-list-controller.js:397` (`moveItemToTrash` channel) |
 
+The US-022 implementation keeps that split: `openExternal` calls
+Electron's renderer-side `shell.openExternal`, while the other three
+still `ipcRenderer.send` on their existing channels, which the main
+process already handles (`src/main/ipc.js`). `moveItemToTrash` is
+main-only in Electron, so routing all three the same way keeps the
+module's behaviour uniform.
+
 ## `clipboard.js`
 
 | Function | Replaces |

@@ -393,8 +393,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 22,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "openExternal via renderer-side shell.openExternal; the three path channels keep their existing ipcRenderer.send route (moveItemToTrash is main-only). clipboard wraps the synchronous Electron API. 15 new unit assertions with electron stubbed via require.cache. No call sites migrated."
     },
     {
       "id": "US-023",

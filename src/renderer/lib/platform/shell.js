@@ -9,11 +9,16 @@
  * way. `ipc-os.js` deliberately exports none of them (FR-9 keeps
  * engine and OS IPC apart; this keeps OS IPC grouped by concern).
  *
- * Design-only stubs (US-018). Implemented in US-022, call sites
- * migrated in US-026. See docs/platform-shim.md.
+ * `openExternal` goes straight to Electron's `shell`, which the
+ * renderer already has; the other three keep their existing trip to
+ * the main process, because `moveItemToTrash` is main-only and the
+ * three main-side handlers already exist (`src/main/ipc.js`).
+ *
+ * Implemented in US-022; call sites are migrated in US-026. See
+ * docs/platform-shim.md.
  */
 
-const NOT_IMPLEMENTED = 'platform/shell: not implemented yet (US-022)'
+import { ipcRenderer, shell } from 'electron'
 
 /**
  * Open a URL in the user's default browser.
@@ -22,7 +27,7 @@ const NOT_IMPLEMENTED = 'platform/shell: not implemented yet (US-022)'
  * @returns {Promise<void>}
  */
 export async function openExternal (url) {
-  throw new Error(NOT_IMPLEMENTED)
+  await shell.openExternal(url)
 }
 
 /**
@@ -32,7 +37,7 @@ export async function openExternal (url) {
  * @returns {Promise<void>}
  */
 export async function showItemInFolder (path) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('showItemInFolder', path)
 }
 
 /**
@@ -42,7 +47,7 @@ export async function showItemInFolder (path) {
  * @returns {Promise<void>}
  */
 export async function openPath (path) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('openPath', path)
 }
 
 /**
@@ -53,5 +58,5 @@ export async function openPath (path) {
  * @returns {Promise<void>}
  */
 export async function moveItemToTrash (path) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('moveItemToTrash', path)
 }

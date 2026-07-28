@@ -2086,3 +2086,37 @@ timed `npm run watch` observation.
   - The app was not launched: nothing imports `ipc-engine.js` yet, so
     a launch could not exercise it.
 ---
+
+## 2026-07-28 - US-022
+- Implemented `lib/platform/shell.js` and `lib/platform/clipboard.js`,
+  replacing the US-018 throwing stubs. `openExternal` calls Electron's
+  renderer-side `shell.openExternal`; `showItemInFolder`, `openPath`
+  and `moveItemToTrash` keep their existing `ipcRenderer.send` trip to
+  the main process, whose handlers already exist in `src/main/ipc.js`.
+  `clipboard` wraps Electron's synchronous `readText`/`writeText`.
+- Added `test/unit/platform-shell.js` (9 assertions) and
+  `test/unit/platform-clipboard.js` (6), stubbing `electron` via the
+  `require.cache` recipe in `test/AGENTS.md`. Written first and watched
+  fail against the stubs before implementing.
+- Files changed: `src/renderer/lib/platform/shell.js`,
+  `src/renderer/lib/platform/clipboard.js`,
+  `test/unit/platform-shell.js`, `test/unit/platform-clipboard.js`,
+  `docs/platform-shim.md`, `specs/prd.json`.
+- **Learnings for future iterations:**
+  - The `require.cache` electron stub generalises past `ipcRenderer`:
+    one cache entry with a getter per surface (`shell`, `clipboard`,
+    `ipcRenderer`) covers a module that imports several. Babel emits a
+    property read per call site for each, so all of them stay
+    swappable between tests.
+  - A "returns a promise" assertion on a stub-backed export must reset
+    the stubs first: before implementation those exports reject, and
+    an un-awaited rejected promise crashes the tape process rather
+    than failing an assertion. That is the signal the test is really
+    red, not a broken test.
+  - `moveItemToTrash` is main-process-only in Electron, so the three
+    path channels stay on IPC even though `shell` is importable in the
+    renderer. Do not "simplify" them to direct `shell.*` calls in
+    US-026.
+  - No app launch was needed or performed: nothing imports these
+    modules yet (call sites move in US-026). Nothing was left running.
+---
