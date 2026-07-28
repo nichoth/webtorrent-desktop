@@ -2035,3 +2035,54 @@ timed `npm run watch` observation.
     yet, so a launch could not exercise the new code and would only
     reproduce the known pre-existing `electron.remote` error.
 ---
+
+## 2026-07-28 - US-021
+- Implemented `src/renderer/lib/platform/ipc-engine.js` over
+  `ipcRenderer`: 11 commands (`wt-set-global-trackers`,
+  `wt-start-torrenting`, `wt-stop-torrenting`, `wt-create-torrent`,
+  `wt-save-torrent-file`, `wt-generate-torrent-poster`,
+  `wt-get-audio-metadata`, `wt-start-server`, `wt-stop-server`,
+  `wt-select-files`) and 15 event registrations, including the two
+  dynamic channels (`wt-ready-${infoHash}`, `wt-server-${infoHash}`)
+  which take the info hash as an argument and concatenate internally.
+  Same private `listen()` helper as `ipc-os.js`. All exports async;
+  every listener registration resolves to an unsubscribe function.
+- Added `test/unit/platform-ipc-engine.js` (18 assertions): all-async,
+  "every export touches exactly one channel and it is `wt-*`",
+  send/receive/unsubscribe/`{once:true}` for the static `wt-progress`
+  channel, send/receive/unsubscribe for the dynamic
+  `wt-ready-${infoHash}` channel plus `wt-server-${infoHash}`, and a
+  disjointness check against `ipc-os.js` exports (FR-9).
+- No call site was migrated (US-032 does that).
+- Files changed: `src/renderer/lib/platform/ipc-engine.js`,
+  `test/unit/platform-ipc-engine.js`, `docs/platform-shim.md`,
+  `src/renderer/lib/platform/AGENTS.md`, `specs/prd.json`,
+  `progress.log`.
+- Gates: `npm run lint` clean, `npm test` 36/36, `npm run
+  build:renderer` succeeds.
+- **Learnings for future iterations:**
+  - The `ipc-os.js` unit-test harness (seeding `require.cache` for
+    `require.resolve('electron')` with a getter, then a hand-rolled
+    `ipc` stub with `emit`/`count`) transplanted verbatim. Copy
+    `makeIpcStub()` for any future shim module that talks to
+    `ipcRenderer`; it is ~40 lines and not worth extracting into a
+    shared helper until a third file needs it, since `test/unit/*.js`
+    is globbed and a shared non-test file in that directory would be
+    run as a test.
+  - The FR-9 structural test is strongest as a pair: `ipc-os` asserts
+    "no channel starts with `wt-`", `ipc-engine` asserts "every
+    channel starts with `wt-`" *and* "one channel per export" (the
+    latter catches a stub that silently does nothing, which a
+    filter-based assertion alone would pass).
+  - Naming convention worth keeping: the two per-torrent exports end
+    in `For` and take `infoHash` first, which lets a test drive every
+    export generically by branching on `name.endsWith('For')` /
+    `name.startsWith('on')`.
+  - `webtorrent.js` also sends `wt-new-torrent` and
+    `wt-uncaught-error`, which are consumed by the main process and
+    deliberately absent from the shim (documented in
+    `docs/platform-shim.md`). Do not add them when US-033 documents
+    the protocol.
+  - The app was not launched: nothing imports `ipc-engine.js` yet, so
+    a launch could not exercise it.
+---

@@ -30,6 +30,11 @@ commit when the surface changes.
 
 ## Implementation pattern (set by `ipc-os.js`, US-020)
 
+`ipc-engine.js` (US-021) follows it exactly, including a private
+`listen()` helper of its own -- the two modules deliberately do not
+share code, so the engine seam can be reimplemented without touching
+`ipc-os.js`.
+
 - Import the Electron surface at module top level with a named
   import: `import { ipcRenderer } from 'electron'`. Babel compiles
   that to a lazy `_electron.ipcRenderer` property read at each call

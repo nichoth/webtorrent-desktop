@@ -14,12 +14,11 @@
  * `wt-server-${infoHash}`) are addressed by passing the info hash as
  * an argument; no caller builds a channel string.
  *
- * Design-only stubs (US-018). Implemented in US-021, call sites
- * migrated in US-032, protocol documented in US-033. See
- * docs/platform-shim.md.
+ * Implemented in US-021; call sites are migrated in US-032 and the
+ * protocol is documented in US-033. See docs/platform-shim.md.
  */
 
-const NOT_IMPLEMENTED = 'platform/ipc-engine: not implemented yet (US-021)'
+import { ipcRenderer } from 'electron'
 
 /**
  * @typedef {() => void} Unsubscribe
@@ -30,6 +29,22 @@ const NOT_IMPLEMENTED = 'platform/ipc-engine: not implemented yet (US-021)'
  * @property {boolean} [once] Remove the listener after one event.
  */
 
+/**
+ * Register a listener on `channel`, hiding both the Electron event
+ * object and `removeListener` from the caller.
+ *
+ * @param {string} channel
+ * @param {(...args: any[]) => void} listener
+ * @param {ListenOptions} [options]
+ * @returns {Unsubscribe}
+ */
+function listen (channel, listener, options) {
+  const wrapped = (e, ...args) => listener(...args)
+  if (options && options.once) ipcRenderer.once(channel, wrapped)
+  else ipcRenderer.on(channel, wrapped)
+  return () => ipcRenderer.removeListener(channel, wrapped)
+}
+
 // -- Commands: UI -> engine -----------------------------------------
 
 /**
@@ -39,7 +54,7 @@ const NOT_IMPLEMENTED = 'platform/ipc-engine: not implemented yet (US-021)'
  * @returns {Promise<void>}
  */
 export async function setGlobalTrackers (trackers) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('wt-set-global-trackers', trackers)
 }
 
 /**
@@ -57,7 +72,8 @@ export async function setGlobalTrackers (trackers) {
 export async function startTorrenting (
   torrentKey, torrentId, path, fileModtimes, selections
 ) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('wt-start-torrenting',
+    torrentKey, torrentId, path, fileModtimes, selections)
 }
 
 /**
@@ -67,7 +83,7 @@ export async function startTorrenting (
  * @returns {Promise<void>}
  */
 export async function stopTorrenting (infoHash) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('wt-stop-torrenting', infoHash)
 }
 
 /**
@@ -78,7 +94,7 @@ export async function stopTorrenting (infoHash) {
  * @returns {Promise<void>}
  */
 export async function createTorrent (torrentKey, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('wt-create-torrent', torrentKey, options)
 }
 
 /**
@@ -89,7 +105,7 @@ export async function createTorrent (torrentKey, options) {
  * @returns {Promise<void>}
  */
 export async function saveTorrentFile (torrentKey) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('wt-save-torrent-file', torrentKey)
 }
 
 /**
@@ -100,7 +116,7 @@ export async function saveTorrentFile (torrentKey) {
  * @returns {Promise<void>}
  */
 export async function generateTorrentPoster (torrentKey) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('wt-generate-torrent-poster', torrentKey)
 }
 
 /**
@@ -112,7 +128,7 @@ export async function generateTorrentPoster (torrentKey) {
  * @returns {Promise<void>}
  */
 export async function getAudioMetadata (infoHash, index) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('wt-get-audio-metadata', infoHash, index)
 }
 
 /**
@@ -123,7 +139,7 @@ export async function getAudioMetadata (infoHash, index) {
  * @returns {Promise<void>}
  */
 export async function startServer (infoHash) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('wt-start-server', infoHash)
 }
 
 /**
@@ -132,7 +148,7 @@ export async function startServer (infoHash) {
  * @returns {Promise<void>}
  */
 export async function stopServer () {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('wt-stop-server')
 }
 
 /**
@@ -143,7 +159,7 @@ export async function stopServer () {
  * @returns {Promise<void>}
  */
 export async function selectFiles (infoHash, selections) {
-  throw new Error(NOT_IMPLEMENTED)
+  ipcRenderer.send('wt-select-files', infoHash, selections)
 }
 
 // -- Events: engine -> UI -------------------------------------------
@@ -157,7 +173,7 @@ export async function selectFiles (infoHash, selections) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onTorrentParsed (listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('wt-parsed', listener, options)
 }
 
 /**
@@ -168,7 +184,7 @@ export async function onTorrentParsed (listener, options) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onTorrentMetadata (listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('wt-metadata', listener, options)
 }
 
 /**
@@ -179,7 +195,7 @@ export async function onTorrentMetadata (listener, options) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onTorrentReady (listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('wt-ready', listener, options)
 }
 
 /**
@@ -192,7 +208,7 @@ export async function onTorrentReady (listener, options) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onTorrentReadyFor (infoHash, listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('wt-ready-' + infoHash, listener, options)
 }
 
 /**
@@ -203,7 +219,7 @@ export async function onTorrentReadyFor (infoHash, listener, options) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onTorrentDone (listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('wt-done', listener, options)
 }
 
 /**
@@ -215,7 +231,7 @@ export async function onTorrentDone (listener, options) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onTorrentWarning (listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('wt-warning', listener, options)
 }
 
 /**
@@ -226,7 +242,7 @@ export async function onTorrentWarning (listener, options) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onTorrentError (listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('wt-error', listener, options)
 }
 
 /**
@@ -237,7 +253,7 @@ export async function onTorrentError (listener, options) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onProgress (listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('wt-progress', listener, options)
 }
 
 /**
@@ -248,7 +264,7 @@ export async function onProgress (listener, options) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onFileModtimes (listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('wt-file-modtimes', listener, options)
 }
 
 /**
@@ -259,7 +275,7 @@ export async function onFileModtimes (listener, options) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onTorrentFileSaved (listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('wt-file-saved', listener, options)
 }
 
 /**
@@ -271,7 +287,7 @@ export async function onTorrentFileSaved (listener, options) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onPosterSaved (listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('wt-poster', listener, options)
 }
 
 /**
@@ -283,7 +299,7 @@ export async function onPosterSaved (listener, options) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onAudioMetadata (listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('wt-audio-metadata', listener, options)
 }
 
 /**
@@ -294,7 +310,7 @@ export async function onAudioMetadata (listener, options) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onServerRunning (listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('wt-server-running', listener, options)
 }
 
 /**
@@ -307,5 +323,5 @@ export async function onServerRunning (listener, options) {
  * @returns {Promise<Unsubscribe>}
  */
 export async function onServerRunningFor (infoHash, listener, options) {
-  throw new Error(NOT_IMPLEMENTED)
+  return listen('wt-server-' + infoHash, listener, options)
 }
