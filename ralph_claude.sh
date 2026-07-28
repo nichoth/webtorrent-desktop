@@ -23,6 +23,12 @@ STALLED_COUNT=0
 TMP_CONTEXT=""                   # globals so the EXIT trap can clean them up
 TMP_CAPTURE=""
 
+# Logging helpers and the stray-process reaper live in ralph_lib.sh, shared with
+# ralph_device.sh so there is only one implementation of the process killing.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=ralph_lib.sh
+. "$SCRIPT_DIR/ralph_lib.sh" || { echo "Missing $SCRIPT_DIR/ralph_lib.sh"; exit 1; }
+
 # Adaptive reasoning ladder, indexed by stall count (clamps at the last entry).
 # Valid levels: low | medium | high | xhigh | max -- AVAILABILITY DEPENDS ON THE
 # MODEL. If your $MODEL rejects a level (e.g. "max"), trim the high end here.
@@ -31,15 +37,10 @@ TMP_CAPTURE=""
 # baseline automatically -- no separate "reset to medium" logic needed.
 EFFORT_TIERS=("medium" "high" "max")
 
-# --- UI Colors --------------------------------------------------------------
-BLUE='\033[1;34m'; YELLOW='\033[1;33m'; GREEN='\033[1;32m'; MAGENTA='\033[1;35m'; RED='\033[1;31m'; NC='\033[0m'
-log_info()    { echo -e "${BLUE}ℹ️  $1${NC}"; }
-log_step()    { echo -e "${YELLOW}➔ $1${NC}"; }
-log_success() { echo -e "${GREEN}✅ $1${NC}"; }
-log_warn()    { echo -e "${MAGENTA}⚠️  $1${NC}"; }
-log_error()   { echo -e "${RED}✖ $1${NC}"; }
-
-cleanup() { rm -f "${TMP_CONTEXT:-}" "${TMP_CAPTURE:-}" 2>/dev/null || true; }
+cleanup() {
+    rm -f "${TMP_CONTEXT:-}" "${TMP_CAPTURE:-}" 2>/dev/null || true
+    reap_strays "exit"
+}
 trap cleanup EXIT
 trap 'echo; log_warn "Stopping Ralph Loop..."; exit 130' INT
 
@@ -52,6 +53,8 @@ for f in "$PROMPT_FILE" "$PRD_FILE"; do
 done
 git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { log_error "Not inside a git repo."; exit 1; }
 touch "$LOG_FILE"
+# Start from a clean slate: kill anything a previous run left behind.
+reap_strays "preflight"
 
 # --- Helpers ----------------------------------------------------------------
 # Is the PRD parseable and shaped as expected? Distinguishes a real "done"
@@ -215,6 +218,11 @@ while [ "$ITERATION" -lt "$MAX_ITERATIONS" ]; do
     if [ "$CLAUDE_RC" -ne 0 ]; then
         log_warn "claude exited non-zero (rc=$CLAUDE_RC) — auth/rate-limit/crash/unsupported --effort? Treating as no progress."
     fi
+
+    # 4b. Reap whatever the session left running (Electron app windows, a
+    #     chromedriver from test-integration, a Vite dev server). Without this
+    #     an app launch survives the session and every iteration adds more.
+    reap_strays "post-session $ITERATION"
 
     # 5. Detect completion — but ONLY trust it if the PRD agrees all tasks pass.
     #    This kills false positives from claude merely *restating* the stop

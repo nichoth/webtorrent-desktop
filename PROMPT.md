@@ -46,6 +46,19 @@ torrent client so that it uses Tauri instead of Electron.
    `CHORE:` as appropriate).
 10. ATOMICITY: Complete exactly one task per session, then stop. Do not start a
     second task even if time remains.
+11. PROCESS HYGIENE: This is an Electron app, so every launch is a whole
+    process tree (main window plus helpers), and `npm run test-integration`
+    also starts a chromedriver. Anything you start survives this session and
+    stacks up across iterations until the machine runs out of memory.
+    - Launch in the background and keep the PID:
+      `npx electron --no-sandbox . > /tmp/wt-launch.log 2>&1 & APP=$!`
+    - Kill it as soon as the check is done: `kill $APP`.
+    - Before you finish, verify nothing is left:
+      `pgrep -fl "$PWD/node_modules/" || echo "clean"`
+      Kill anything that shows up.
+    - Never leave a launch running for a later session to inspect, and never
+      launch the app more than you need to: one launch can answer several
+      questions if you plan the checks first.
 
 # PROGRESS REPORT FORMAT
 

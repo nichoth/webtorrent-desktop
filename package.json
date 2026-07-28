@@ -7,6 +7,22 @@
     "email": "feross@webtorrent.io",
     "url": "https://webtorrent.io"
   },
+  "scripts": {
+    "build": "npm run build:main && npm run build:renderer",
+    "build:main": "babel src --out-dir build --ignore \"src/renderer/main.js,src/renderer/components/**/*,src/renderer/controllers/**/*,src/renderer/pages/**/*\"",
+    "build:renderer": "vite build",
+    "clean": "node ./bin/clean.js",
+    "gh-release": "gh-release",
+    "install-system-deps": "brew install fakeroot dpkg rpm",
+    "open-config": "node ./bin/open-config.js",
+    "package": "node ./bin/package.js",
+    "start": "npm run build && electron --no-sandbox .",
+    "test": "standard && depcheck --ignores=standard,@babel/eslint-parser --ignore-dirs=build,build-vite,dist",
+    "lint": "standard",
+    "test-integration": "npm run build && node ./test",
+    "update-authors": "./bin/update-authors.sh",
+    "watch": "nodemon --exec \"npm run start\" --ext js,css --ignore build/ --ignore build-vite/ --ignore dist/"
+  },
   "babel": {
     "sourceType": "unambiguous",
     "plugins": [
@@ -112,21 +128,6 @@
   "repository": {
     "type": "git",
     "url": "git://github.com/webtorrent/webtorrent-desktop.git"
-  },
-  "scripts": {
-    "build": "npm run build:main && npm run build:renderer",
-    "build:main": "babel src --out-dir build --ignore \"src/renderer/main.js,src/renderer/components/**/*,src/renderer/controllers/**/*,src/renderer/pages/**/*\"",
-    "build:renderer": "vite build",
-    "clean": "node ./bin/clean.js",
-    "gh-release": "gh-release",
-    "install-system-deps": "brew install fakeroot dpkg rpm",
-    "open-config": "node ./bin/open-config.js",
-    "package": "node ./bin/package.js",
-    "start": "npm run build && electron --no-sandbox .",
-    "test": "standard && depcheck --ignores=standard,@babel/eslint-parser --ignore-dirs=build,build-vite,dist",
-    "test-integration": "npm run build && node ./test",
-    "update-authors": "./bin/update-authors.sh",
-    "watch": "nodemon --exec \"npm run start\" --ext js,css --ignore build/ --ignore build-vite/ --ignore dist/"
   },
   "standard": {
     "parser": "@babel/eslint-parser"

@@ -308,7 +308,8 @@
       ],
       "priority": 17,
       "passes": false,
-      "notes": ""
+      "notes": "Requires an attended session: the six-step manual smoke test, audio-track switching on a multi-track file, cast device discovery, and startup-time measurement all need a human at a real app window. Excluded from the headless ralph loop by manual:true.",
+      "manual": true
     },
     {
       "id": "US-018",
@@ -606,7 +607,8 @@
       ],
       "priority": 35,
       "passes": false,
-      "notes": ""
+      "notes": "Requires an attended session: the six-step manual smoke test, the `npm run package` bundle check on a real machine, and the startup-time re-measurement all need a human at a real app window. The grep-based criteria are covered headlessly by the lint rule in US-034. Excluded from the headless ralph loop by manual:true.",
+      "manual": true
     }
   ]
 }
