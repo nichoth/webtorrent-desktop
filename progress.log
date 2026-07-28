@@ -3,9 +3,19 @@
 Consolidated, reusable knowledge. Re-read in full every session -- keep
 it tight.
 
-- **No lint script.** `npm run lint` does not exist. The lint+dep gate
-  is `npm test`, which runs `standard && depcheck`. There is no unit
-  test runner yet; one arrives in US-019.
+- **Test scripts.** `npm run lint` is `standard`. `npm test` is
+  `standard && depcheck && npm run test-unit`. Since US-019
+  `npm run test-unit` = `npm run build:main && tape test/unit/*.js`:
+  unit tests are CommonJS and require the Babel output under `build/`,
+  never the ESM sources under `src/`. New files in `test/unit/` are
+  globbed, no registration needed. Details in `test/AGENTS.md`.
+- **`npm run test-integration` is broken and was broken before this
+  branch.** Spectron 19 cannot drive Electron 27 under the installed
+  Node (v25): every run dies with `Error: Application not running` on
+  the first test. Verified by stashing all changes and re-running at
+  HEAD. Do not treat it as a gate; do not try to "fix" it as a side
+  effect of another story. It also leaks a whole Electron process tree
+  when it fails -- always `pkill -f "$PWD/node_modules/"` afterwards.
 - **Babel config lives in the `babel` key of `package.json`**, not a
   `.babelrc`. It is `@babel/plugin-transform-react-jsx` with
   `useBuiltIns: true` (reuse those exact options anywhere JSX has to be
@@ -1932,4 +1942,41 @@ timed `npm run watch` observation.
     `wt-new-torrent` and `wt-uncaught-error`. `webtorrent.js` sends
     them and `src/main/` receives them, so they never cross the
     renderer-UI boundary the shim guards.
+---
+
+## 2026-07-28 - US-019
+- Added a unit test runner. New `test-unit` npm script runs
+  `npm run build:main && tape test/unit/*.js`, and `npm test` now
+  runs it after `standard` and `depcheck`. No new dependency: `tape`
+  was already a devDependency and the Babel `build/` output is the
+  documented bridge from the ESM renderer sources to CommonJS test
+  files.
+- Wrote `test/unit/time.js` first, against
+  `build/renderer/lib/time.js` -- five real assertions on
+  `calculateEta` (both no-op guards, seconds-only, minutes, hours).
+  Written before the script existed; the seconds-only case failed on
+  the first run (the template literal emits two leading spaces, not
+  one) and the expectation was corrected against real behaviour.
+- Files changed: `package.json` (scripts), `test/unit/time.js` (new),
+  `test/AGENTS.md` (new), `progress.log`, `specs/prd.json`.
+- **Learnings for future iterations:**
+  - **Only `src/renderer/lib/**` and `src/main/**` are unit testable
+    through `build/`.** `build:main` ignores `src/renderer/main.js`,
+    `components/`, `controllers/` and `pages/` because Vite owns them,
+    so nothing under those four paths can be required from a unit
+    test. The platform shim lives in `src/renderer/lib/platform/`, so
+    US-020 through US-025 are all in range -- which is presumably why
+    the shim was put there.
+  - **`test-unit` builds first on purpose.** `npx tape test/unit/*.js`
+    on its own silently tests whatever `build/` happens to contain,
+    which can be an arbitrarily old copy of `src/`. A stale `build/`
+    is why the first run of the new test resolved the module at all
+    despite `build/` never having been rebuilt this session.
+  - **The integration suite is a pre-existing failure**, promoted to
+    the Codebase Patterns section above along with the process-cleanup
+    consequence. US-019's "`npm run test-integration` still passes"
+    criterion is unsatisfiable as written; it is unchanged by this
+    story (verified against stashed HEAD) rather than passing.
+  - `test/index.js` requires each integration file by hand, so adding
+    `test/unit/` cannot affect the integration run.
 ---

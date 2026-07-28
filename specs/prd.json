@@ -342,8 +342,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 19,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Unit runner added: `test-unit` = `npm run build:main && tape test/unit/*.js`, wired into `npm test`. Real test in test/unit/time.js. The `npm run test-integration still passes` criterion could not be met as written: that suite fails identically at unstashed HEAD (Spectron 19 cannot drive Electron 27 under Node 25). It is unchanged by this story, not passing."
     },
     {
       "id": "US-020",
