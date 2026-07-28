@@ -209,6 +209,18 @@ it tight.
   cannot handle in the renderer, grouped by cause, and since US-014 the
   record of how each builtin was resolved. Consult it before guessing
   at scope for any Phase 1 or Phase 2 story.
+- **`docs/platform-shim.md`** is the agreed shim contract from US-018:
+  every exported function mapped onto the call sites it replaces, plus
+  the shape changes each migration has to absorb (`stat.isDirectory()`
+  becomes a boolean, `showOpenDialog` returns `[]` not `undefined` on
+  cancel, no `createReadStream`). Read it before starting any US-020
+  to US-034 story; do not re-derive the surface.
+- **Shim conventions:** every export is `async` (FR-10), no channel
+  string ever reaches a caller (one named function per channel), every
+  listener registration resolves to an unsubscribe function and takes
+  an optional `{ once: true }`. `shell.js` -- not `ipc-os.js` -- owns
+  the `showItemInFolder`, `openPath` and `moveItemToTrash` channels,
+  because they are one concern.
 
 ---
 
@@ -1856,4 +1868,68 @@ timed `npm run watch` observation.
   `build/renderer/webtorrent.js`, and `src/main/index.js` ->
   `../renderer/lib/state`. That last one is easy to miss and is why
   `src/renderer/lib/**` is built by both Vite and Babel.
+---
+
+## 2026-07-28 - US-018
+- Created the platform shim's API surface as design-only stubs:
+  `src/renderer/lib/platform/` with `index.js`, `ipc-os.js`,
+  `ipc-engine.js`, `shell.js`, `clipboard.js`, `dialog.js`,
+  `window.js`, `menu.js`, `fs.js`. Every export is `async`, has a
+  JSDoc signature, and throws
+  `'platform/<module>: not implemented yet (US-0xx)'` naming the story
+  that implements it.
+- Wrote `docs/platform-shim.md`: the whole surface mapped onto the
+  call sites it replaces, with file and line references, plus the
+  rules the surface follows and the shape changes each migration has
+  to absorb.
+- No call site was changed. Nothing imports the shim yet.
+- Fixed a `no-mixed-operators` error in `spectron-probe.cjs` that a
+  prior `wip` commit left on the branch. `npm test` was already red on
+  HEAD before this session's changes; the two-paren fix was the
+  minimum needed to reach a green gate.
+- **Tests:** skipped deliberately. This story is stubs plus docs with
+  no behaviour to assert, and there is still no unit test runner --
+  US-019 adds it, and US-020 onward carry the unit coverage. Gate run
+  was `npm test` (standard + depcheck), plus `npm run build` and a
+  background launch check (alive at 14s, `init: 922ms`, process
+  killed, `pgrep` clean).
+- Files changed: `src/renderer/lib/platform/*` (new, 9 files),
+  `src/renderer/lib/platform/AGENTS.md` (new),
+  `docs/platform-shim.md` (new), `spectron-probe.cjs`,
+  `progress.log`, `specs/prd.json`.
+- **Learnings for future iterations:**
+  - **`npm test` was red on `HEAD` before this session.**
+    `spectron-probe.cjs`, a throwaway probe committed by accident in
+    `739ca31 wip`, fails `standard`. Run `npm test` *before* you start
+    changing anything, or you will spend time proving your own diff
+    innocent. The file is still tracked and is a candidate for
+    deletion by whoever owns it.
+  - **Do not use `export * as ns from './x'` in `index.js`.** The
+    barrel uses `import * as x` plus a plain `export { x }` block
+    instead, which parses identically under `standard`'s parser,
+    Babel, and Rolldown. `export * as` is newer syntax and there is no
+    reason to bet the build on all three agreeing about it.
+  - **`standard` sets `no-unused-vars` with `args: 'none'`**, so stub
+    bodies that ignore all their parameters lint clean. No
+    `// eslint-disable` is needed for a directory full of throwing
+    stubs.
+  - **The shim surface is 8 modules and ~70 exports, sized from a
+    real inventory, not guessed.** The inventory command that produced
+    it:
+    `grep -rn "ipcRenderer\.\|shell\.\|clipboard\.\|remote\.\|fs\." --include=*.js src/renderer`
+    filtered to drop `webtorrent.js` and `lib/cast.js`. Re-run it if
+    you need to check a migration story for missed call sites.
+  - **`main.js:422` is a pre-existing bug the shim will surface.**
+    `state.window.wasMaximized = electron.remote.getCurrentWindow().isMaximized`
+    assigns the *function*, not the boolean. US-027 cannot migrate it
+    without changing behaviour; the doc flags it so that change is a
+    decision rather than an accident.
+  - **`screen.getAllDisplays()` is out of scope for good.** Its only
+    consumer was `lib/telemetry.js`, deleted in US-002. US-025's
+    "include or explicitly exclude" criterion is answered by excluding
+    it.
+  - **Two `wt-*` channels stay out of `ipc-engine.js`:**
+    `wt-new-torrent` and `wt-uncaught-error`. `webtorrent.js` sends
+    them and `src/main/` receives them, so they never cross the
+    renderer-UI boundary the shim guards.
 ---

@@ -1,0 +1,42 @@
+# `src/renderer/lib/platform/`
+
+The platform shim: the sole source of Electron and Node access for
+`src/renderer/` (FR-8). `docs/platform-shim.md` is the contract --
+read it before changing anything here, and update it in the same
+commit when the surface changes.
+
+## Rules every module follows
+
+- **Every export is `async`** (FR-10), including wrappers around
+  Electron APIs that are synchronous today. A future host has to cross
+  a process boundary; callers must not need a second refactor.
+- **No channel string reaches a caller.** One named function per
+  channel. The dynamic engine channels take the info hash as an
+  argument.
+- **Listener registration resolves to an unsubscribe function** and
+  takes an optional `{ once: true }`. Nothing outside this directory
+  calls `removeListener`.
+- **`ipc-os.js` and `ipc-engine.js` share no exports** (FR-9).
+  `ipc-engine.js` is `wt-*` and only `wt-*`; `ipc-os.js` is everything
+  else. Adding a `wt-` channel to `ipc-os.js` breaks the seam the
+  engine is swapped at.
+- **`shell.js` owns `showItemInFolder`, `openPath` and
+  `moveItemToTrash`**, even though they are IPC channels, because they
+  are one concern. Do not move them to `ipc-os.js`.
+- **Nothing here returns a Node object.** `fs.stat` resolves to a
+  plain `{ size, isDirectory, isFile }`, not a `Stats` instance; menus
+  are descriptor objects, not `MenuItem` instances (FR-12). Anything
+  crossing the boundary has to be serialisable.
+
+## Gotchas
+
+- `index.js` uses `import * as x` plus `export { x }`, not
+  `export * as x from`. Keep it that way: three toolchains
+  (`standard`, Babel, Rolldown) have to agree on the syntax.
+- This directory is compiled by **both** Babel (`build/`, because
+  `src/main/index.js` requires `../renderer/lib/state`) and Vite
+  (`build-vite/`). Both must keep building.
+- The lint rule from US-034 exempts this directory. It is the only
+  place a direct `electron`, `@electron/remote`, `fs`, `os`, `crypto`
+  or `http` import is allowed, alongside the two deferred casualties
+  `webtorrent.js` and `lib/cast.js`.

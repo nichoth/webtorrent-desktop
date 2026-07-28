@@ -325,8 +325,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck)"
       ],
       "priority": 18,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Design and stubs only, no call sites changed. Surface documented in docs/platform-shim.md. Tests deliberately skipped: no runner yet (US-019) and no behaviour to assert."
     },
     {
       "id": "US-019",

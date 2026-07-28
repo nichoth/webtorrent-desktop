@@ -11,5 +11,5 @@ app.start().then(() => {
   return app.stop()
 }).catch(e => {
   console.log('START FAILED:', e && e.message)
-  console.log((e && e.stack || '').split('\n').slice(0, 12).join('\n'))
+  console.log(((e && e.stack) || '').split('\n').slice(0, 12).join('\n'))
 })
