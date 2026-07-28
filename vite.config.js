@@ -78,6 +78,10 @@ const pathBrowserify = require.resolve('path-browserify')
 //
 // - `fs`: 6 first-party renderer files. Phase 2 replaces these call sites
 //   with the platform shim; until then external keeps them working.
+// - `fs/promises`: the shim itself (`lib/platform/fs.js`, US-023). It was
+//   in the transitive list until then, reached only through
+//   dependencies. As US-028 moves call sites, `fs` drains from this list
+//   and `fs/promises` is what remains.
 // - `http`: only `lib/cast.js`, the deferred casualty the PRD exempts
 //   from the shim.
 // - `events`: only `lib/state.js`, for `EventEmitter`.
@@ -93,6 +97,7 @@ const pathBrowserify = require.resolve('path-browserify')
 // the US-002 telemetry deletion. See docs/vite-baseline.md.
 const firstPartyExternals = [
   'fs',
+  'fs/promises',
   'http',
   'events',
   'electron',
@@ -115,7 +120,7 @@ const firstPartyExternals = [
 // `module.builtinModules`, so that a dependency reaching for a new
 // builtin shows up as a warning instead of being silently absorbed.
 const transitiveExternals = [
-  'assert', 'constants', 'dgram', 'fs/promises', 'https', 'net', 'os',
+  'assert', 'constants', 'dgram', 'https', 'net', 'os',
   'querystring', 'stream', 'timers', 'tls', 'url', 'util',
   'worker_threads'
 ]

@@ -60,6 +60,26 @@ property read at each call site, so the getter is consulted per call
 and the stub can be swapped between tests. See
 `test/unit/platform-ipc-os.js`.
 
+### Stubbing a Node builtin (`fs/promises`) in a unit test
+
+The `require.cache` route does **not** work for builtins -- Node never
+consults the cache for them, so seeding `require.resolve('fs/promises')`
+has no effect. Their exports are plain writable properties on one
+shared module object instead, and Babel emits the same per-call-site
+`_promises.readFile` property read, so assigning over those properties
+before a call and restoring them after does the same job:
+
+```js
+const fsp = require('fs/promises')
+const real = fsp.readFile
+fsp.readFile = async (...args) => { calls.push(args); return stubbed }
+// ... exercise the module, then:
+fsp.readFile = real
+```
+
+Always restore in the same test, or later tests (and tape itself) run
+against the stub. See `test/unit/platform-fs.js`.
+
 Only `src/renderer/lib/**` and `src/main/**` are reachable this way.
 `build:main` deliberately ignores `src/renderer/main.js`,
 `components/`, `controllers/` and `pages/` (Vite owns those), so those

@@ -129,7 +129,15 @@ label, not a checkbox type). US-029 does the rewrite.
 
 ## `fs.js`
 
-Exactly the operations the renderer performs today, no more.
+Exactly the operations the renderer performs today, no more. The list
+was re-enumerated at US-023 by grepping `src/renderer/` for `fs` usage
+excluding `webtorrent.js` (which FR-4 exempts from the shim) and
+excluding `lib/platform/` itself. That grep finds five files --
+`main.js`, `lib/state.js`, `lib/migrations.js`,
+`controllers/torrent-list-controller.js` and
+`controllers/subtitles-controller.js` -- and nine distinct operations,
+which is the table below unchanged from US-018. Nothing was added or
+removed.
 
 | Function | Replaces |
 | --- | --- |
@@ -153,6 +161,13 @@ Shape changes for the migration:
   the existing code concatenates the stream before parsing anyway.
 - `mkdir` is always recursive. That is the only mode the renderer
   uses.
+- `readFile` resolves to a plain `Uint8Array` view, not a `Buffer`, on
+  the same rule that flattens `stat`: no Node object crosses the
+  boundary. Text callers must decode --
+  `JSON.parse(await fs.readFile(p))` does **not** work where
+  `JSON.parse(readFileSync(p))` did, because a `Uint8Array` stringifies
+  to `"1,2,3"`. `lib/state.js` is the caller this bites; US-028 has to
+  add a `TextDecoder`.
 - US-028 has to reckon with `lib/state.js` and `lib/migrations.js`
   being synchronous today and being loaded by `src/main/` as well as
   the renderer. That is the largest single piece of the fs migration.

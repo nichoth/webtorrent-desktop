@@ -6,19 +6,32 @@
  * returns a promise so a host that has to cross a process boundary
  * can implement it.
  *
- * Two shape changes the migration stories have to absorb:
+ * Three shape changes the migration stories have to absorb:
  *
  * 1. `stat` resolves to a plain object, not a Node `Stats` instance,
  *    so `stat.isDirectory()` becomes `stat.isDirectory`.
  * 2. There is no `createReadStream`. `subtitles-controller.js` reads
  *    the whole subtitle file with `readFile` instead; the file is
  *    small and the existing code concatenates the stream anyway.
+ * 3. `readFile` resolves to a plain `Uint8Array`, not a `Buffer`, so
+ *    text callers decode it themselves (`new TextDecoder().decode`).
+ *    `JSON.parse(await readFile(p))` does NOT work the way
+ *    `JSON.parse(readFileSync(p))` did.
  *
- * Design-only stubs (US-018). Implemented in US-023, call sites
- * migrated in US-028. See docs/platform-shim.md.
+ * Backed by `fs/promises` here; US-028 migrates the call sites. See
+ * docs/platform-shim.md.
  */
 
-const NOT_IMPLEMENTED = 'platform/fs: not implemented yet (US-023)'
+import {
+  copyFile as nodeCopyFile,
+  mkdir as nodeMkdir,
+  readFile as nodeReadFile,
+  readdir as nodeReaddir,
+  rename as nodeRename,
+  stat as nodeStat,
+  unlink as nodeUnlink,
+  writeFile as nodeWriteFile
+} from 'fs/promises'
 
 /**
  * @typedef {object} FileStats
@@ -34,7 +47,10 @@ const NOT_IMPLEMENTED = 'platform/fs: not implemented yet (US-023)'
  * @returns {Promise<Uint8Array>}
  */
 export async function readFile (path) {
-  throw new Error(NOT_IMPLEMENTED)
+  const buffer = await nodeReadFile(path)
+  // A view, not a copy: `Buffer` is a `Uint8Array` subclass, and
+  // nothing that crosses this boundary should be a Node object.
+  return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
 }
 
 /**
@@ -45,7 +61,7 @@ export async function readFile (path) {
  * @returns {Promise<void>}
  */
 export async function writeFile (path, data) {
-  throw new Error(NOT_IMPLEMENTED)
+  await nodeWriteFile(path, data)
 }
 
 /**
@@ -56,7 +72,7 @@ export async function writeFile (path, data) {
  * @returns {Promise<void>}
  */
 export async function copyFile (src, dest) {
-  throw new Error(NOT_IMPLEMENTED)
+  await nodeCopyFile(src, dest)
 }
 
 /**
@@ -67,7 +83,7 @@ export async function copyFile (src, dest) {
  * @returns {Promise<void>}
  */
 export async function mkdir (path) {
-  throw new Error(NOT_IMPLEMENTED)
+  await nodeMkdir(path, { recursive: true })
 }
 
 /**
@@ -78,7 +94,7 @@ export async function mkdir (path) {
  * @returns {Promise<void>}
  */
 export async function rename (oldPath, newPath) {
-  throw new Error(NOT_IMPLEMENTED)
+  await nodeRename(oldPath, newPath)
 }
 
 /**
@@ -88,7 +104,7 @@ export async function rename (oldPath, newPath) {
  * @returns {Promise<void>}
  */
 export async function unlink (path) {
-  throw new Error(NOT_IMPLEMENTED)
+  await nodeUnlink(path)
 }
 
 /**
@@ -98,7 +114,7 @@ export async function unlink (path) {
  * @returns {Promise<string[]>}
  */
 export async function readdir (path) {
-  throw new Error(NOT_IMPLEMENTED)
+  return await nodeReaddir(path)
 }
 
 /**
@@ -108,16 +124,27 @@ export async function readdir (path) {
  * @returns {Promise<FileStats>}
  */
 export async function stat (path) {
-  throw new Error(NOT_IMPLEMENTED)
+  const stats = await nodeStat(path)
+  return {
+    size: stats.size,
+    isDirectory: stats.isDirectory(),
+    isFile: stats.isFile()
+  }
 }
 
 /**
  * Whether a path exists. Covers the `try { statSync() } catch {}`
- * probes in `lib/migrations.js`.
+ * probes in `lib/migrations.js`, so any stat failure -- not just
+ * ENOENT -- reads as "not there", matching what those probes do.
  *
  * @param {string} path
  * @returns {Promise<boolean>}
  */
 export async function exists (path) {
-  throw new Error(NOT_IMPLEMENTED)
+  try {
+    await nodeStat(path)
+    return true
+  } catch (err) {
+    return false
+  }
 }

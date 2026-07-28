@@ -2120,3 +2120,50 @@ timed `npm run watch` observation.
   - No app launch was needed or performed: nothing imports these
     modules yet (call sites move in US-026). Nothing was left running.
 ---
+
+## 2026-07-28 - US-023
+- Implemented `src/renderer/lib/platform/fs.js` against `fs/promises`.
+  The nine stub exports from US-018 (`readFile`, `writeFile`,
+  `copyFile`, `mkdir`, `rename`, `unlink`, `readdir`, `stat`,
+  `exists`) are now real; the surface itself did not change. It was
+  re-enumerated first by grepping `src/renderer/` for `fs` usage,
+  excluding `webtorrent.js` and `lib/platform/` -- five files
+  (`main.js`, `lib/state.js`, `lib/migrations.js`,
+  `controllers/torrent-list-controller.js`,
+  `controllers/subtitles-controller.js`), nine operations, which is
+  exactly the US-018 table. Nothing added, nothing removed.
+- Tests first: `test/unit/platform-fs.js` (34 assertions) was written
+  against the stubs, watched fail with `not implemented yet (US-023)`,
+  then made to pass. Covers read and write paths, the `stat`
+  flattening, both `exists` branches, error propagation and that every
+  export returns a promise.
+- No call site was migrated (US-028 owns that). No app launch was
+  needed: nothing imports the barrel yet, so `fs.js` is not in the
+  Vite graph.
+- Files changed: `src/renderer/lib/platform/fs.js`,
+  `test/unit/platform-fs.js`, `vite.config.js`,
+  `docs/platform-shim.md`, `test/AGENTS.md`,
+  `src/renderer/lib/platform/AGENTS.md`, `specs/prd.json`.
+- **Learnings for future iterations:**
+  - `require.cache` seeding does NOT stub a Node builtin. Node never
+    consults the cache for `fs`/`fs/promises`, so the `electron`
+    trick from US-020/022 silently does nothing. Their exports are
+    writable properties on one shared module object, and Babel emits
+    the same per-call-site property read, so assign over them and
+    restore in the same test. Written up in `test/AGENTS.md`.
+  - `fs/promises` was already externalized in `vite.config.js`, but in
+    the `transitiveExternals` list. Moved it to `firstPartyExternals`,
+    since the shim now imports it directly and that list is
+    documented as the accurate statement of what Phase 2 covers. As
+    US-028 moves call sites, `fs` drains out of that list and
+    `fs/promises` is what remains.
+  - `readFile` resolves to a plain `Uint8Array` view, not a `Buffer`
+    (same no-Node-objects rule that flattens `stat`). This is a trap
+    for US-028: `lib/state.js` does `JSON.parse(readFileSync(p))`
+    today, and a `Uint8Array` stringifies to `"1,2,3"`, so that call
+    site needs a `TextDecoder`. Recorded in `docs/platform-shim.md`.
+  - An un-awaited promise in a tape test that rejects kills the whole
+    process with an unhandled rejection and the run still prints
+    `ok` lines above it. The "every export is async" test has to stub
+    enough for every export to actually resolve.
+---

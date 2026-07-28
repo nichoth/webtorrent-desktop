@@ -29,7 +29,13 @@ commit when the surface changes.
 - **Nothing here returns a Node object.** `fs.stat` resolves to a
   plain `{ size, isDirectory, isFile }`, not a `Stats` instance; menus
   are descriptor objects, not `MenuItem` instances (FR-12). Anything
-  crossing the boundary has to be serialisable.
+  crossing the boundary has to be serialisable. `fs.readFile` resolves
+  to a plain `Uint8Array` view for the same reason -- never a `Buffer`,
+  so text callers have to decode.
+- **`fs.js` is backed by `fs/promises`, not `fs`.** Callback and
+  `*Sync` variants stay out of this directory; every operation is
+  already a promise there. `fs/promises` is externalized as a
+  first-party builtin in `vite.config.js` for this module's sake.
 
 ## Implementation pattern (set by `ipc-os.js`, US-020)
 
