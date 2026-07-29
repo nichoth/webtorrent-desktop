@@ -96,7 +96,6 @@
     "minimist": "1.2.8",
     "nodemon": "2.0.22",
     "open": "8.4.2",
-    "path-browserify": "1.0.1",
     "plist": "3.1.1",
     "pngjs": "7.0.0",
     "run-series": "1.1.9",

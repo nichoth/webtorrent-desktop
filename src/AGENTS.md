@@ -125,8 +125,11 @@ for that warning; the expected count is 0.
 There are two strategies, and the choice is deliberate:
 
 - **Bundle** it, if a browser-safe implementation is equivalent. `path`
-  is aliased to `path-browserify` this way, which is why its 13 renderer
-  call sites need no shim and no change.
+  is aliased to `src/renderer/lib/path.js` this way, which is why its 13
+  renderer call sites need no shim and no change. That module is
+  first-party (ADR-011) and its unit test diffs it against Node's
+  `path.posix`, so extending it means adding cases to
+  `test/unit/path.js`, not trusting a package.
 - **Externalize** it, for anything that needs the real Node module.
   Works because the Vite output format is `'cjs'` and the renderer runs
   with `nodeIntegration: true`, so an emitted `require()` resolves

@@ -56,11 +56,12 @@ new builtin surfaces as a warning instead of being silently absorbed.
 `electron` and `@electron/remote` **must** be external, for the
 resolution reason above.
 
-`path` is the exception: it is bundled from `path-browserify` rather
-than externalized, because all thirteen call sites do string
-manipulation only. Matched as `/^path$/` so a package named
-`path-something` is not captured, with `node:path` aliased separately
-because dependencies spell it either way.
+`path` is the exception: it is bundled rather than externalized,
+because all thirteen call sites do string manipulation only. Matched as
+`/^path$/` so a package named `path-something` is not captured, with
+`node:path` aliased separately because dependencies spell it either
+way. The bundled implementation was `path-browserify`; ADR-011 replaced
+it with `src/renderer/lib/path.js` without changing this decision.
 
 `crypto` and `os` are deliberately absent from the first-party list.
 `crypto` is used only by `src/renderer/webtorrent.js`, which is exempt

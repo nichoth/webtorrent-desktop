@@ -368,7 +368,8 @@ resolved; the tables above are left as measured on 2026-07-27.
 Two mechanisms, both in `vite.config.js`:
 
 1. **Bundled** -- `path`, aliased to `path-browserify` 1.0.1 (a new
-   devDependency).
+   devDependency). Superseded by ADR-011: the alias now points at
+   `src/renderer/lib/path.js` and the package is gone.
 2. **Externalized** -- everything else, plus `electron` and
    `@electron/remote`, listed in `rollupOptions.external` in both the
    bare and `node:`-prefixed spellings.
@@ -400,10 +401,19 @@ more importers, but neither goes through Vite.)
 
 Bundling per FR-7 means none of those 13 call sites changes and none of
 them needs a Phase 2 shim -- every use is pure string manipulation
-(`join`, `basename`, `extname`, `parse`), which `path-browserify`
-implements identically. Confirmed present in the output by grepping the
-minified bundle for `Path must be a string`, a string literal unique to
-`path-browserify`.
+(`join`, `basename`, `extname`, `parse`), which the bundled
+implementation performs identically. Confirmed present in the output by
+grepping the minified bundle for `Path must be a string`, the type-check
+message the implementation raises.
+
+The implementation was `path-browserify` 1.0.1 as measured here, and is
+`src/renderer/lib/path.js` since ADR-011. The alias is not limited to
+first-party code: eleven bundled dependencies import `path` too
+(`application-config`, `application-config-path`, `write-file-atomic`,
+`write-json-file`, `load-json-file`, `make-dir`, `rimraf`,
+`path-scurry`, `mime`, `parse-torrent`, `create-torrent`), and they use
+a wider surface than the UI does -- `resolve`, `normalize`, `format`,
+and in `path-scurry`'s case `import { posix, win32 } from 'path'`.
 
 ### `fs` -- external, Phase 2 shim work
 

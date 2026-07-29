@@ -1,8 +1,5 @@
-import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { defineConfig, transformWithOxc } from 'vite'
-
-const require = createRequire(import.meta.url)
 
 // Replaces the old `Module.prototype.require` hook in
 // `src/renderer/main.js`. Matched exactly (not as a prefix) so that
@@ -62,12 +59,20 @@ const jsxInJs = {
 // `path` is the widest Node dependency in the renderer -- 13 first-party
 // files import it -- and every one of those uses is pure string
 // manipulation (`join`, `basename`, `extname`, `parse`). It is therefore
-// bundled from `path-browserify` rather than externalized, so that none
-// of those 13 call sites has to change and none of them needs a Phase 2
-// shim. Matched exactly (`/^path$/`) so a package literally named
+// bundled rather than externalized, so that none of those 13 call sites
+// has to change and none of them needs a Phase 2 shim.
+//
+// The implementation is first-party (`src/renderer/lib/path.js`, ADR-011)
+// rather than the `path-browserify` package: the alias also catches the
+// `path` imports of bundled dependencies, so this is renderer code the
+// app ships and it should be code the repo owns and tests.
+//
+// Matched exactly (`/^path$/`) so a package literally named
 // `path-something` is not captured; `node:path` is aliased separately
 // because dependencies spell it either way.
-const pathBrowserify = require.resolve('path-browserify')
+const rendererPath = fileURLToPath(
+  new URL('./src/renderer/lib/path.js', import.meta.url)
+)
 
 // Externals. The bundle is emitted as CommonJS and loaded by an Electron
 // renderer with `nodeIntegration: true`, so a `require()` left in the
@@ -153,8 +158,8 @@ export default defineConfig({
         find: /^inline-style-prefixer$/,
         replacement: inlineStylePrefixerStub
       },
-      { find: /^path$/, replacement: pathBrowserify },
-      { find: /^node:path$/, replacement: pathBrowserify }
+      { find: /^path$/, replacement: rendererPath },
+      { find: /^node:path$/, replacement: rendererPath }
     ]
   },
   build: {
