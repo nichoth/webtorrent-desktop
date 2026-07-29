@@ -1,0 +1,67 @@
+/**
+ * Platform shim: native file dialogs.
+ *
+ * Both of today's call sites use the *Sync variants of
+ * `@electron/remote`'s dialog API. These wrappers are async anyway
+ * (FR-10) so a message-passing host does not force a second refactor.
+ *
+ * Callers never pass a parent window: the shim parents every dialog
+ * to the current window internally, which is what removes
+ * `remote.getCurrentWindow()` from `components/path-selector.js` and
+ * `controllers/torrent-list-controller.js`.
+ *
+ * Implemented in US-024; call sites are migrated in US-027. See
+ * docs/platform-shim.md.
+ */
+
+import { dialog, getCurrentWindow } from '@electron/remote'
+
+/**
+ * @typedef {object} FileFilter
+ * @property {string} name       Human-readable filter name.
+ * @property {string[]} extensions Extensions without a leading dot.
+ */
+
+/**
+ * @typedef {object} OpenDialogOptions
+ * @property {string} [title]
+ * @property {string} [defaultPath]
+ * @property {string} [buttonLabel]
+ * @property {FileFilter[]} [filters]
+ * @property {Array<'openFile'|'openDirectory'|'multiSelections'>} [properties]
+ */
+
+/**
+ * @typedef {object} SaveDialogOptions
+ * @property {string} [title]
+ * @property {string} [defaultPath]
+ * @property {string} [buttonLabel]
+ * @property {FileFilter[]} [filters]
+ */
+
+/**
+ * Show a native open dialog.
+ *
+ * @param {OpenDialogOptions} options
+ * @returns {Promise<string[]>} Selected paths, or an empty array if
+ *   the user cancelled. Note this differs from
+ *   `showOpenDialogSync`, which returns `undefined` on cancel;
+ *   callers currently guard with `Array.isArray(...)` and become a
+ *   `.length` check.
+ */
+export async function showOpenDialog (options) {
+  const filenames = dialog.showOpenDialogSync(getCurrentWindow(), options)
+  return Array.isArray(filenames) ? filenames : []
+}
+
+/**
+ * Show a native save dialog.
+ *
+ * @param {SaveDialogOptions} options
+ * @returns {Promise<string|null>} The chosen path, or `null` if the
+ *   user cancelled.
+ */
+export async function showSaveDialog (options) {
+  const savePath = dialog.showSaveDialogSync(getCurrentWindow(), options)
+  return savePath === undefined ? null : savePath
+}

@@ -1,19 +1,20 @@
-const { ipcRenderer } = require('electron')
-const path = require('path')
+import path from 'path'
 
-const Cast = require('../lib/cast')
-const { dispatch } = require('../lib/dispatcher')
-const telemetry = require('../lib/telemetry')
-const { UnplayableFileError, UnplayableTorrentError } = require('../lib/errors')
-const sound = require('../lib/sound')
-const TorrentPlayer = require('../lib/torrent-player')
-const TorrentSummary = require('../lib/torrent-summary')
-const Playlist = require('../lib/playlist')
-const State = require('../lib/state')
+import * as Cast from '../lib/cast'
+import { dispatch, reportErrors } from '../lib/dispatcher'
+import { UnplayableFileError, UnplayableTorrentError } from '../lib/errors'
+import * as sound from '../lib/sound'
+import * as TorrentPlayer from '../lib/torrent-player'
+import * as TorrentSummary from '../lib/torrent-summary'
+import * as ipcEngine from '../lib/platform/ipc-engine'
+import * as ipcOs from '../lib/platform/ipc-os'
+import * as shell from '../lib/platform/shell'
+import * as Playlist from '../lib/playlist'
+import State from '../lib/state'
 
 // Controls playback of torrents and files within torrents
 // both local (<video>,<audio>,external player) and remote (cast)
-module.exports = class PlaybackController {
+export default class PlaybackController {
   constructor (state, config, update) {
     this.state = state
     this.config = config
@@ -64,7 +65,7 @@ module.exports = class PlaybackController {
     const filePath = path.join(
       torrentSummary.path,
       torrentSummary.files[index].path)
-    ipcRenderer.send('openPath', filePath)
+    reportErrors(shell.openPath(filePath))
   }
 
   // Toggle (play or pause) the currently playing media
@@ -127,7 +128,7 @@ module.exports = class PlaybackController {
     if (isCasting(state)) {
       Cast.play()
     }
-    ipcRenderer.send('onPlayerPlay')
+    reportErrors(ipcOs.notifyPlayerPlay())
   }
 
   // Pause the currently playing media
@@ -138,7 +139,7 @@ module.exports = class PlaybackController {
     if (isCasting(state)) {
       Cast.pause()
     }
-    ipcRenderer.send('onPlayerPause')
+    reportErrors(ipcOs.notifyPlayerPause())
   }
 
   // Skip specified number of seconds (backwards if negative)
@@ -242,7 +243,7 @@ module.exports = class PlaybackController {
     sound.play('PLAY')
 
     this.startServer(torrentSummary)
-    ipcRenderer.send('onPlayerOpen')
+    reportErrors(ipcOs.notifyPlayerOpen())
     this.updatePlayer(infoHash, index, true, cb)
   }
 
@@ -252,15 +253,16 @@ module.exports = class PlaybackController {
 
     if (torrentSummary.status === 'paused') {
       dispatch('startTorrentingSummary', torrentSummary.torrentKey)
-      ipcRenderer.once('wt-ready-' + torrentSummary.infoHash,
-        () => onTorrentReady())
+      reportErrors(ipcEngine.onTorrentReadyFor(
+        torrentSummary.infoHash, () => onTorrentReady(), { once: true }))
     } else {
       onTorrentReady()
     }
 
     function onTorrentReady () {
-      ipcRenderer.send('wt-start-server', torrentSummary.infoHash)
-      ipcRenderer.once('wt-server-running', () => { state.playing.isReady = true })
+      reportErrors(ipcEngine.startServer(torrentSummary.infoHash))
+      reportErrors(ipcEngine.onServerRunning(
+        () => { state.playing.isReady = true }, { once: true }))
     }
   }
 
@@ -301,14 +303,16 @@ module.exports = class PlaybackController {
 
     // if it's audio, parse out the metadata (artist, title, etc)
     if (torrentSummary.status === 'paused') {
-      ipcRenderer.once('wt-ready-' + torrentSummary.infoHash, getAudioMetadata)
+      reportErrors(ipcEngine.onTorrentReadyFor(
+        torrentSummary.infoHash, getAudioMetadata, { once: true }))
     } else {
       getAudioMetadata()
     }
 
     function getAudioMetadata () {
       if (state.playing.type === 'audio') {
-        ipcRenderer.send('wt-get-audio-metadata', torrentSummary.infoHash, index)
+        reportErrors(
+          ipcEngine.getAudioMetadata(torrentSummary.infoHash, index))
       }
     }
 
@@ -333,7 +337,8 @@ module.exports = class PlaybackController {
     // otherwise, play the video
     this.update()
 
-    ipcRenderer.send('onPlayerUpdate', Playlist.hasNext(state), Playlist.hasPrevious(state))
+    reportErrors(ipcOs.notifyPlayerUpdate(
+      Playlist.hasNext(state), Playlist.hasPrevious(state)))
     cb()
   }
 
@@ -346,13 +351,11 @@ module.exports = class PlaybackController {
       Cast.stop()
     }
     if (state.playing.location === 'external') {
-      ipcRenderer.send('quitExternalPlayer')
+      reportErrors(ipcOs.quitExternalPlayer())
     }
 
     // Save volume (this session only, not in state.saved)
     state.previousVolume = state.playing.volume
-
-    if (!state.playing.isReady) telemetry.logPlayAttempt('abandoned') // user gave up waiting
 
     // Reset the window contents back to the home screen
     state.playing = State.getDefaultPlayState()
@@ -365,9 +368,9 @@ module.exports = class PlaybackController {
     restoreBounds(state)
 
     // Tell the WebTorrent process to kill the torrent-to-HTTP server
-    ipcRenderer.send('wt-stop-server')
+    reportErrors(ipcEngine.stopServer())
 
-    ipcRenderer.send('onPlayerClose')
+    reportErrors(ipcOs.notifyPlayerClose())
 
     // Playback Priority: resume previously paused downloads.
     if (this.state.saved.prefs.highestPlaybackPriority) {
@@ -388,8 +391,8 @@ function isCasting (state) {
 }
 
 function restoreBounds (state) {
-  ipcRenderer.send('setAspectRatio', 0)
+  reportErrors(ipcOs.setAspectRatio(0))
   if (state.window.bounds) {
-    ipcRenderer.send('setBounds', state.window.bounds, false)
+    reportErrors(ipcOs.setBounds(state.window.bounds, false))
   }
 }

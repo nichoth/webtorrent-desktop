@@ -1,57 +1,58 @@
-/**
- * Perf optimization: Hook into require() to modify how certain modules load:
- *
- * - `inline-style-prefixer` (used by `material-ui`) takes ~40ms. It is not
- *   actually used because auto-prefixing is disabled with
- *   `darkBaseTheme.userAgent = false`. Return a fake object.
- */
-const Module = require('module')
-const _require = Module.prototype.require
-Module.prototype.require = function (id) {
-  if (id === 'inline-style-prefixer') return {}
-  return _require.apply(this, arguments)
-}
+import createGetter from 'fn-getter'
+import debounce from 'debounce'
+import dragDrop from 'drag-drop'
+import React from 'react'
+import ReactDOM from 'react-dom'
+
+import config from '../config'
+import * as Cast from './lib/cast'
+import State from './lib/state'
+import * as sound from './lib/sound'
+import * as TorrentPlayer from './lib/torrent-player'
+import { setDispatch, reportErrors } from './lib/dispatcher'
+import * as clipboard from './lib/platform/clipboard'
+import * as platformFs from './lib/platform/fs'
+import * as ipcEngine from './lib/platform/ipc-engine'
+import * as ipcOs from './lib/platform/ipc-os'
+import * as platformWindow from './lib/platform/window'
+
+// Perf optimization: Needed immediately, so do not lazy load it below
+import TorrentListController from './controllers/torrent-list-controller'
+
+// These used to be lazy require() calls inside the createGetter thunks below.
+// ESM has no synchronous equivalent -- import() is async and does not fit the
+// synchronous controllers map -- so they are static imports now. The thunks
+// still defer *construction*; only module loading moved to startup.
+import AudioTracksController from './controllers/audio-tracks-controller'
+import FolderWatcherController from './controllers/folder-watcher-controller'
+import MediaController from './controllers/media-controller'
+import PlaybackController from './controllers/playback-controller'
+import PrefsController from './controllers/prefs-controller'
+import SubtitlesController from './controllers/subtitles-controller'
+import TorrentController from './controllers/torrent-controller'
+import UpdateController from './controllers/update-controller'
+
+import App from './pages/app'
 
 console.time('init')
 
-// Perf optimization: Start asynchronously read on config file before all the
-// blocking require() calls below.
-
-const State = require('./lib/state')
+// This used to sit above the module's other require() calls, so that the
+// asynchronous config file read overlapped with them. ESM hoists every import
+// to the top of the module, so that overlap is no longer expressible here.
 State.load(onState)
-
-const createGetter = require('fn-getter')
-const debounce = require('debounce')
-const dragDrop = require('drag-drop')
-const electron = require('electron')
-const fs = require('fs')
-const React = require('react')
-const ReactDOM = require('react-dom')
-
-const config = require('../config')
-const telemetry = require('./lib/telemetry')
-const sound = require('./lib/sound')
-const TorrentPlayer = require('./lib/torrent-player')
-
-// Perf optimization: Needed immediately, so do not lazy load it below
-const TorrentListController = require('./controllers/torrent-list-controller')
-
-const App = require('./pages/app')
-
-// Electron apps have two processes: a main process (node) runs first and starts
-// a renderer process (essentially a Chrome window). We're in the renderer process,
-// and this IPC channel receives from and sends messages to the main process
-const ipcRenderer = electron.ipcRenderer
 
 // Yo-yo pattern: state object lives here and percolates down thru all the views.
 // Events come back up from the views via dispatch(...)
-require('./lib/dispatcher').setDispatch(dispatch)
+setDispatch(dispatch)
 
 // From dispatch(...), events are sent to one of the controllers
 let controllers = null
 
-// This dependency is the slowest-loading, so we lazy load it
-let Cast = null
+// Cast is the slowest-loading dependency, so it used to be require()d inside
+// lazyLoadCast() below. ESM has no synchronous conditional import, so the
+// module is loaded at startup now; only Cast.init() -- the local network scan
+// -- is still deferred to delayedInit().
+let castInitialized = false
 
 // All state lives in state.js. `state.saved` is read from and written to a file.
 // All other state is ephemeral. First we load state.saved then initialize the app.
@@ -70,49 +71,20 @@ function onState (err, _state) {
   state = window.state = _state
   window.dispatch = dispatch
 
-  telemetry.init(state)
   sound.init(state)
 
-  // Log uncaught JS errors
-  window.addEventListener(
-    'error', (e) => telemetry.logUncaughtError('window', e), true /* capture */
-  )
-
-  // Create controllers
+  // Create controllers. createGetter still defers construction until the first
+  // dispatch that needs the controller.
   controllers = {
-    media: createGetter(() => {
-      const MediaController = require('./controllers/media-controller')
-      return new MediaController(state)
-    }),
-    playback: createGetter(() => {
-      const PlaybackController = require('./controllers/playback-controller')
-      return new PlaybackController(state, config, update)
-    }),
-    prefs: createGetter(() => {
-      const PrefsController = require('./controllers/prefs-controller')
-      return new PrefsController(state, config)
-    }),
-    subtitles: createGetter(() => {
-      const SubtitlesController = require('./controllers/subtitles-controller')
-      return new SubtitlesController(state)
-    }),
-    audioTracks: createGetter(() => {
-      const AudioTracksController = require('./controllers/audio-tracks-controller')
-      return new AudioTracksController(state)
-    }),
-    torrent: createGetter(() => {
-      const TorrentController = require('./controllers/torrent-controller')
-      return new TorrentController(state)
-    }),
+    media: createGetter(() => new MediaController(state)),
+    playback: createGetter(() => new PlaybackController(state, config, update)),
+    prefs: createGetter(() => new PrefsController(state, config)),
+    subtitles: createGetter(() => new SubtitlesController(state)),
+    audioTracks: createGetter(() => new AudioTracksController(state)),
+    torrent: createGetter(() => new TorrentController(state)),
     torrentList: createGetter(() => new TorrentListController(state)),
-    update: createGetter(() => {
-      const UpdateController = require('./controllers/update-controller')
-      return new UpdateController(state)
-    }),
-    folderWatcher: createGetter(() => {
-      const FolderWatcherController = require('./controllers/folder-watcher-controller')
-      return new FolderWatcherController()
-    })
+    update: createGetter(() => new UpdateController(state)),
+    folderWatcher: createGetter(() => new FolderWatcherController())
   }
 
   // Add first page to location history
@@ -142,7 +114,7 @@ function onState (err, _state) {
   setInterval(update, 1000)
 
   // Listen for messages from the main process
-  setupIpc()
+  reportErrors(setupIpc())
 
   // Drag and drop files/text to start torrenting or seeding
   dragDrop('body', {
@@ -172,9 +144,13 @@ function onState (err, _state) {
   window.addEventListener('focus', onFocus)
   window.addEventListener('blur', onBlur)
 
-  if (electron.remote.getCurrentWindow().isVisible()) {
-    sound.play('STARTUP')
-  }
+  // Async now, so the startup sound trails the rest of onState by a
+  // tick. Nothing below depends on it. (This line used to throw --
+  // `electron.remote` was removed in Electron 14 -- which silently
+  // aborted the rest of onState, including delayedInit.)
+  platformWindow.isVisible()
+    .then(visible => { if (visible) sound.play('STARTUP') })
+    .catch(err => dispatch('error', err))
 
   // To keep app startup fast, some code is delayed.
   window.setTimeout(delayedInit, config.DELAYED_INIT)
@@ -185,12 +161,6 @@ function onState (err, _state) {
 
 // Runs a few seconds after the app loads, to avoid slowing down startup time
 function delayedInit () {
-  telemetry.send(state)
-
-  // Send telemetry data every 12 hours, for users who keep the app running
-  // for extended periods of time
-  setInterval(() => telemetry.send(state), 12 * 3600 * 1000)
-
   // Warn if the download dir is gone, eg b/c an external drive is unplugged
   checkDownloadPath()
 
@@ -203,8 +173,8 @@ function delayedInit () {
 
 // Lazily loads Chromecast and Airplay support
 function lazyLoadCast () {
-  if (!Cast) {
-    Cast = require('./lib/cast')
+  if (!castInitialized) {
+    castInitialized = true
     Cast.init(state, update) // Search the local network for Chromecast and Airplays
   }
   return Cast
@@ -222,26 +192,30 @@ function update () {
 }
 
 // Some state changes can't be reflected in the DOM, instead we have to
-// tell the main process to update the window or OS integrations
+// tell the platform to update the window or OS integrations. This runs
+// on a 1s timer as well as after every dispatch, so the `state.prev`
+// guards matter: they are what keeps it from re-sending unchanged
+// values, and they are set before the (async) shim call, not after it.
 function updateElectron () {
   if (state.window.title !== state.prev.title) {
     state.prev.title = state.window.title
-    ipcRenderer.send('setTitle', state.window.title)
+    reportErrors(ipcOs.setTitle(state.window.title))
   }
   if (state.dock.progress.toFixed(2) !== state.prev.progress.toFixed(2)) {
     state.prev.progress = state.dock.progress
-    ipcRenderer.send('setProgress', state.dock.progress)
+    reportErrors(ipcOs.setProgress(state.dock.progress))
   }
   if (state.dock.badge !== state.prev.badge) {
     state.prev.badge = state.dock.badge
-    ipcRenderer.send('setBadge', state.dock.badge || 0)
+    reportErrors(ipcOs.setBadge(state.dock.badge || 0))
   }
 }
 
 const dispatchHandlers = {
   // Torrent list: creating, deleting, selecting torrents
-  openTorrentFile: () => ipcRenderer.send('openTorrentFile'),
-  openFiles: () => ipcRenderer.send('openFiles'), /* shows the open file dialog */
+  openTorrentFile: () => reportErrors(ipcOs.openTorrentFileDialog()),
+  /* shows the open file dialog */
+  openFiles: () => reportErrors(ipcOs.openFilesDialog()),
   openTorrentAddress: () => { state.modal = { id: 'open-torrent-address-modal' } },
 
   addTorrent: (torrentId) => controllers.torrentList().addTorrent(torrentId),
@@ -335,14 +309,15 @@ const dispatchHandlers = {
 
   // Controlling the window
   setDimensions,
-  toggleFullScreen: (setTo) => ipcRenderer.send('toggleFullScreen', setTo),
+  toggleFullScreen: (setTo) => reportErrors(ipcOs.toggleFullScreen(setTo)),
   setTitle: (title) => { state.window.title = title },
   resetTitle: () => { state.window.title = config.APP_WINDOW_TITLE },
 
   // Everything else
   onOpen,
   error: onError,
-  uncaughtError: (proc, err) => telemetry.logUncaughtError(proc, err),
+  // The main process dispatches this; surface it in the devtools console
+  uncaughtError: (proc, err) => console.error(`Uncaught error in ${proc}`, err),
   stateSave: () => State.save(state),
   stateSaveImmediate: () => State.saveImmediate(state),
   update: () => {} // No-op, just trigger an update
@@ -366,36 +341,46 @@ function dispatch (action, ...args) {
   }
 }
 
-// Listen to events from the main and webtorrent processes
-function setupIpc () {
-  ipcRenderer.on('log', (e, ...args) => console.log(...args))
-  ipcRenderer.on('error', (e, ...args) => console.error(...args))
-
-  ipcRenderer.on('dispatch', (e, ...args) => dispatch(...args))
-
-  ipcRenderer.on('fullscreenChanged', onFullscreenChanged)
-  ipcRenderer.on('windowBoundsChanged', onWindowBoundsChanged)
-
+// Listen to events from the main and webtorrent processes.
+//
+// Async, because every shim registration resolves to an unsubscribe
+// function (FR-10). The Electron implementation registers
+// synchronously before it resolves, but a non-Electron host is free
+// not to, so `ipcReady` -- which is what tells the main process the
+// renderer is listening -- waits for all of them. Nothing here is ever
+// unsubscribed: these listeners live as long as the window does, so
+// the returned unsubscribes are deliberately dropped.
+async function setupIpc () {
   const tc = controllers.torrent()
-  ipcRenderer.on('wt-parsed', (e, ...args) => tc.torrentParsed(...args))
-  ipcRenderer.on('wt-metadata', (e, ...args) => tc.torrentMetadata(...args))
-  ipcRenderer.on('wt-done', (e, ...args) => tc.torrentDone(...args))
-  ipcRenderer.on('wt-done', () => controllers.torrentList().resumePausedTorrents())
-  ipcRenderer.on('wt-warning', (e, ...args) => tc.torrentWarning(...args))
-  ipcRenderer.on('wt-error', (e, ...args) => tc.torrentError(...args))
 
-  ipcRenderer.on('wt-progress', (e, ...args) => tc.torrentProgress(...args))
-  ipcRenderer.on('wt-file-modtimes', (e, ...args) => tc.torrentFileModtimes(...args))
-  ipcRenderer.on('wt-file-saved', (e, ...args) => tc.torrentFileSaved(...args))
-  ipcRenderer.on('wt-poster', (e, ...args) => tc.torrentPosterSaved(...args))
-  ipcRenderer.on('wt-audio-metadata', (e, ...args) => tc.torrentAudioMetadata(...args))
-  ipcRenderer.on('wt-server-running', (e, ...args) => tc.torrentServerRunning(...args))
+  await Promise.all([
+    ipcOs.onLog((...args) => console.log(...args)),
+    ipcOs.onError((...args) => console.error(...args)),
 
-  ipcRenderer.on('wt-uncaught-error', (e, err) => telemetry.logUncaughtError('webtorrent', err))
+    ipcOs.onDispatch((...args) => dispatch(...args)),
 
-  ipcRenderer.send('ipcReady')
+    ipcOs.onFullscreenChanged(onFullscreenChanged),
+    ipcOs.onWindowBoundsChanged(onWindowBoundsChanged),
 
-  State.on('stateSaved', () => ipcRenderer.send('stateSaved'))
+    ipcEngine.onTorrentParsed((...args) => tc.torrentParsed(...args)),
+    ipcEngine.onTorrentMetadata((...args) => tc.torrentMetadata(...args)),
+    ipcEngine.onTorrentDone((...args) => tc.torrentDone(...args)),
+    ipcEngine.onTorrentDone(() =>
+      controllers.torrentList().resumePausedTorrents()),
+    ipcEngine.onTorrentWarning((...args) => tc.torrentWarning(...args)),
+    ipcEngine.onTorrentError((...args) => tc.torrentError(...args)),
+
+    ipcEngine.onProgress((...args) => tc.torrentProgress(...args)),
+    ipcEngine.onFileModtimes((...args) => tc.torrentFileModtimes(...args)),
+    ipcEngine.onTorrentFileSaved((...args) => tc.torrentFileSaved(...args)),
+    ipcEngine.onPosterSaved((...args) => tc.torrentPosterSaved(...args)),
+    ipcEngine.onAudioMetadata((...args) => tc.torrentAudioMetadata(...args)),
+    ipcEngine.onServerRunning((...args) => tc.torrentServerRunning(...args))
+  ])
+
+  await ipcOs.signalReady()
+
+  State.on('stateSaved', () => reportErrors(ipcOs.signalStateSaved()))
 }
 
 // Quits any modal popovers and returns to the torrent list screen
@@ -437,22 +422,40 @@ function resumeTorrents () {
     .forEach((s) => controllers.torrentList().startTorrentingSummary(s.torrentKey))
 }
 
-// Set window dimensions to match video dimensions or fill the screen
+// Set window dimensions to match video dimensions or fill the screen.
+//
+// The maximize check is async through the shim, so the geometry reads
+// are taken here, synchronously, before the suspension point: the saved
+// bounds and the maximize check that guards them then still describe
+// one instant, even though the save itself lands a tick later (see
+// docs/platform-shim.md). Nothing reads state.window.bounds
+// synchronously after a dispatch('setDimensions') -- restoreBounds()
+// runs when the player is closed.
 function setDimensions (dimensions) {
-  // Don't modify the window size if it's already maximized
-  if (electron.remote.getCurrentWindow().isMaximized()) {
-    state.window.bounds = null
-    return
-  }
-
-  // Save the bounds of the window for later. See restoreBounds()
-  state.window.bounds = {
+  const bounds = {
     x: window.screenX,
     y: window.screenY,
     width: window.outerWidth,
     height: window.outerHeight
   }
-  state.window.wasMaximized = electron.remote.getCurrentWindow().isMaximized
+  platformWindow.isMaximized()
+    .then(maximized => applyDimensions(dimensions, bounds, maximized))
+    .catch(err => dispatch('error', err))
+}
+
+function applyDimensions (dimensions, bounds, maximized) {
+  // Don't modify the window size if it's already maximized
+  if (maximized) {
+    state.window.bounds = null
+    return
+  }
+
+  // Save the bounds of the window for later. See restoreBounds()
+  state.window.bounds = bounds
+  // Reached only when the window is not maximized, so this is always
+  // false now. It used to be assigned `.isMaximized` (the function
+  // itself, uncalled) and so was always truthy. Nothing reads it.
+  state.window.wasMaximized = maximized
 
   // Limit window size to screen size
   const screenWidth = window.screen.width
@@ -471,9 +474,13 @@ function setDimensions (dimensions) {
     config.WINDOW_MIN_HEIGHT
   )
 
-  ipcRenderer.send('setAspectRatio', aspectRatio)
-  ipcRenderer.send('setBounds', { contentBounds: true, x: null, y: null, width, height })
+  reportErrors(ipcOs.setAspectRatio(aspectRatio))
+  reportErrors(ipcOs.setBounds(
+    { contentBounds: true, x: null, y: null, width, height }
+  ))
   state.playing.aspectRatio = aspectRatio
+  // dispatch()'s own update() already ran before this resolved.
+  update()
 }
 
 // Called when the user adds files (.torrent, files to seed, subtitles) to the app
@@ -527,9 +534,10 @@ const editableHtmlTags = new Set(['input', 'textarea'])
 
 function onPaste (e) {
   if (e && editableHtmlTags.has(e.target.tagName.toLowerCase())) return
-  controllers.torrentList().addTorrent(electron.clipboard.readText())
-
-  update()
+  clipboard.readText().then((text) => {
+    controllers.torrentList().addTorrent(text)
+    update()
+  }).catch((err) => dispatch('error', err))
 }
 
 function onKeydown (e) {
@@ -578,17 +586,19 @@ function onVisibilityChange () {
   state.window.isVisible = !document.hidden
 }
 
-function onFullscreenChanged (e, isFullScreen) {
+// The shim strips the Electron event object, so these two take only
+// the payload now.
+function onFullscreenChanged (isFullScreen) {
   state.window.isFullScreen = isFullScreen
   if (!isFullScreen) {
     // Aspect ratio gets reset in fullscreen mode, so restore it (Mac)
-    ipcRenderer.send('setAspectRatio', state.playing.aspectRatio)
+    reportErrors(ipcOs.setAspectRatio(state.playing.aspectRatio))
   }
 
   update()
 }
 
-function onWindowBoundsChanged (e, newBounds) {
+function onWindowBoundsChanged (newBounds) {
   if (state.location.url() !== 'player') {
     state.saved.bounds = newBounds
     dispatch('stateSave')
@@ -596,12 +606,14 @@ function onWindowBoundsChanged (e, newBounds) {
 }
 
 function checkDownloadPath () {
-  fs.stat(state.saved.prefs.downloadPath, (err, stat) => {
-    if (err) {
+  // The shim's stat resolves a plain object, so `isDirectory` is a
+  // boolean rather than a method.
+  platformFs.stat(state.saved.prefs.downloadPath)
+    .then(stat => {
+      state.downloadPathStatus = stat.isDirectory ? 'ok' : 'missing'
+    })
+    .catch(err => {
       state.downloadPathStatus = 'missing'
-      return console.error(err)
-    }
-    if (stat.isDirectory()) state.downloadPathStatus = 'ok'
-    else state.downloadPathStatus = 'missing'
-  })
+      console.error(err)
+    })
 }

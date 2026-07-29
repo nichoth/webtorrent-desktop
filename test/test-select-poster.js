@@ -4,7 +4,7 @@ const fs = require('fs')
 const path = require('path')
 
 const WebTorrent = require('webtorrent')
-const torrentPoster = require('../build/renderer/lib/torrent-poster')
+const torrentPoster = require('../build/renderer/lib/torrent-poster').default
 
 const client = new WebTorrent()
 

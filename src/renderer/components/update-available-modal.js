@@ -1,10 +1,10 @@
-const React = require('react')
-const { shell } = require('electron')
+import React from 'react'
 
-const ModalOKCancel = require('./modal-ok-cancel')
-const { dispatch } = require('../lib/dispatcher')
+import ModalOKCancel from './modal-ok-cancel'
+import { dispatch } from '../lib/dispatcher'
+import * as shell from '../lib/platform/shell'
 
-module.exports = class UpdateAvailableModal extends React.Component {
+export default class UpdateAvailableModal extends React.Component {
   render () {
     const state = this.props.state
     return (
@@ -26,6 +26,7 @@ module.exports = class UpdateAvailableModal extends React.Component {
     function handleShow () {
       // TODO: use the GitHub urls from config.js
       shell.openExternal('https://github.com/webtorrent/webtorrent-desktop/releases')
+        .catch((err) => dispatch('error', err))
       dispatch('exitModal')
     }
 

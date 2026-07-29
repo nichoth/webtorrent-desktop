@@ -1,13 +1,14 @@
-const { ipcRenderer } = require('electron')
+import { reportErrors } from '../lib/dispatcher'
+import * as ipcOs from '../lib/platform/ipc-os'
 
-module.exports = class FolderWatcherController {
+export default class FolderWatcherController {
   start () {
     console.log('-- IPC: start folder watcher')
-    ipcRenderer.send('startFolderWatcher')
+    reportErrors(ipcOs.startFolderWatcher())
   }
 
   stop () {
     console.log('-- IPC: stop folder watcher')
-    ipcRenderer.send('stopFolderWatcher')
+    reportErrors(ipcOs.stopFolderWatcher())
   }
 }

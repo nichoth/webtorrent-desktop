@@ -1,21 +1,27 @@
-const appConfig = require('application-config')('WebTorrent')
-const path = require('path')
-const { EventEmitter } = require('events')
+import applicationConfig from 'application-config'
+import path from 'path'
+import { EventEmitter } from 'events'
+import debounce from 'debounce'
+import LocationHistory from 'location-history'
+import parseTorrent from 'parse-torrent'
+import createTorrent from 'create-torrent'
 
-const config = require('../../config')
-const defaultAnnounceList = require('create-torrent').announceList.map((arr) => arr[0])
+import config from '../../config'
+import * as fs from './platform/fs'
+import * as migrations from './migrations'
+
+const appConfig = applicationConfig('WebTorrent')
+const defaultAnnounceList = createTorrent.announceList.map((arr) => arr[0])
 
 const SAVE_DEBOUNCE_INTERVAL = 1000
 
 appConfig.filePath = path.join(config.CONFIG_PATH, 'config.json')
 
-const State = module.exports = Object.assign(new EventEmitter(), {
+const State = Object.assign(new EventEmitter(), {
   getDefaultPlayState,
   load,
   // state.save() calls are rate-limited. Use state.saveImmediate() to skip limit.
   save (...args) {
-    // Perf optimization: Lazy-require debounce (and it's dependencies)
-    const debounce = require('debounce')
     // After first State.save() invokation, future calls go straight to the
     // debounced function
     State.save = debounce(saveImmediate, SAVE_DEBOUNCE_INTERVAL)
@@ -24,9 +30,9 @@ const State = module.exports = Object.assign(new EventEmitter(), {
   saveImmediate
 })
 
-function getDefaultState () {
-  const LocationHistory = require('location-history')
+export default State
 
+function getDefaultState () {
   return {
     /*
      * Temporary state disappears once the program exits.
@@ -117,10 +123,7 @@ function getDefaultPlayState () {
 }
 
 /* If the saved state file doesn't exist yet, here's what we use instead */
-function setupStateSaved () {
-  const { copyFileSync, mkdirSync, readFileSync } = require('fs')
-  const parseTorrent = require('parse-torrent')
-
+async function setupStateSaved () {
   const saved = {
     prefs: {
       downloadPath: config.DEFAULT_DOWNLOAD_PATH,
@@ -134,33 +137,37 @@ function setupStateSaved () {
       highestPlaybackPriority: true,
       globalTrackers: defaultAnnounceList
     },
-    torrents: config.DEFAULT_TORRENTS.map(createTorrentObject),
+    torrents: await Promise.all(config.DEFAULT_TORRENTS.map(createTorrentObject)),
     torrentsToResume: [],
     version: config.APP_VERSION /* make sure we can upgrade gracefully later */
   }
 
-  // TODO: Doing several sync calls during first startup is not ideal
-  mkdirSync(config.POSTER_PATH, { recursive: true })
-  mkdirSync(config.TORRENT_PATH, { recursive: true })
+  await fs.mkdir(config.POSTER_PATH)
+  await fs.mkdir(config.TORRENT_PATH)
 
-  config.DEFAULT_TORRENTS.forEach((t, i) => {
+  // The directories have to exist before anything is copied into them,
+  // so the copies start only once both mkdirs have resolved.
+  await Promise.all(config.DEFAULT_TORRENTS.map((t, i) => {
     const infoHash = saved.torrents[i].infoHash
-    // TODO: Doing several sync calls during first startup is not ideal
-    copyFileSync(
-      path.join(config.STATIC_PATH, t.posterFileName),
-      path.join(config.POSTER_PATH, infoHash + path.extname(t.posterFileName))
-    )
-    copyFileSync(
-      path.join(config.STATIC_PATH, t.torrentFileName),
-      path.join(config.TORRENT_PATH, infoHash + '.torrent')
-    )
-  })
+    return Promise.all([
+      fs.copyFile(
+        path.join(config.STATIC_PATH, t.posterFileName),
+        path.join(config.POSTER_PATH, infoHash + path.extname(t.posterFileName))
+      ),
+      fs.copyFile(
+        path.join(config.STATIC_PATH, t.torrentFileName),
+        path.join(config.TORRENT_PATH, infoHash + '.torrent')
+      )
+    ])
+  }))
 
   return saved
 
-  function createTorrentObject (t) {
-    // TODO: Doing several sync calls during first startup is not ideal
-    const torrent = readFileSync(path.join(config.STATIC_PATH, t.torrentFileName))
+  async function createTorrentObject (t) {
+    const bytes = await fs.readFile(path.join(config.STATIC_PATH, t.torrentFileName))
+    // The shim resolves a plain `Uint8Array`; parse-torrent only accepts
+    // a `Buffer`. `Buffer.from(view)` copies, so wrap the same memory.
+    const torrent = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
     const parsedTorrent = parseTorrent(torrent)
 
     return {
@@ -218,28 +225,29 @@ async function load (cb) {
   if (!saved || !saved.version) {
     console.log('Missing config file: Creating new one')
     try {
-      saved = setupStateSaved()
+      saved = await setupStateSaved()
     } catch (err) {
-      onSavedState(err)
-      return
+      return cb(err)
     }
   }
 
-  onSavedState(null, saved)
+  const state = getDefaultState()
+  state.saved = saved
 
-  function onSavedState (err, saved) {
-    if (err) return cb(err)
-    const state = getDefaultState()
-    state.saved = saved
-
-    if (process.type === 'renderer') {
-      // Perf optimization: Save require() calls in the main process
-      const migrations = require('./migrations')
-      migrations.run(state)
+  // Migrations only make sense in the renderer, which owns the config file
+  // and the ipcRenderer channel installHandlers() uses. The import is now
+  // static (ESM has no conditional import), so only the call stays guarded.
+  // They are async since US-028, and `cb` must not fire until they have
+  // finished writing -- the caller starts torrenting off `state.saved`.
+  if (process.type === 'renderer') {
+    try {
+      await migrations.run(state)
+    } catch (err) {
+      return cb(err)
     }
-
-    cb(null, state)
   }
+
+  cb(null, state)
 }
 
 // Write state.saved to the JSON state file

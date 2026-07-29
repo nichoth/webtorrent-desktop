@@ -1,0 +1,3206 @@
+## Codebase Patterns
+
+Consolidated, reusable knowledge. Re-read in full every session -- keep
+it tight.
+
+- **Test scripts.** Since US-034 `npm run lint` is
+  `standard && npm run lint:boundary`, and `npm test` is
+  `npm run lint && depcheck && npm run test-unit`. Since US-019
+  `npm run test-unit` = `npm run build:main && tape test/unit/*.js`:
+  unit tests are CommonJS and require the Babel output under `build/`,
+  never the ESM sources under `src/`. New files in `test/unit/` are
+  globbed, no registration needed. Details in `test/AGENTS.md`.
+- **`standard` cannot take custom rules.** Its `standard` key in
+  `package.json` accepts only `ignore`, `globals`, `env`, `parser`,
+  `plugins` and `settings` -- there is no `rules` escape hatch. Any
+  project-specific rule therefore needs a second, standalone ESLint
+  run. US-034's is `eslint-boundary.config.js` at the repo root, run
+  by `npm run lint:boundary` with `--no-eslintrc` so the two configs
+  never see each other. `eslint` (8.15.0) is now an explicit
+  devDependency rather than a hoisted transitive of `standard`, and is
+  in depcheck's `--ignores` list because it is only ever reached from
+  an npm script. `standard-engine` sets `useEslintrc: false`, so a
+  root ESLint config never leaks into a `standard` run -- but name the
+  file something other than `.eslintrc.*` anyway.
+- **`no-restricted-imports` sees `import` declarations only.** It does
+  not see `require()`, which is the one deferral mechanism that
+  actually works in this renderer (see the dynamic-`import()` entry
+  below). So an import-specifier lint rule alone cannot close the
+  boundary: the `require()` spellings, and every usage-level concern
+  (`ipcRenderer.` member reads, `wt-` channel strings,
+  `new remote.Menu`), stay in the source scan in
+  `test/unit/platform-boundary.js`. The two are complementary --
+  do not delete either believing the other covers it.
+- **Test an ESLint config through the Node API, not by shelling out.**
+  `new ESLint({ cwd, useEslintrc: false, overrideConfigFile })` plus
+  `lintText(source, { filePath })` lints synthetic code at a path that
+  need not exist, which is the only way to prove an `overrides`
+  exemption actually exempts without dropping probe files into
+  `src/`. `lintFiles()` on the real tree is the companion assertion.
+  See `test/unit/lint-boundary.js`.
+- **`npm run test-integration` is broken and was broken before this
+  branch.** Spectron 19 cannot drive Electron 27 under the installed
+  Node (v25): every run dies with `Error: Application not running` on
+  the first test. Verified by stashing all changes and re-running at
+  HEAD. Do not treat it as a gate; do not try to "fix" it as a side
+  effect of another story. It also leaks a whole Electron process tree
+  when it fails -- always `pkill -f "$PWD/node_modules/"` afterwards.
+- **Babel config lives in the `babel` key of `package.json`**, not a
+  `.babelrc`. It is `@babel/plugin-transform-react-jsx` with
+  `useBuiltIns: true` (reuse those exact options anywhere JSX has to be
+  compiled) plus, since US-005,
+  `@babel/plugin-transform-modules-commonjs` with
+  `sourceType: "unambiguous"`. Without the modules plugin Babel leaves
+  `import`/`export` untouched and Electron 27 (Node 18) cannot
+  `require()` the result -- the app dies at startup. `unambiguous`
+  keeps the still-CommonJS files compiling as scripts instead of
+  gaining `"use strict"`.
+- **`tape test/unit/*.js` is one process that requires every file
+  before running any test.** Anything process-wide leaks between test
+  files in alphabetical glob order. Two known cases: `setDispatch()`
+  from `lib/dispatcher` (register it inside each file's per-test
+  `reset()`, not once at require time, or the last file loaded wins for
+  the whole run) and `require.cache` stubs of **built shim modules**
+  (`platform-ipc-os.js` tests the real `ipc-os`, so a stub left at its
+  path fails it -- withdraw the stub right after requiring the module
+  under test; Babel has already bound the module object). Symptom:
+  "my new test file broke a file I never touched".
+- **`src/config.js` exports every value twice** -- as a named export
+  (for CommonJS `src/main/`) and inside `export default {...}` (for ESM
+  renderer code). Add to both or the value is silently missing for half
+  the codebase. Details in `src/AGENTS.md`.
+- **`bin/clean.js`, `bin/package.js` and `bin/open-config.js` require
+  `../src/config` from raw source**, so plain Node loads it as real
+  ESM, not through Babel. CommonJS-only globals (`__dirname`,
+  `require`) do not exist on that path. Nothing else in the repo
+  notices when they break.
+- **`node -e` leaks `__dirname` (`'.'`) into ESM modules it loads.**
+  Probe module scope from a real `.cjs`/`.mjs` file instead, or you
+  will chase paths that only look wrong.
+- **`npm start` = `npm run build && electron --no-sandbox .`**, and
+  since US-016 `npm run build` is two halves:
+  `build:main` (Babel -> `build/`, with `src/renderer/main.js`,
+  `components/`, `controllers/` and `pages/` ignored) then
+  `build:renderer` (`vite build` -> `build-vite/`). Both must keep
+  working at every commit (FR-2). The set Babel must still compile is
+  fixed by the three non-Vite `require()` callers: `index.js` ->
+  `build/main`, `static/webtorrent.html` ->
+  `build/renderer/webtorrent.js`, and `src/main/index.js` ->
+  `../renderer/lib/state` -- which is why `src/renderer/lib/**` is
+  built by both. Details in `src/AGENTS.md`.
+- **A new generated directory needs five registrations:** `.gitignore`,
+  nodemon's `--ignore` list in the `watch` script, depcheck's
+  `--ignore-dirs` in the `test` script, the `rimraf` block in
+  `bin/package.js`, and `bin/clean.js`. Missing the nodemon one is the
+  only failure that is silent at build time and breaks dev -- `watch`
+  runs `--ext js,css`, so an emitted `.js` file restarts it forever.
+- **`npm run package` cannot be run as-is in a session** -- `build()`
+  in `bin/package.js` opens with `rimraf(node_modules)` + `npm ci`.
+  Copy its `all` + `darwin` option objects into a throwaway script and
+  call `electronPackager` directly instead; `prune: true` works on
+  electron-packager's own temp copy and never touches the working
+  `node_modules`. Then prove what shipped with
+  `npx asar list app.asar` -- the `ignore` option is a 700-char
+  alternation and reading it is not verification.
+- **`material-ui` import shapes.** Every `material-ui/**` submodule the
+  renderer uses is CJS ending in `.default`, so a plain default import
+  is correct (`import Checkbox from 'material-ui/Checkbox'`). The one
+  exception is `material-ui/styles/colors`, which sets
+  `__esModule` and exports each colour by name with **no default** --
+  it needs named imports (`import { grey400 } from ...`). A default
+  import there silently yields `undefined` and the colour just goes
+  missing.
+- **Renderer modules still on `module.exports = X` import cleanly as
+  default imports** under both Babel's interop and Rolldown, and
+  multi-value ones (`lib/dispatcher`) as named imports. Converting a
+  file to ESM therefore never requires touching its
+  not-yet-converted dependencies.
+- **`fn-getter`-wrapped lazy `require()` has no ESM equivalent.** When
+  converting a module that lazy-loads siblings, replace the thunks with
+  static imports and say so in the log; `import()` is async and does
+  not fit the synchronous call sites. Check `fn-getter` is still used
+  somewhere afterwards or depcheck fails. **But measure first** -- see
+  the next two entries.
+- **Dynamic `import()` never settles in the renderer.** No resolve, no
+  reject, no console error, and control never returns to the caller
+  (observed over a 60s launch). `static/main.html` loads
+  `build/renderer/main.js` from a classic `<script>` in a `file://`
+  document, so `import()` is Chromium's loader, not Node's. It is not
+  an available deferral mechanism anywhere in `src/renderer/`, in
+  Phase 2 or otherwise. A `require()` inside a function is the only
+  one that works.
+- **Hoisting a lazy `require()` to a static import can be expensive.**
+  Cheap for most modules, but the casting stack in `lib/cast.js` costs
+  3.85s of blocking load in the Electron renderer -- it takes startup
+  from `init: 665ms` to `init: 4.5s`. A/B it: `git stash &&
+  npm run build && npx electron --no-sandbox .` for the baseline
+  number, and `performance.now()` either side of the `require` in
+  `build/renderer/main.js` to locate the cost. "The app still launches"
+  is not a startup measurement.
+- **`delayedInit()` was dead code until US-027, and runs now.** The
+  `electron.remote.getCurrentWindow()` call just above the
+  `window.setTimeout(delayedInit, ...)` used to throw
+  (`electron.remote` was removed in Electron 14), aborting the rest of
+  `onState`. US-027 moved it onto `lib/platform/window.isVisible()`,
+  so `checkDownloadPath()`, the visibility listener and
+  `lazyLoadCast()` all run again. The visible consequence: the launch
+  log gains a severity-3 `no such type:
+  extensions.api.cast_channel.CastMessage` from `Cast.init()`. That is
+  dormant code being reached, not a regression -- do not chase it as
+  one, and do not treat it as a clean-launch failure.
+- **There are two renderer `init:` lines in the launch log.** One from
+  `webtorrent.js` (the hidden window) and, since US-027, one from
+  `build-vite/renderer/main.js` -- `console.timeEnd('init')` in
+  `main.js` was unreachable before. Use `a.slice(1, 5)` in the
+  console-message hook so you capture `sourceId`, or you will
+  attribute renderer output to the wrong file.
+- **Native modals block the whole main process.** `showOpenDialogSync`
+  / `showSaveDialogSync` freeze it, so in an appended probe block
+  nothing after the dispatch that opens one ever runs -- no further
+  `executeJavaScript`, no `setTimeout`, and `kill <pid>` does not
+  land (`pkill -f "$PWD/node_modules/"` does). That silence is itself
+  the evidence the dialog opened. Schedule a blocking probe LAST.
+- **Verifying the app launches non-interactively:** run
+  `npx electron --no-sandbox .` in the background, sleep ~12s, check
+  the process is alive and that the log shows `'Main Window'` and
+  `init: <time>`. Always kill the process afterwards. This is a launch
+  check only -- it is NOT the six-step manual smoke test.
+- **Vite 8 is Rolldown-based, not Rollup/esbuild.** Two consequences
+  that will keep mattering: it handles CommonJS natively (no
+  `@rollup/plugin-commonjs`, no CJS resolve errors), and Node builtins
+  are externalized to throwing browser stubs with a *warning*, not an
+  error. A green Vite build therefore proves very little on its own --
+  check the warning stream, not just the exit code.
+- **`electron` resolves silently to the wrong module.** Bundlers
+  resolve `require('electron')` to `node_modules/electron/index.js`,
+  the npm CLI helper that exports a path string, not the runtime API.
+  No warning is emitted. Anything relying on `electron.ipcRenderer`
+  will be `undefined` at runtime while the build reports success.
+- **Renderer console output does NOT reach the terminal.** The
+  `'Main Window'` lines in the launch log come from a `console.dir` in
+  `src/main/ipc.js`, not from the renderer. To observe renderer console
+  output non-interactively, patch the *build artifacts* (never the
+  source -- `build/` is gitignored and regenerated by `npm run build`):
+  add to `build/main/index.js`
+  `app.on('web-contents-created', (e, wc) => wc.on('console-message',
+  (...a) => console.log('RENDERER-CONSOLE:', JSON.stringify(a.slice(1,
+  4)))))`, then launch, then `npm run build` to restore. Severity 3 in
+  the first field means error. This is the only way to get real
+  evidence for any "does X appear in the console" acceptance criterion.
+- **The six-step manual smoke test cannot be run in a non-interactive
+  session.** Do the launch check, do whatever targeted empirical probe
+  the story allows, and then say plainly in `progress.log` that the
+  smoke test was not run and which step carries the risk. Never claim
+  it passed.
+- **Probing the running renderer's DOM.** `src/renderer/main.js`
+  exposes `window.state` and `window.dispatch`, so a temporary
+  `app.on('web-contents-created', ...)` block appended to
+  `build/main/index.js` can call
+  `wc.executeJavaScript("window.dispatch('preferences')")` to navigate
+  routes and read the DOM back non-interactively. Two caveats: the
+  hidden webtorrent window also fires `did-finish-load` (it reports a
+  ~53-char body and no `.header` -- not a failure), and torrent-list
+  DOM metrics drift ~20% run to run as progress bars update. Compare
+  stable anchors only: `.header` outerHTML and the preferences page.
+- **Vite `resolve.alias` string `find` entries match as a prefix**, so
+  aliasing a package name also captures its deep imports. Use
+  `find: /^pkg-name$/` when only the bare specifier should be
+  redirected. Related: throwaway Vite probe entries must live inside
+  the repo (a `/tmp` entry cannot resolve `node_modules` and Rolldown
+  reports it as a misleading unresolved-import error).
+- **JSX-in-`.js` is handled by a hand-rolled plugin, not the `oxc`
+  config key.** `vite.config.js` has a `webtorrent:jsx-in-js` plugin
+  (`enforce: 'pre'`) that pipes this repo's own `src/**/*.js` through
+  Vite's exported `transformWithOxc` with `lang: 'jsx'` and
+  `jsx: { runtime: 'classic' }`. Setting `oxc: { lang: 'jsx' }`
+  instead looks right and works in dev, but `vite build` delegates to
+  the native `builtin:vite-transform` plugin, which derives the
+  language from the file extension and ignores `lang`. Do not
+  "simplify" the plugin back into the `oxc` key. Classic runtime is
+  required because every component relies on the implicit
+  `React.createElement` pragma.
+- **Proving a specific file reached the bundle** when the output is
+  minified: grep `build-vite/assets/main-*.js` for a string literal
+  unique to that file. Identifiers are mangled; string literals are
+  not.
+- **A pre-existing renderer error is always in the launch log.**
+  `src/renderer/main.js` calls `electron.remote.getCurrentWindow()`
+  (lines 145, 406, 418), but `electron.remote` was removed from
+  Electron, so every launch logs a severity-3 `Cannot read properties
+  of undefined (reading 'getCurrentWindow')`. It is on master, not
+  something you broke. `@electron/remote` is the working module.
+  Whenever a launch check surfaces an error, `git stash` your diff,
+  rebuild, and relaunch before believing it is yours.
+- **Vite externals only work with `output.format: 'cjs'`.** Since
+  US-014 the renderer bundle is CJS, which is what lets an emitted
+  `require()` resolve against Electron's module registry under
+  `nodeIntegration: true`. Verify the mechanism rather than the exit
+  code: grep the output bundle for `require("` (should list every
+  external) and for `^import|^export` (should be empty). Changing the
+  format silently converts every external into a broken import.
+- **The externalization warning count is the Node-builtin gate.**
+  `grep -c 'has been externalized' <stderr>` should be 0. Anything
+  above that is a builtin resolved to a browser stub that throws on
+  first use, which no exit code will tell you about.
+- **Unit-testing a module that imports `electron`.** Seed
+  `require.cache[require.resolve('electron')]` with a fake before the
+  first `require()` of the built module. Babel compiles a named
+  import into a per-call-site `_electron.ipcRenderer` property read,
+  so a getter in the fake's `exports` is re-consulted on every call
+  and the stub can be swapped between tests. Keep shim modules on
+  `import { ipcRenderer } from 'electron'` for this reason. Recipe in
+  `test/AGENTS.md`.
+- **depcheck sees `require.resolve('pkg')` in `vite.config.js`.** Use
+  `createRequire(import.meta.url)` and `require.resolve()` for packages
+  that only a bundler alias references, rather than a bare string
+  replacement -- otherwise depcheck reports them unused and `npm test`
+  fails, and the fix is not to add a depcheck ignore.
+- **Vite replaces bare `process.env` with `{}`** unless
+  `define: { 'process.env': 'globalThis.process.env' }` is set. Silent,
+  and it kills startup at the first `path.join(process.env.HOME, ...)`
+  inside `application-config-path`. Assume the same for any other
+  Node-ism Vite thinks a browser cannot have.
+- **The Vite entry filename is pinned** to `build-vite/renderer/main.js`
+  via `output.entryFileNames`, because `static/main.html` references it
+  from a plain `<script src>`. Do not restore hashed entry names.
+- **Reading a renderer stack trace:** the `console-message` hook gives
+  no stack. Temporarily add an inline
+  `window.addEventListener('error', e => console.log('STACK:' +
+  e.error.stack))` to `static/main.html` above the bundle tag and build
+  with `npx vite build --minify false`.
+- **Probing the rendered DOM:** hook `did-finish-load`, then
+  `setTimeout(..., 4000)` before `wc.executeJavaScript` -- the event
+  fires before React has rendered. Both windows fire it, so key on
+  `location.pathname`.
+- **`docs/vite-baseline.md`** is the measured inventory of what Vite
+  cannot handle in the renderer, grouped by cause, and since US-014 the
+  record of how each builtin was resolved. Consult it before guessing
+  at scope for any Phase 1 or Phase 2 story.
+- **`docs/platform-shim.md`** is the agreed shim contract from US-018:
+  every exported function mapped onto the call sites it replaces, plus
+  the shape changes each migration has to absorb (`stat.isDirectory()`
+  becomes a boolean, `showOpenDialog` returns `[]` not `undefined` on
+  cancel, no `createReadStream`). Read it before starting any US-020
+  to US-034 story; do not re-derive the surface.
+- **Shim conventions:** every export is `async` (FR-10), no channel
+  string ever reaches a caller (one named function per channel), every
+  listener registration resolves to an unsubscribe function and takes
+  an optional `{ once: true }`. `shell.js` -- not `ipc-os.js` -- owns
+  the `showItemInFolder`, `openPath` and `moveItemToTrash` channels,
+  because they are one concern.
+- **Migrating a call site to the async shim:** tail every promise with
+  `.catch((err) => dispatch('error', err))`, the renderer's existing
+  error sink, rather than making the caller `async` (that just moves
+  the floating promise into React's or Electron's callback). Where the
+  boundary cannot await at all -- a menu `click` -- extract a named
+  helper. And cross-check `docs/platform-shim.md`'s call-site tables
+  against the story's acceptance criteria first: the doc lists sites
+  the criteria omit, and the story's own grep criterion covers them.
+- **`test/unit/platform-boundary.js` is the migration regression
+  gate.** It walks `src/renderer/**` (source, not `build/`, which has
+  no `components/` or `controllers/`) and fails on any direct Electron
+  use outside `lib/platform/`. Add each newly-migrated concern to its
+  name list as US-027..US-032 land; US-034 replaces it with a lint
+  rule.
+- **A controller CAN be unit tested, by compiling it in the test.**
+  `build:main` ignores `controllers/`, but `@babel/core`'s
+  `transformFileSync(src, { root, cwd })` picks up the `babel` key in
+  `package.json`, and writing the output into
+  `build/renderer/controllers/` makes the controller's own
+  `../lib/...` imports resolve against the real built
+  `build/renderer/lib/**`. Stub the shims it imports by
+  `require.cache`-seeding their **built** paths, and record dispatches
+  via the real `lib/dispatcher`'s `setDispatch()`. This is the only
+  way to assert controller behaviour instead of asserting on its
+  source text -- see `test/unit/torrent-context-menu.js` and
+  `test/AGENTS.md`.
+
+---
+
+## 2026-07-27 - US-001
+
+Create branch and capture the Vite baseline failure inventory.
+
+**Interpretation:** this is a scaffolding/measurement story, so per
+execution rule 3 no failing test was written first -- there is nothing
+behavioural to assert, and this repo has no unit test runner until
+US-019. The deliverable is the captured inventory itself.
+
+**What was implemented**
+
+- Created branch `renderer-decoupling` off `redesign` HEAD (859dd66).
+- Added `vite` 8.1.5 to devDependencies (exact pin, matching the
+  repo's existing exact-version convention).
+- Added a minimal `vite.config.js` at the repo root with
+  `src/renderer/main.js` as the rollup input and `build-vite` as the
+  out dir.
+- Ran `npx vite build`, captured stdout and stderr verbatim into
+  `docs/vite-baseline.md`, and grouped every finding under the four
+  required headings: CommonJS, JSX, Node builtin, Electron.
+- Added `build-vite/` to `.gitignore`.
+
+**Files changed**
+
+- `package.json`, `package-lock.json` (vite devDependency)
+- `vite.config.js` (new)
+- `docs/vite-baseline.md` (new)
+- `.gitignore`
+- `progress.log`
+
+**Verification**
+
+- `npx vite build` fails with exit 1 -- expected and required by the
+  acceptance criteria.
+- `npm test` (standard + depcheck) passes, exit 0.
+- `npm run build` (Babel) compiles 65 files.
+- App launches: `npx electron --no-sandbox .` reaches
+  `init: 1.058s` with both windows up, no errors.
+
+**Learnings for future iterations:**
+
+- **The baseline build alone is a near-useless inventory.** It
+  aborts on the first JSX token after transforming 2 of ~724 modules,
+  so it reports exactly one error and says nothing about the other
+  three categories. To get real numbers I ran a *throwaway* probe
+  config -- same config plus a `transform` hook piping
+  `src/renderer/**/*.js` through `@babel/plugin-transform-react-jsx` --
+  which reached 724 modules and 167 warning lines. The probe config was
+  deleted after the run and is not in the repo. If a future story needs
+  to re-measure, recreate it rather than assuming the baseline output
+  is complete.
+- **With JSX enabled, the Vite build already passes (exit 0, 1.46 MB
+  bundle).** This is a trap. US-014 and US-017 must not treat "vite
+  build succeeds" as the definition of done -- the build succeeds today
+  while `electron` resolves to the CLI helper and 20 Node builtins
+  point at throwing stubs. Assert on resolved module identity, not on
+  exit code.
+- **The CommonJS heading is empty and will stay empty.** Rolldown
+  handles CJS natively; `grep -ci 'could not resolve'` over the full
+  probe output returns 0. The ESM conversion in US-005..US-013 is still
+  required, but justify it by the `esmOrder` / shim-boundary reasons in
+  the PRD, not by an expectation that Vite rejects CommonJS. Do not
+  spend a session hunting for CJS build errors that do not exist.
+- **`path` is the widest first-party Node dependency** -- 12 renderer
+  files import it, versus 6 for `fs`. Worth sizing US-014 and the
+  Phase 2 shim work accordingly.
+- **Two first-party Node imports vanish for free.** `crypto` and `os`
+  in `lib/telemetry.js` disappear entirely when US-002 deletes that
+  module, and `module` in `main.js` goes with the monkey patch in
+  US-003. Three of the 23 first-party import sites need no shim work.
+- **depcheck accepts `vite`** because `vite.config.js` imports
+  `defineConfig` from it. Any future root-level tool added as a
+  devDependency needs a real import somewhere or `npm test` fails.
+
+---
+
+## 2026-07-27 - US-002
+
+Delete the telemetry module and every one of its call sites.
+
+**Interpretation:** a pure deletion story with no unit test runner in
+the repo yet (that arrives in US-019), so per execution rule 3 no
+failing test was written first. The behavioural claim that *can* be
+falsified -- "uncaught errors still surface in the devtools console" --
+was verified empirically instead; see Verification below.
+
+**What was implemented**
+
+- Deleted `src/renderer/lib/telemetry.js` (222 lines).
+- Removed all 7 call sites in `src/renderer/main.js`: the import,
+  `telemetry.init(state)`, the capturing `window.addEventListener
+  ('error', ...)` handler, `telemetry.send(state)` in `delayedInit`,
+  the 12-hour `setInterval` send, and the `wt-uncaught-error`
+  ipcRenderer handler.
+- The `uncaughtError` dispatcher action is kept as a
+  `console.error` no-op rather than removed, because
+  `src/main/index.js:98` still calls
+  `windows.main.dispatch('uncaughtError', 'main', error)`. Removing it
+  would make the dispatcher fail to resolve that action by name, and it
+  also keeps main-process errors visible in the renderer console.
+- `controllers/media-controller.js`: import plus all three
+  `logPlayAttempt` calls removed. `mediaSuccess()` had no other body,
+  so it is now an empty method with a comment -- the dispatcher
+  resolves actions by name, so it must still exist.
+- `controllers/playback-controller.js`: import plus the
+  `logPlayAttempt('abandoned')` call removed.
+- `TELEMETRY_URL` removed from `src/config.js`.
+- Added a "Resolved by deletion (US-002)" section to
+  `docs/vite-baseline.md` recording which inventory entries this
+  deletion retires and the revised first-party counts.
+
+**Files changed**
+
+- `src/renderer/lib/telemetry.js` (deleted)
+- `src/renderer/main.js`
+- `src/renderer/controllers/media-controller.js`
+- `src/renderer/controllers/playback-controller.js`
+- `src/config.js`
+- `docs/vite-baseline.md`
+- `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `grep -rn "telemetry" src/` returns nothing (exit 1).
+- Nothing outside `telemetry.js` ever read `state.saved.telemetry`,
+  confirmed by grep across `src/` and `test/` before deleting. No
+  migration needed; the stale key just sits unread in existing users'
+  saved state.
+- `npm test` (standard + depcheck) passes, exit 0. No dependency was
+  orphaned: `arch` is still used by `src/config.js`, `simple-get` by
+  `main/updater.js` and `main/announcement.js`.
+- `npm run build` (Babel) compiles 64 files, was 65.
+- App launches via `npx electron --no-sandbox .`: `init: 703ms`, both
+  windows up.
+- **Uncaught errors still reach the renderer console -- measured, not
+  assumed.** See the technique in Codebase Patterns below. The probe
+  printed `RENDERER-CONSOLE: [3,"Uncaught Error: US-002 uncaught error
+  probe",...]`, severity 3 = error. Build artifacts were regenerated
+  with `npm run build` afterwards.
+- NOT run: the six-step manual smoke test, which needs an interactive
+  operator. Step 3 (video playback) is the one at risk here, since both
+  media-controller and playback-controller were edited. The removed
+  calls were all pure fire-and-forget counters with no return value
+  consumed, so the risk is low, but this is an untested claim.
+
+**Learnings for future iterations:**
+
+- **`electron.remote` is already broken on master.** The probe caught
+  `Uncaught (in promise) TypeError: Cannot read properties of undefined
+  (reading 'getCurrentWindow')` from `main.js:168`, present before this
+  change (`git show HEAD:src/renderer/main.js` has the same line) and
+  untouched by it. `electron.remote` was removed from the `electron`
+  module in modern Electron; the working form is
+  `require('@electron/remote')`, which is what `path-selector.js` and
+  `torrent-list-controller.js` already do. Three call sites in
+  `main.js` (lines 168, 429, 441) still use the dead form. US-024 and
+  US-027 will have to fix this while building the window shim -- do not
+  mistake it for a regression introduced by shim work.
+- **The dispatcher resolves actions by name at call time**, so deleting
+  the last statement out of an action handler is not the same as
+  deleting the handler. `main/index.js` and the JSX components both
+  dispatch by string. Check for remaining dispatchers before removing
+  an action.
+- **`NOTES/architecture.md` and `NOTES/product.md` do not exist** in
+  this repo, despite the standing session instructions naming them. The
+  real context is `specs/prd.json`, `progress.log`,
+  `tasks/prd-renderer-decoupling.md`, and `docs/vite-baseline.md`.
+  Don't waste a turn looking for `NOTES/`.
+
+## 2026-07-27 - US-003
+
+Remove the `Module.prototype.require` monkey patch from the renderer
+entry point and replace it with a Vite `resolve.alias`.
+
+**Interpretation:** per execution rule 3 this is a
+config/refactor story with no behavioural delta to assert, and the repo
+still has no unit test runner (US-019). Instead of a test, I wrote two
+throwaway *empirical probes* and kept their output as the evidence --
+see Verification below.
+
+**What was implemented**
+
+- Deleted the `require('module')` import and the
+  `Module.prototype.require` override at the top of
+  `src/renderer/main.js`. Nothing else in the file used `Module`.
+- Added `stubs/inline-style-prefixer.js`, a committed no-op module that
+  `export default {}` -- exactly the fake object the old hook returned.
+- Added `resolve.alias` to `vite.config.js` mapping
+  `inline-style-prefixer` to that stub.
+
+**Files changed**
+
+- `src/renderer/main.js`
+- `vite.config.js`
+- `stubs/inline-style-prefixer.js` (new)
+- `specs/prd.json` (US-003 `passes: true`)
+- `progress.log`
+
+**Verification**
+
+- Alias probe (throwaway `.probe/` entry importing both the bare
+  specifier and `inline-style-prefixer/static/createPrefixer`, built
+  with and without the alias): with the alias 9 modules / 6.16 kB,
+  without it 40 modules / 75.36 kB, and `createPrefixer` is still
+  present in the aliased bundle. So the alias fires on the bare
+  specifier and does *not* break the deep imports.
+- `npm run build` (Babel) compiles 64 files.
+- App launches via `npx electron --no-sandbox .`, reaches
+  `init: 789ms`, both windows up.
+- Render probe, before vs after, on the torrent list page and the
+  preferences page: vendor-prefixed inline-style count and
+  `.header` outerHTML length are byte-identical
+  (home 0 / 463, prefs 14 / 396 in both runs).
+- `npm test` (standard + depcheck) passes, exit 0.
+- No CSS file touched.
+- **The six-step manual smoke test was NOT run** -- this session is
+  non-interactive. The steps that carry residual risk are the ones the
+  probe cannot reach: playing a torrent and the create-torrent flow.
+  Neither touches material-ui theming, so the risk is low.
+
+**Learnings for future iterations:**
+
+- **The old hook was already dead code for its stated purpose.**
+  Nothing in `node_modules` does `require('inline-style-prefixer')`
+  bare -- material-ui only imports the deep paths
+  (`inline-style-prefixer/static/...`, `.../dynamic/...`). So the
+  ~40ms it claimed to save was never actually being saved. Removing it
+  changes nothing at runtime, which is why the before/after render
+  probes match.
+- **Alias the bare specifier with a regex, not a string.** Vite alias
+  string `find` entries match as a *prefix*, so
+  `find: 'inline-style-prefixer'` would rewrite
+  `inline-style-prefixer/static/createPrefixer` to
+  `stubs/inline-style-prefixer.js/static/createPrefixer` and fail to
+  resolve. `find: /^inline-style-prefixer$/` is the correct form.
+- **Vite probes must live inside the repo.** A probe entry file under
+  `/tmp` cannot resolve the project's `node_modules`; Rolldown reports
+  it as an unresolved-import error that looks like a real bug. Put
+  throwaway probe configs in a gitignored dir at the repo root instead.
+- **Home-page DOM metrics are noisy between runs.** Torrent progress
+  bars add inline styles as downloads advance, so `bodyLen` and a raw
+  `[style]` count differ run to run by ~20%. For before/after render
+  comparisons use stable anchors: the `.header` outerHTML and the
+  preferences page, which were identical across every run.
+- **`window.dispatch` and `window.state` are exposed by
+  `src/renderer/main.js`**, which makes non-interactive route
+  navigation possible from the main process:
+  `wc.executeJavaScript("window.dispatch('preferences')")`. The
+  webtorrent hidden window also fires `did-finish-load`, so a
+  `web-contents-created` probe reports twice -- the one with
+  `bodyLen: 53` and no `.header` is the hidden window, not a failure.
+---
+
+## 2026-07-27 - US-004
+
+Configure the JSX transform for `.js` files in Vite.
+
+**Interpretation:** this is a pure build-config story, so per execution
+rule 3 no failing test was written first -- there is still no unit test
+runner in this repo (it arrives in US-019), and the acceptance criteria
+are all "verified in the build output". The failing state was
+reproduced first instead: `npx vite build` aborting with
+`[PARSE_ERROR] Unexpected JSX expression` at
+`src/renderer/main.js:114`.
+
+**What was implemented**
+
+- Added a `webtorrent:jsx-in-js` plugin to `vite.config.js` that runs
+  `enforce: 'pre'` and pipes this repo's own `src/**/*.js` through
+  Vite's exported `transformWithOxc` with `lang: 'jsx'` and
+  `jsx: { runtime: 'classic' }`.
+- The filter matches by absolute path prefix (`<root>/src/`) rather
+  than a `/src/` regex, so packages under `node_modules` that ship
+  their own `src/` directory are not parsed as JSX.
+- Documented in a comment inside `vite.config.js` why the `oxc` config
+  key alone does not work, and why `useBuiltIns: true` has no
+  counterpart to carry over.
+
+**Files changed**
+
+- `vite.config.js`
+- `specs/prd.json` (US-004 `passes: true`)
+- `progress.log`
+
+**Verification**
+
+- Before: `npx vite build` exit 1, `Unexpected JSX expression` at
+  `src/renderer/main.js:114`.
+- After: `npx vite build` exit 0, `723 modules transformed`, zero JSX
+  syntax errors in the output.
+- `src/renderer/components/header.js` specifically: it is in the
+  bundle (its unique `'icon back '` string literal appears in
+  `build-vite/assets/main-*.js`), and running `transformWithOxc` on it
+  directly returns `errors: 0` with
+  `React.createElement("div", { className: "header", ... })`.
+- Classic runtime confirmed at the bundle level: 0 occurrences of
+  `jsx-runtime` / `_jsx(`, 330 occurrences of `createElement`.
+- Babel path unchanged: `npm run build` compiles 64 files;
+  `npx electron --no-sandbox .` reaches `init: 710ms` with both
+  windows up.
+- `npm test` (standard + depcheck) passes.
+- The six-step manual smoke test was NOT run -- non-interactive
+  session. Risk is nil for this story: no `src/` file was touched and
+  the Babel output is byte-identical, so the Electron app is running
+  exactly the code it ran before.
+
+**Learnings for future iterations:**
+
+- **Setting `oxc.lang` in `vite.config.js` does not work for
+  `vite build`.** Vite's `oxc` plugin has two code paths. In dev it
+  calls `transformWithOxc`, which honours an explicit `lang`. In a
+  bundled build (`applyToEnvironment` -> `isBundled`) it delegates to
+  the native `builtin:vite-transform` plugin, which derives the
+  language from the file extension and silently ignores `lang` -- the
+  build still fails with `Unexpected JSX expression`, only now
+  attributed to `[builtin:vite-transform]` instead of the parser. A
+  hand-rolled `enforce: 'pre'` plugin calling `transformWithOxc` is
+  the way to get JSX-in-`.js` through a production build.
+- **`transformWithOxc` is a public export of `vite`**, alongside
+  `defineConfig`. Signature:
+  `transformWithOxc(code, filename, options, inMap, config, watcher)`.
+  It returns `{ code, map, errors, warnings }`.
+- **oxc's `JsxOptions` has no `useBuiltIns`.** It always emits native
+  `Object.assign` for JSX spread attributes, which is what Babel's
+  `useBuiltIns: true` selects, so the two agree. Moot here anyway:
+  `grep -rn "{\.\.\." src/renderer` finds zero JSX spread attributes.
+- **oxc's JSX default runtime is `automatic`, Babel's is classic.**
+  Every component here does `const React = require('react')` and
+  relies on the implicit `React.createElement` pragma, so
+  `runtime: 'classic'` must be set explicitly or the bundle imports
+  `react/jsx-runtime` instead.
+- **Cheap way to prove a specific file made it through the bundle**
+  when the output is minified: grep the bundle for a string literal
+  that is unique to that file (`'icon back '` for `header.js`).
+  Identifier names are mangled; string literals are not.
+- The module count is now **723**, down from the 724 of the US-001
+  probe -- US-002 deleted `lib/telemetry.js` and US-003 removed the
+  `module` import, offset by the `inline-style-prefixer` stub.
+---
+
+## 2026-07-27 - US-005
+
+Convert `src/renderer/main.js` and `src/config.js` to ESM.
+
+**Interpretation:** per execution rule 3 this is a mechanical module
+system refactor with no behavioural delta to assert, and the repo still
+has no unit test runner (US-019). Instead of a test I used two
+empirical before/after probes and kept their output as evidence -- see
+Verification. The "no top-level `require(`" criterion is taken
+literally: the nine lazy `require()` calls inside function bodies in
+`main.js` (the `fn-getter` controller factories and `lazyLoadCast`)
+stay, because hoisted imports would destroy the deliberate laziness
+that `src/renderer/controllers/AGENTS.md` documents.
+
+**Blocker found first: Babel was not transforming ESM at all.**
+The `babel` key in `package.json` only had
+`@babel/plugin-transform-react-jsx`, so `import`/`export` passed
+through to `build/` unchanged. Electron 27 is Node 18 and cannot
+`require()` an ES module, so the first ESM conversion would have
+bricked the app at startup. Added
+`@babel/plugin-transform-modules-commonjs` (7.29.7, exact pin) plus
+`sourceType: "unambiguous"`. This is the enabling change for every
+remaining conversion story, US-006 through US-013.
+
+**Second problem: `bin/` loads `src/config.js` as real ESM.**
+`bin/clean.js`, `bin/package.js` and `bin/open-config.js` require
+`../src/config` from raw source under plain Node, which means Node's
+ESM loader, not Babel. `__dirname` does not exist there, so the naive
+conversion breaks `npm run clean`, `npm run package` and
+`npm run open-config` -- none of which any acceptance criterion covers.
+Pointing them at `build/config.js` is wrong (`ROOT_PATH` would become
+`<repo>/build`, and `bin/package.js` builds `ROOT_PATH/build` from it),
+so `src/config.js` reads `__dirname` through a documented guard with a
+`process.cwd()`-based fallback that only fires on that path.
+
+**What was implemented**
+
+- `package.json`: `sourceType: "unambiguous"` and
+  `@babel/plugin-transform-modules-commonjs` in the `babel` key; the
+  plugin added to devDependencies.
+- `src/config.js`: every value is now both a named `export const` and a
+  member of `export default {...}`. A header comment documents the
+  dual-consumption contract and the three module systems that consume
+  the file. `require('../package.json')` became
+  `import pkg from '../package.json' with { type: 'json' }`,
+  `require('electron')` became a default import (see Learnings),
+  and the `require('fs')` inside `isPortable()` became a top-level
+  import. The `require('@electron/remote')` inside `getPath()` stays --
+  it is process-conditional and unreachable outside a renderer.
+- `src/renderer/main.js`: all 13 top-level requires became imports;
+  `require('./lib/dispatcher').setDispatch(dispatch)` became a named
+  import. Comments record why `State.load()` no longer overlaps the
+  module loads and why the controller factories keep `require()`.
+- `src/AGENTS.md` (new): the module-system contract for this directory.
+
+**Files changed**
+
+- `package.json`, `package-lock.json`
+- `src/config.js`
+- `src/renderer/main.js`
+- `src/AGENTS.md` (new)
+- `specs/prd.json` (US-005 `passes: true`)
+- `progress.log`
+
+**Verification**
+
+- Compiled-config equivalence: dumped `build/config.js` before (git
+  stash) and after. The default export object is **identical** to the
+  old `module.exports` -- same 36 keys, same values, zero diffs -- and
+  every named export is `===` its counterpart in the default object.
+  This is the direct evidence for the 8 `src/main/` consumers and for
+  `src/renderer/webtorrent.js`, all of which read `config.<KEY>`.
+- Raw-source consumers: a CommonJS probe mirroring `bin/package.js`,
+  `bin/clean.js` and `bin/open-config.js` (`require('../src/config')`,
+  `const { CONFIG_PATH } = require('../src/config')`, and
+  `require('../src/main/handlers')`) resolves `ROOT_PATH` to the repo
+  root, `BUILD_PATH` to `<repo>/build`, `STATIC_PATH`, `APP_ICON`,
+  `APP_COPYRIGHT` and `CONFIG_PATH` all correctly.
+- Renderer probe, before vs after, via the documented
+  `web-contents-created` patch on `build/main/index.js`:
+  `PROBE-DOM` is byte-identical --
+  `{"header":463,"torrents":11,"hasState":"object",
+  "hasDispatch":"function","title":"WebTorrent"}` in both runs. The one
+  severity-3 renderer error
+  (`Cannot read properties of undefined (reading 'getCurrentWindow')`,
+  from `electron.remote` at `main.js:154`) is present **before and
+  after**, at the same source line -- pre-existing, not a regression.
+- `npm run build` compiles 64 files; only `config.js` and
+  `renderer/main.js` gained `"use strict"`, confirming `unambiguous`
+  left the other 62 files as scripts.
+- App launches via `npx electron --no-sandbox .`, `init: 757ms`, both
+  windows up.
+- `npx vite build` still exits 0 at **723 modules** -- unchanged from
+  US-004. The lazy `require()` calls inside the now-ESM `main.js` do
+  not break Rolldown, and `config.js` is still in the bundle (its
+  unique `'Cosmos Laundromat (Preview)'` literal appears in
+  `build-vite/assets/main-*.js`).
+- `npm test` (standard + depcheck) passes, exit 0. depcheck sees the
+  new Babel plugin through the `babel` key.
+- No CSS file touched. No `src/main/` file touched.
+- **The six-step manual smoke test was NOT run** -- non-interactive
+  session. The renderer probe covers app launch, the torrent list
+  render and the dispatcher wiring. The steps that carry residual risk
+  are playing a torrent and the create-torrent flow, both of which
+  reach `main.js` only through `dispatch()`, whose handler table is
+  unchanged.
+
+**Learnings for future iterations:**
+
+- **`import { app } from 'electron'` is a trap in `src/config.js`.**
+  Under real Node ESM (the `bin/` path), `electron` resolves to the npm
+  CLI helper, which is CommonJS exporting a *path string*. Node's
+  cjs-module-lexer finds no `app` named export and the module fails to
+  link -- a hard SyntaxError, not an undefined. `import electron from
+  'electron'` + `electron.app` always links, and degrades to the same
+  `undefined` the old `const { app } = require('electron')` produced.
+  Use default imports for `electron` in any file `bin/` can reach.
+- **JSON imports need the attribute.** `import pkg from
+  '../package.json' with { type: 'json' }` parses under Babel 7.29 and
+  under `standard`'s `@babel/eslint-parser` with no extra syntax
+  plugin, compiles to a plain `require('../package.json')`, and is what
+  Node's ESM loader requires. A bare JSON import throws
+  `ERR_IMPORT_ATTRIBUTE_MISSING` in Node 22+.
+- **`node -e` leaks `__dirname` into ESM modules it loads.** A
+  `typeof __dirname !== 'undefined'` guard evaluates true and yields
+  `'.'` under `node -e`, giving nonsense relative paths. Probe module
+  scope from a real `.cjs`/`.mjs` file, never from `-e`, or you will
+  chase a bug that does not exist.
+- **ESM hoisting silently kills load-order perf tricks.** `main.js`
+  deliberately started the async config read before its blocking
+  requires. Imports hoist, so that overlap is gone. Watch for the same
+  pattern in the remaining conversion stories; it is a comment-worthy
+  behaviour change, not a bug.
+- **`sourceType: "unambiguous"` is the safe way to add the commonjs
+  transform mid-migration.** The default (`"module"`) would parse all
+  64 files as modules and prepend `"use strict"` to the 62 that are
+  still CommonJS scripts. Verified: after the change exactly two build
+  outputs contain `"use strict"`.
+- **Prove config equivalence by diffing the compiled object, not by
+  reading the diff.** `git stash`, `npm run build`, dump
+  `require('build/config')` to JSON, restore, dump again, compare in
+  Python. It catches a dropped or mistyped key instantly and it is the
+  only cheap check that covers all 8 main-process consumers at once.
+---
+
+## 2026-07-27 - US-006
+
+Convert `pages/app.js`, `pages/create-torrent-page.js` and
+`pages/preferences-page.js` to ESM.
+
+**Interpretation:** a mechanical module-format conversion with no unit
+test runner in the repo yet (US-019), so per execution rule 3 no
+failing test was written first. The behavioural claims -- the
+preferences page and the create-torrent page still render -- were
+verified empirically against the running app instead; see Verification.
+
+**What was implemented**
+
+- `pages/app.js`: `require` -> `import`, `module.exports = App` ->
+  `export default App`. `colors.*` became named imports
+  (`grey50`, `grey600`, `redA100/200/400`). The lazy
+  `require('material-ui/styles/baseThemes/lightBaseTheme')` inside
+  `getModal()` is now a top-level import.
+- Dropped `fn-getter` from `app.js`. The `Views` and `Modals` maps now
+  hold the components directly instead of `createGetter(() =>
+  require(...))` thunks, and the two call sites lost their `()`.
+  Consequence: all four views and all five modals load at startup
+  rather than on first use. There is no synchronous ESM import, so the
+  old laziness is not expressible; the Vite bundle would include them
+  all regardless. `fn-getter` stays a dependency -- `main.js` still
+  uses it for `Cast`.
+- `pages/create-torrent-page.js` and `pages/preferences-page.js`:
+  imports and `export default` only, plus `colors.grey400` ->
+  `grey400` in preferences.
+- Added `src/renderer/pages/AGENTS.md` documenting the two registries
+  and the material-ui import shapes.
+
+**Files changed**
+
+- `src/renderer/pages/app.js`
+- `src/renderer/pages/create-torrent-page.js`
+- `src/renderer/pages/preferences-page.js`
+- `src/renderer/pages/AGENTS.md` (new)
+- `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `npm test` (standard + depcheck) passes, exit 0.
+- `npm run build` (Babel) compiles 64 files; the three outputs are
+  `"use strict"` ESM-interop modules.
+- `npx vite build` succeeds.
+- App launched via `npx electron --no-sandbox .` with a temporary
+  probe appended to `build/main/index.js` (never to source), reaching
+  `init: 908.813ms`. The probe drove the renderer:
+  `.header` outerHTML present (463 chars); `dispatch('preferences')`
+  rendered the full preferences page (Folders / Download location /
+  Watch for new .torrent files / Playback / External player / Highest
+  Playback Priority / Default torrent app);
+  `dispatch('showCreateTorrent', ['/tmp/wt-probe'])` on a throwaway
+  2-file directory rendered "Create torrent wt-probe / 2 files, 12 B /
+  Path:/tmp/wt-probe/ / SHOW ADVANCED SETTINGS... / CANCEL / CREATE
+  TORRENT". No new renderer errors: the only severity-3 line is the
+  pre-existing `electron.remote` /`getCurrentWindow` failure already
+  recorded under US-005. `npm run build` was re-run afterwards to
+  discard the probe.
+- The six-step manual smoke test was **not** run -- this session is
+  non-interactive. The residual risk is the interactive paths the DOM
+  probe cannot reach: clicking CHANGE on a path selector (opens a real
+  native dialog through `@electron/remote`) and actually completing
+  CREATE TORRENT.
+
+**Learnings for future iterations:**
+
+- **`state.location.go` + `window.dispatch` is enough to render the
+  create-torrent page non-interactively.**
+  `dispatch('showCreateTorrent', ['<dir>'])` with a real directory path
+  walks the folder with `fs` and lands on the page, so a throwaway
+  `/tmp` directory with two files is a complete probe fixture. It only
+  works from the home route -- `showCreateTorrent` bails with an error
+  toast otherwise, so `dispatch('back')` first if the probe navigated
+  away.
+- **Two web contents means two probe runs.** The `did-finish-load`
+  hook fires for the hidden webtorrent window too, where
+  `document.querySelector('.header')` is null and
+  `document.querySelector('.content')` throws. Expect one `no-header`
+  and one script failure per run and do not read them as regressions;
+  guard the probe or just tolerate the noise.
+- **Grep the launch log for `PROBE` specifically.** Filtering with a
+  combined pattern and `head -40` buried all 8 probe lines under ~150
+  lines of `webtorrent: queueing` chatter and looked exactly like "the
+  probe never ran".
+---
+
+## 2026-07-27 - US-007
+
+Convert `pages/player-page.js` and `pages/torrent-list-page.js` to ESM.
+
+**Interpretation:** a mechanical module-format conversion with no
+behaviour change and still no unit test runner in this repo (that
+arrives in US-019), so per execution rule 3 no failing test was written
+first. The behavioural claim -- the torrent list still renders -- was
+verified empirically against the running app; see Verification.
+
+**What was implemented**
+
+- `pages/player-page.js`: `require` -> `import`,
+  `module.exports = class Player` -> `export default class Player`.
+  `require('bitfield').default` became `import BitField from
+  'bitfield'` (the package sets `__esModule` on its CJS build and has a
+  real `export default` on its ESM build, so both loaders resolve the
+  class).
+- `pages/torrent-list-page.js`: same conversion.
+  `require('material-ui/Checkbox').default` and
+  `.../LinearProgress').default` became plain default imports.
+- `pages/app.js` needed no change -- it already imported both without
+  `.default` (added in US-006), and both now really are default
+  exports.
+- `src/renderer/pages/AGENTS.md`: added the rule for third-party
+  `require('pkg').default` -> default import.
+
+**Files changed**
+
+- `src/renderer/pages/player-page.js`
+- `src/renderer/pages/torrent-list-page.js`
+- `src/renderer/pages/AGENTS.md`
+- `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `grep -rn "module\.exports\|require(" src/renderer/pages/` returns no
+  hits in any `.js` file -- the whole page layer is ESM. (The only
+  matches are prose in `AGENTS.md` and one comment in `app.js`.)
+- `npm test` (standard + depcheck) passes, exit 0.
+- `npm run build` (Babel) compiles 64 files.
+- `npx vite build` succeeds; the bundle contains the unique player-page
+  literals `Audio codec unsupported`, `Enter full screen` and
+  `audio-release` (one occurrence each), proving the converted module
+  reached the output.
+- App launched via `npx electron --no-sandbox .` with a temporary probe
+  appended to `build/main/index.js` (never to source), reaching
+  `init: 627.986ms`. The probe read the DOM: `.header` present (463
+  chars, identical to the US-006 anchor) and `.torrent-list` rendered
+  11 `.torrent` rows with real names. The only severity-3 renderer
+  console line is the pre-existing `electron.remote` /
+  `getCurrentWindow` failure recorded under US-005. `npm run build` was
+  re-run afterwards and `build/main/index.js` confirmed clean.
+- The six-step manual smoke test was **not** run -- this session is
+  non-interactive. The player page specifically was NOT exercised at
+  runtime: a second read-only probe over `state.saved.torrents` found
+  no torrent with a downloaded media file, so there was nothing to open
+  without starting a real download. Opening a video, play/pause and
+  seek therefore carry the residual risk for this story; the evidence
+  for `player-page.js` is static (lint, Babel compile, Vite bundle
+  inclusion) plus the fact that `app.js` resolves it as a default
+  export at startup alongside the torrent list.
+
+**Learnings for future iterations:**
+
+- **`state.saved.torrents` is not a probe fixture for playback.** On a
+  fresh-ish install the entries carry no populated `files` array with
+  local media, so `dispatch('playFile', ...)` has nothing to open.
+  Any story whose acceptance criteria mention playback needs either a
+  seeded fixture torrent committed for the purpose or an honest "not
+  verified at runtime" note. Do not invent a download to satisfy it.
+- **Appending a second probe block without rebuilding stacks them.**
+  `build/` is not cleaned between `cat >>` calls, so the previous
+  probe still fires and its output interleaves with the new one. Run
+  `npm run build` between probes, not just at the end.
+- **`.torrent-list` row count is a usable stable anchor** (11 rows
+  here) even though the per-row progress text drifts run to run. Count
+  rows and read `.name`; do not diff the list's outerHTML.
+---
+
+## 2026-07-27 - US-008
+
+Convert all 11 modules in `src/renderer/components/` to ESM.
+
+**Interpretation:** a mechanical module-format conversion with no
+behaviour change, and this repo still has no unit test runner (it
+arrives in US-019), so per execution rule 3 no failing test was written
+first. The behavioural claim -- all five modals still render -- was
+verified empirically against the running app; see Verification.
+
+Note: the execution rules name `NOTES/architecture.md` and
+`NOTES/product.md`, neither of which exists in this repo. The
+equivalents actually present are `tasks/prd-renderer-decoupling.md`
+and `docs/vite-baseline.md`.
+
+**What was implemented**
+
+- All 11 components converted from `require` to `import` and from
+  `module.exports = X` to `export default X`:
+  create-torrent-error-page, delete-all-torrents-modal, header,
+  heading, modal-ok-cancel, open-torrent-address-modal, path-selector,
+  remove-torrent-modal, show-more, unsupported-media-modal,
+  update-available-modal.
+- `require('material-ui/FlatButton').default` /`RaisedButton` /
+  `TextField` became plain default imports, per the existing convention.
+- `const colors = require('material-ui/styles/colors')` in `heading.js`
+  and `path-selector.js` became named imports (`grey100`, `grey50`)
+  with the `colors.` prefix dropped at the two use sites -- that module
+  has no default export.
+- No import site needed updating. `pages/app.js`,
+  `pages/create-torrent-page.js` and `pages/preferences-page.js`
+  already used plain default imports (added in US-006/US-007), and
+  those imports now resolve to real default exports. Nothing outside
+  `src/renderer/pages/` imports a component.
+- Added `src/renderer/components/AGENTS.md`.
+
+**Files changed**
+
+- all 11 files in `src/renderer/components/`
+- `src/renderer/components/AGENTS.md` (new)
+- `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `grep -rn "module\.exports\|require(" src/renderer/components/`
+  returns no hits -- exit 1, the whole component layer is ESM.
+- `npm test` (standard + depcheck) passes, exit 0.
+- `npm run build` (Babel) compiles 64 files.
+- `npx vite build` succeeds and the bundle contains one occurrence each
+  of a literal unique to all five modals: `Enter torrent address or
+  magnet link`, `Are you sure you want to remove all the torrents`, `A
+  new version of WebTorrent is available`, `Sorry, we can't play that
+  file`, `you must select at least one file`.
+- App launched via `npx electron --no-sandbox .` (`init: 664.397ms`)
+  with a temporary probe appended to `build/main/index.js` (never to
+  source). The probe rendered each of the five modals in turn and read
+  `.modal-content` innerText back. All five rendered with correct body
+  copy AND correct ModalOKCancel buttons, which is the evidence that
+  `modal-ok-cancel.js`'s default export resolves:
+  open-torrent-address (CANCEL/OK), remove-torrent (CANCEL/REMOVE
+  DATA), update-available (SKIP THIS RELEASE/SHOW DOWNLOAD PAGE),
+  unsupported-media (CANCEL/INSTALL VLC), delete-all-torrents
+  (CANCEL/REMOVE). `dispatch('exitModal')` then removed `.modal`.
+- A second probe covered the non-modal components: the preferences page
+  rendered 5 `Heading`s (Folders, Playback, Default torrent app,
+  General, Trackers) and 3 `PathSelector`s (three CHANGE buttons), and
+  `dispatch('showCreateTorrent', ['/tmp/wt-probe8'])` rendered "Create
+  torrent wt-probe8 / 2 files, 3 B / Path:/tmp/wt-probe8/ / SHOW
+  ADVANCED SETTINGS... / CANCEL / CREATE TORRENT", the last of which is
+  `ShowMore`. `header` is proven by `.header` being present at load.
+- The only severity-3 renderer console line is the pre-existing
+  `electron.remote` /`getCurrentWindow` failure recorded under US-005,
+  plus a pre-existing Material-UI "provide an id or a name" TextField
+  warning on the preferences page. Neither is new.
+- `npm run build` was re-run afterwards; `build/main/index.js` is clean
+  (0 `PROBE` matches) and no electron process is left running.
+- The six-step manual smoke test was **not** run -- this session is
+  non-interactive. Residual risk: 10 of the 11 components were rendered
+  and read back, but only *rendered*, not clicked. The OK/Cancel
+  handlers (actually removing a torrent, opening VLC, clicking CHANGE
+  to open a native dialog) were not exercised. `create-torrent-error-
+  page.js` was not rendered at all -- see below; its evidence is
+  static.
+
+**Learnings for future iterations:**
+
+- **Rendering an arbitrary modal non-interactively:** there is no
+  dispatch action for most of them, but `update()` runs after every
+  dispatch, so `window.state.modal = { id: '<modal-id>', ...props }`
+  followed by a harmless `window.dispatch('setTitle',
+  window.state.window.title)` renders it. Read
+  `document.querySelector('.modal-content').innerText`. The modal ids
+  are the keys of the `Modals` map in `pages/app.js`. This is the
+  cheapest way to satisfy any "the modals still work" criterion.
+- **`dispatch('showCreateTorrent', [dir])` is asynchronous.** It walks
+  the folder before navigating, so a read immediately afterwards
+  returns the *previous* page and looks like a failure. Wait ~1.5s.
+  Same for `dispatch('preferences')` (~800ms). The US-007 note about
+  stacking probes has a sibling: unwaited reads are the other way to
+  get a convincing but wrong probe result.
+- **`components/create-torrent-error-page.js` is dead code.**
+  `create-torrent-page.js` returns it from its **constructor**
+  (`if (files.length === 0) return (<CreateTorrentErrorPage/>)`), which
+  JS treats as replacing the constructed instance, not as a render.
+  Pointing `showCreateTorrent` at a directory of only dotfiles renders
+  nothing at all. Pre-existing, unrelated to ESM -- do not try to
+  "fix" it inside a conversion story, and do not burn a session trying
+  to render it.
+- **Material-UI colours are the only import shape that changes a use
+  site.** Every other conversion in this layer was header-only, but
+  `require('material-ui/styles/colors')` binds a namespace, so
+  switching to named imports means editing `colors.greyNNN` at each
+  use too. Grep for `colors\.` before assuming a file is header-only.
+---
+
+## 2026-07-27 - US-009
+
+Convert the seven smaller controllers to ESM.
+
+**Interpretation:** a mechanical module-format conversion with no
+behaviour change, and there is still no unit test runner (US-019), so
+per execution rule 3 no failing test was written first. Every
+behavioural claim below was verified empirically against the running
+app.
+
+**What was implemented**
+
+- All 7 controllers converted from `require` to `import` and from
+  `module.exports = class X` to `export default class X`:
+  audio-tracks, folder-watcher, update, prefs, media, subtitles,
+  torrent.
+- `subtitles-controller.js` had four *inner* lazy `require()` calls
+  inside function bodies (`simple-concat`, `languagedetect`,
+  `srt-to-vtt`, `iso-639-1`). Those are now static top-level imports;
+  the "lazy load to keep startup fast" comment went with them.
+- `src/renderer/main.js`: the seven `require('./controllers/...')` calls
+  inside the `createGetter` thunks became static imports at the top of
+  the file. This was forced, not cosmetic -- Babel compiles an ESM
+  controller to `exports.default = class`, so `require()` would have
+  returned the namespace object and `new MediaController(state)` would
+  have thrown. The acceptance criteria forbid a `.default` access, so
+  static imports are the only option. `createGetter` still defers
+  *construction*; only module loading moved to startup.
+  `playback-controller` stays on `require()` -- it is still CommonJS
+  until US-010.
+- Updated the stale laziness bullet in
+  `src/renderer/controllers/AGENTS.md`.
+
+**Files changed**
+
+- 7 files in `src/renderer/controllers/`
+- `src/renderer/main.js`
+- `src/renderer/controllers/AGENTS.md`
+- `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `grep -rn "module\.exports\|require("` over the 7 files returns
+  nothing (exit 1). `torrent-list-controller.js` and
+  `playback-controller.js` are untouched, as scoped.
+- `npm test` (standard + depcheck) passes, exit 0. depcheck stays green
+  because the four hoisted subtitle deps are still imported.
+- `npm run build` (Babel) compiles 64 files.
+- `npx vite build` succeeds, and the externalized-builtin warning count
+  is **149 before and 149 after** the change -- hoisting the four
+  subtitle deps to top level introduced no new Node-builtin edge.
+  Bundle contains one occurrence each of `Select a subtitles file.`,
+  `start folder watcher`, `new version skipped by user` and
+  `Download Complete`, proving subtitles/folder-watcher/update/torrent
+  all reached the bundle.
+- App launched via `npx electron --no-sandbox .` (`init: 726.045ms`)
+  with a temporary probe appended to `build/main/index.js` (never to
+  source) that dispatched one action per controller and read the state
+  back. All ten returned real values, none threw:
+  `toggleAudioTracksMenu` -> `showMenu true`; `toggleSubtitlesMenu` ->
+  `true`; `checkForSubtitles` -> no throw; `mediaMouseMoved` ->
+  timestamp; `mediaStalled` -> `isStalled true`; `updateAvailable
+  '99.0.0'` -> `modal.id === 'update-available-modal'`; `skipVersion` ->
+  `skippedVersions ['99.0.0']`; folder watcher start+stop -> sent;
+  `preferences` -> `location.url() === 'preferences'`;
+  `updatePreferences` -> pref round-tripped.
+- `torrent-controller` got a real end-to-end check rather than a
+  synthetic dispatch: it is constructed inside `setupIpc()` before
+  `console.timeEnd('init')`, so the `init:` line alone proves the
+  default export resolves. On top of that the probe dispatched
+  `addTorrent` with the Sintel magnet link; `torrentParsed` and
+  `torrentMetadata` both fired (the new entry came back with its
+  infoHash and 11 files). The probe then deleted it and the saved
+  torrent count returned to its baseline of 11.
+- The only severity-3 renderer console lines are the two pre-existing
+  ones already recorded under US-005/US-008 (the `electron.remote`
+  `getCurrentWindow` failure and the Material-UI TextField id
+  warning). Neither is new.
+- `npm run build` was re-run afterwards; `build/main/index.js` has 0
+  `PROBE` matches and no dev electron process is left running.
+- The six-step manual smoke test was **not** run -- this session is
+  non-interactive. Residual risk sits on the three areas the criteria
+  call out: preferences changes were exercised only via a no-op
+  round-trip of one pref (the real `setDefaultFileHandler` /`setStartup`
+  IPC branches were not hit), subtitles was exercised via the menu
+  toggle and an early-returning `checkForSubtitles` but no actual .srt
+  file was ever parsed through the hoisted `srt-to-vtt` /
+  `simple-concat` path, and the torrent add stopped at metadata --
+  nothing was downloaded or played.
+
+**Learnings for future iterations:**
+
+- **Converting a controller to ESM forces `main.js` to change too.**
+  The `createGetter(() => { const X = require(...); return new X() })`
+  shape silently breaks the moment the required module becomes ESM:
+  Babel's `exports.default` makes `require()` return the namespace
+  object, so `new X()` throws `X is not a constructor` at first
+  dispatch, not at startup. US-010 has the same coupling for
+  `playback-controller` -- convert the file and its `main.js` thunk in
+  the same commit.
+- **`import` in `main.js` deletes the startup-laziness optimisation,
+  not just the syntax.** Worth stating plainly because the old comment
+  claimed the laziness was deliberate perf work. Measured cost: `init:`
+  went 664ms (US-008) -> 726ms (now), inside run-to-run noise, so the
+  laziness was not buying much. Don't reintroduce inner `require`s to
+  chase it.
+- **Externalized-builtin warning *count* is the cheap regression check
+  for hoisting deps.** `npx vite build 2>&1 | grep -c externalized`
+  before and after a change is a one-line way to prove a newly-static
+  import did not drag a Node builtin into the graph. Much faster than
+  re-reading `docs/vite-baseline.md`.
+- **`window.dispatch` plus a state read is enough evidence for any
+  controller story.** Every controller action is reachable as
+  `window.dispatch('<actionName>', ...)` (the names are the keys of
+  `dispatchHandlers` in `main.js`), and most mutate something readable
+  under `window.state`. Wrap each in try/catch inside one
+  `executeJavaScript` call and return JSON -- a thrown
+  `X is not a constructor` is exactly what a broken default export
+  looks like.
+- **The dev app shares the real saved-state file.** `addTorrent` in a
+  probe writes to the user's actual torrent list, so read the baseline
+  count first, filter by the infoHash you added, `deleteTorrent` it
+  with `deleteData: false`, and assert the count came back. Also: probe
+  output includes the user's torrent names -- don't paste raw probe
+  logs into `progress.log`.
+---
+
+## 2026-07-27 - US-010
+- Converted `src/renderer/controllers/torrent-list-controller.js` and
+  `src/renderer/controllers/playback-controller.js` from CommonJS to
+  ESM (`import` / `export default class`). This completes the
+  controller layer: `grep -rn "module.exports\|require(" 
+  src/renderer/controllers/` now returns nothing.
+- `src/renderer/main.js`: replaced the last lazy
+  `require('./controllers/playback-controller')` inside the `createGetter`
+  thunk with a hoisted static `import PlaybackController from
+  './controllers/playback-controller'`, so the thunk is now the same
+  one-liner shape as the other eight. No `.default` access anywhere.
+- Files changed: `src/renderer/controllers/torrent-list-controller.js`,
+  `src/renderer/controllers/playback-controller.js`,
+  `src/renderer/main.js`, `src/renderer/controllers/AGENTS.md`,
+  `specs/prd.json`, `progress.log`.
+- **Tests:** no test was written. There is still no unit test runner for
+  renderer modules (that is US-019), and this is a pure
+  module-format change with no behaviour to assert. Evidence came from
+  the launch check plus a targeted runtime probe instead (below).
+- `npm test` (standard + depcheck) passes. `npm run build` compiles all
+  64 files.
+- **Verification:** launched via `npx electron --no-sandbox .` after
+  `npm run build`. App reached `'Main Window'` and `init: 745ms`, and a
+  `did-finish-load` probe reported
+  `{hasHeader: true, selectionChanged: true, restored: true,
+  previewSet: 0.5, previewCleared: true}` -- i.e. both converted
+  controllers loaded, constructed, and handled real dispatches.
+- **Smoke test NOT run.** The six-step manual smoke test needs an
+  interactive session. The acceptance criterion calls out the torrent
+  row context menu, torrent delete, and video playback start/stop;
+  those three specifically were not exercised, because each is either
+  blocking (native menu) or destructive (delete) or needs real media.
+  The residual risk is concentrated in
+  `TorrentListController.openTorrentContextMenu`, which is the only
+  path in the two files that touches `remote.Menu` -- and it is
+  untouched apart from the import line.
+- **Learnings for future iterations:**
+  - **`electron.remote.getCurrentWindow()` in `src/renderer/main.js`
+    (lines 145, 406, 418) already throws at runtime on master.** It
+    logs `Uncaught (in promise) TypeError: Cannot read properties of
+    undefined (reading 'getCurrentWindow')` -- `electron.remote` was
+    removed from Electron; the working module is `@electron/remote`,
+    which the controllers import correctly. This is PRE-EXISTING (I
+    confirmed it by `git stash`-ing my diff, rebuilding, and relaunching
+    the baseline, which logs the same error). Do not mistake it for
+    breakage introduced by an ESM conversion, and do not fix it here --
+    it belongs to the Phase 2 window/shim work (US-024).
+  - When probing the renderer, remember **torrent selection lives on
+    `state.selectedInfoHash`, not on a `selected` flag on the torrent
+    object**. Reading `torrent.selected` returns `undefined` and makes a
+    working dispatch look like a no-op.
+---
+
+## 2026-07-27 - US-011
+
+Convert the nine pure `lib/` utility modules to ESM.
+
+**Interpretation:** per execution rule 3 this is a mechanical module
+system refactor with no behaviour change, and the repo still has no
+unit test runner (that arrives in US-019), so no new failing test was
+written first. Instead the conversion was verified empirically: a Node
+probe over the Babel output, the existing `tape` integration test
+`test/test-select-poster.js` (which exercises `torrent-poster.js` and
+`media-extensions.js` end to end), and a renderer-console probe against
+the running app.
+
+**What was implemented**
+
+- Converted to named exports: `time.js`, `errors.js`, `dispatcher.js`,
+  `playlist.js`, `torrent-summary.js`, `torrent-player.js`, `sound.js`.
+- Converted to `export default`: `media-extensions.js`,
+  `torrent-poster.js`.
+- Updated every call site. The modules that were consumed
+  namespace-style (`TorrentSummary.getByKey(...)`, `sound.play(...)`,
+  `Playlist.hasNext(...)`, `TorrentPlayer.isPlayable(...)`) moved from
+  default imports to `import * as X from ...`. Call sites already using
+  named imports (`errors`, `dispatcher`, `time`) needed no change.
+- Fixed the two CommonJS consumers of the now-default `torrent-poster`
+  export: `src/renderer/webtorrent.js` and `test/test-select-poster.js`
+  now say `require(...).default`.
+
+**Files changed**
+
+- `src/renderer/lib/`: `time.js`, `media-extensions.js`, `errors.js`,
+  `dispatcher.js`, `playlist.js`, `torrent-summary.js`,
+  `torrent-player.js`, `sound.js`, `torrent-poster.js`
+- `src/renderer/main.js`, `src/renderer/webtorrent.js`
+- `src/renderer/controllers/`: `media-controller.js`,
+  `torrent-list-controller.js`, `torrent-controller.js`,
+  `playback-controller.js`
+- `src/renderer/pages/`: `torrent-list-page.js`, `player-page.js`
+- `test/test-select-poster.js`
+- `src/AGENTS.md`, `progress.log`, `specs/prd.json`
+
+**Verification**
+
+- Grep confirmed none of the nine files is required by `src/main/`.
+  The only `src/main/` -> renderer edge is
+  `src/main/index.js:16` requiring `../renderer/lib/state`, which
+  belongs to US-012.
+- `npm test` (standard + depcheck) passes, exit 0.
+- `npm run build` (Babel) compiles 64 files.
+- Node probe over `build/renderer/lib/*`: every module's export keys are
+  as intended, `calculateEta(100, 10)` -> `'  10 s remaining'`,
+  `isVideo/isAudio/isMagnetLink` correct, `getPosterPath` correct, and
+  `playlist.hasNext/getNextIndex` correctly skips a non-playable file
+  (`a.mp4`, `b.txt`, `c.mp3` from index 0 -> next index 2).
+- `node test/test-select-poster.js` passes (`ok 1`), proving the
+  `export default` on `torrent-poster.js` plus its `.default` call
+  sites work against a real torrent.
+- App launches: `init: 762ms`, both windows up.
+- Renderer-console probe against the running app returned
+  `sound-keys=init,play | sound-play-ok |
+  playlist-keys=getCurrentLocalURL,getNextIndex,getPreviousIndex,hasNext,hasPrevious
+  | poster=<real Posters/*.jpg path>`, and the torrent list page
+  rendered 11 torrents (so `torrent-list-page.js` consumed
+  `TorrentSummary`, `TorrentPlayer` and `calculateEta` through the new
+  namespace imports). The only severity-3 renderer error is the
+  pre-existing `electron.remote ... getCurrentWindow` one.
+- **The six-step manual smoke test was NOT run** -- this session is
+  non-interactive. The residual risk is concentrated in the sound and
+  poster criteria: `sound.play` was exercised but the preference gate
+  means no audio was actually confirmed audible, and poster
+  *generation* (as opposed to poster *path resolution*) was only
+  covered by the tape test, not by adding a fresh torrent in the UI.
+
+**Learnings for future iterations:**
+
+- **Babel's CJS output keeps named exports as plain properties**, so a
+  still-CommonJS consumer doing `const { CastingError } =
+  require('./errors')` or `const TS = require('./torrent-summary')`
+  keeps working after those files convert to named exports. Only
+  `export default` breaks CommonJS consumers. That is why US-011 could
+  touch `errors.js` and `torrent-summary.js` without touching
+  `cast.js` (US-013) or `migrations.js` (US-012), but had to patch the
+  two `torrent-poster` requires.
+- **`import * as X` is the right conversion for the
+  `module.exports = { ... }` utility modules**, not a default export
+  object. Every call site already used them namespace-style, and the
+  acceptance criteria ask for named exports; keeping a default too
+  would create two shapes that drift.
+- **Renderer-side module probing:** `nodeIntegration` is on, so
+  `wc.executeJavaScript` can `require()` a build artifact directly.
+  Interpolate the absolute path from the main process
+  (`${JSON.stringify(__dirname + '/../renderer/lib')}`) -- deriving it
+  from `window.location.pathname` fails, because the main window is
+  served from `static/main.html`, not from `build/renderer/`.
+- **Appending a probe to `build/main/index.js` must be redone after
+  every `npm run build`**, and a `python3` string replace against that
+  file is fragile (the heredoc's backslashes do not survive). Rebuild
+  and re-append the whole block instead of patching it in place.
+- `test/test-select-poster.js` runs standalone in ~15s with network
+  (`node test/test-select-poster.js`) and is the only existing
+  automated coverage of any renderer `lib/` module. Worth re-running
+  whenever `torrent-poster.js` or `media-extensions.js` changes.
+---
+
+## 2026-07-27 - US-012
+
+Convert `lib/state.js` and `lib/migrations.js` to ESM and fix the
+main-process require.
+
+**Interpretation:** a syntax conversion with no unit test runner in the
+repo yet (US-019), so per execution rule 3 no failing test was written
+first. Instead the behavioural acceptance criteria were checked with
+Node probes against the Babel build plus four real Electron launches --
+details under Verification.
+
+**What was implemented**
+
+- `src/renderer/lib/migrations.js`: `module.exports = { run }` ->
+  `export function run`. All four lazy/conditional requires hoisted to
+  top-level imports: `electron`'s `ipcRenderer` (was line 46),
+  `fs.copyFileSync` + `path` (was 52), `./torrent-summary` (was 120),
+  and `fs.copyFileSync` + `rimraf` (was 173). `rimraf.sync` became
+  `import { sync as rimrafSync }`, which exists under both the CJS and
+  the ESM build of rimraf 5.
+- `src/renderer/lib/state.js`: converted to ESM with
+  `export default State`. Hoisted `debounce` (was line 18),
+  `location-history` (28), `fs` + `parse-torrent` (121) and
+  `./migrations` (237). The `process.type === 'renderer'` guard around
+  `migrations.run(state)` stays -- only the import hoisted -- with a
+  comment at that line explaining why the call is still conditional.
+  The self-replacing `State.save` memoization is unchanged.
+- `src/main/index.js:16`: now
+  `require('../renderer/lib/state').default`, with a comment. The file
+  otherwise stays CommonJS.
+- `src/AGENTS.md`: recorded `state.js` as the one renderer module the
+  main process consumes, and the dual-process constraint that follows.
+
+**Files changed**
+
+- `src/renderer/lib/state.js`, `src/renderer/lib/migrations.js`
+- `src/main/index.js`
+- `src/AGENTS.md`, `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `npm test` (standard + depcheck) passes, exit 0.
+  `npm run build` compiles 64 files.
+- Node probe: `require('build/renderer/lib/state').default` is an
+  EventEmitter with `getDefaultPlayState/load/save/saveImmediate`;
+  `build/renderer/lib/migrations` exports exactly `run`.
+- Migrations, pre-0.7.0 synthetic state: version 1 -> `0.24.0`,
+  `posterURL` -> `posterFileName`, `defaultPlayFileIndex` dropped,
+  `playInVlc` -> `openExternalPlayer`, `soundNotifications` and
+  `externalPlayerPath` defaults applied.
+- Migrations, targeted probes for each hoisted require (run under
+  `NODE_ENV=test` so `CONFIG_PATH` is `/tmp/WebTorrentTest`):
+  `migrate_0_12_0` cleared the missing `path` via
+  `TorrentSummary.getFileOrFolder`; `migrate_0_17_2` rewrote the WIRED
+  CD hash/name/magnetURI, `rimrafSync`'d the old torrent file and
+  `copyFileSync`'d the new one.
+- `state.js` on a clean `/tmp/WebTorrentTest`: `setupStateSaved()` built
+  5 default torrents with real parsed infoHashes and magnet URIs
+  (hoisted `fs` + `parse-torrent`), `state.location.url` is a function
+  (hoisted `location-history`), `saveImmediate` wrote the file and
+  emitted `stateSaved`, and two back-to-back `State.save()` calls
+  collapsed into one write (hoisted `debounce`). A second `load()`
+  read the marker back.
+- **Clean-profile launch** (`rm -rf /tmp/WebTorrentTest`,
+  `NODE_ENV=test npx electron .`): "Missing config file: Creating new
+  one", renderer state came up with version `0.24.0` and the 5 default
+  torrents.
+- **Quit-and-relaunch persistence (smoke step 6)**: launch 2 set
+  `torrents[0].displayName = 'PERSIST-CHECK-42'` in the renderer and
+  called `State.saveImmediate`; after quit, `config.json` on disk held
+  the marker; launch 3 read it back into the renderer's `window.state`
+  and logged no "Missing config file".
+- **installHandlers / hoisted `ipcRenderer`**: with the test profile
+  forced to `version: '0.20.0'` and `isFileHandler: true`, launch 4
+  logged `PROBE-FILE-HANDLER: true` in the main process, so the
+  top-level `import { ipcRenderer } from 'electron'` sends correctly
+  from the renderer. The receiving side was patched to log-only for
+  this probe so it would not actually register the dev Electron binary
+  as the system magnet handler.
+- Final launch on the user's real profile after `npm run build`
+  restored the artifacts: `init: 527.945ms`, both windows up. The only
+  severity-3 renderer error is the pre-existing `electron.remote ...
+  getCurrentWindow` one.
+- **The six-step manual smoke test was NOT run** -- this session is
+  non-interactive. Step 6 (quit and relaunch, list state persisted) was
+  verified empirically as described above; the residual risk is in the
+  steps that need a human at the UI (adding a torrent, playing media),
+  none of which this diff touches.
+
+**Learnings for future iterations:**
+
+- **`process.type === 'renderer'` guards survive the ESM conversion,
+  but their perf rationale does not.** The old comment claimed the lazy
+  `require('./migrations')` saved work in the main process; ESM has no
+  conditional import, so the module now loads in both processes. That
+  is safe here only because nothing in `migrations.js`'s import graph
+  touches a renderer-only global at module scope -- `electron` resolves
+  in the main process too, `ipcRenderer` is just `undefined` there, and
+  nothing reads it until `installHandlers` runs. Check that property
+  before hoisting any other guarded require.
+- **`rimraf` 5 exposes `sync` under both its CJS and its ESM build**
+  (verify with `node --input-type=module -e "import * as r from 'x'"`
+  alongside a plain `require`), so
+  `import { sync as rimrafSync } from 'rimraf'` is safe now and after
+  Vite starts resolving the `import` condition. Do the same two-way
+  check for any other package whose `exports` map splits CJS/ESM.
+- **`NODE_ENV=test` gives you a disposable profile for free.**
+  `src/config.js` makes `IS_TEST` imply `IS_PORTABLE`, which points
+  `CONFIG_PATH` at `/tmp/WebTorrentTest`. `rm -rf` it and relaunch to
+  test any first-run or migration path without touching the user's real
+  config. Its only other effects are cosmetic (`cast.js:40`,
+  `player-page.js:927`, `main/index.js:203`).
+- **Probing a real quit-and-relaunch cycle** is three launches: write a
+  marker from the renderer and `saveImmediate`, quit, read `config.json`
+  off disk, relaunch and read `window.state` back. Editing
+  `build/main/index.js`'s `did-finish-load` hook with a `setTimeout` of
+  ~4s is enough for `window.state` to exist; the hidden webtorrent
+  window fires the same hook and reports `no-state` -- that is expected,
+  not a failure.
+- **Never let a probe call `handlers.install()`.** On darwin it runs
+  `app.setAsDefaultProtocolClient('magnet')`, which would register the
+  dev Electron binary as the user's system magnet handler. Patch the
+  `ipcMain.on('setDefaultFileHandler')` listener in `build/main/ipc.js`
+  to log and return instead -- that still proves the renderer sent the
+  message, which is the part under test.
+---
+
+## 2026-07-27 - US-013 - Convert lib/cast.js to ESM
+
+**Testing note (execution rule 3)**
+
+Still no unit test runner in the repo (US-019), so no failing test was
+written first. The acceptance criteria were checked with Node probes
+against the Babel build plus six real Electron launches, including two
+baseline launches on stashed changes for a before/after startup
+comparison. Details under Verification.
+
+**What was implemented**
+
+- `src/renderer/lib/cast.js`: the `module.exports = { ... }` block at
+  the top became nine `export function` declarations with exactly the
+  same names. `require('http')`, `require('../../config')` and
+  `require('./errors')` became `import` statements. The three
+  casting-library `require()` calls inside `init()` were deliberately
+  left as `require()` -- see below -- with a comment recording why and
+  what was measured.
+- `src/renderer/controllers/playback-controller.js:4`:
+  `import Cast from '../lib/cast'` -> `import * as Cast`, since the
+  module now has named exports and no default.
+- `src/renderer/main.js`: `Cast = require('./lib/cast')` inside
+  `lazyLoadCast()` became a top-level `import * as Cast`, and the
+  `let Cast = null` sentinel became a `castInitialized` boolean.
+  `lazyLoadCast()` still defers `Cast.init()` -- only the module load
+  moved. This is free now that the heavy libraries stay lazy: the
+  module was already in the static graph via `playback-controller.js`.
+
+**The one thing that did not convert, and why**
+
+`airplayer`, `chromecasts` and `dlnacasts` stay `require()` calls
+inside `init()`. Both ESM-native alternatives were fully implemented
+and then reverted on evidence:
+
+1. Static imports cost **3.85 seconds** of blocking module load in the
+   Electron renderer, taking startup from `init: 665ms` to
+   `init: 4.5s`.
+2. `await Promise.all([import('airplayer'), ...])` with an async
+   `init()` works in Node but **never settles in the Electron
+   renderer** -- no resolve, no reject, no error, control never returns
+   to the caller, over a 60s launch.
+
+These are not top-level requires, so the story's grep criterion is
+still met, and `cast.js` is the module the PRD already designates a
+deferred casualty exempt from the Vite bundle.
+
+**Files changed**
+
+- `src/renderer/lib/cast.js`, `src/renderer/main.js`,
+  `src/renderer/controllers/playback-controller.js`
+- `docs/vite-baseline.md`, `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `npm test` (standard + depcheck) passes, exit 0. `npm run build`
+  compiles 64 files.
+- Grep over `src/renderer/**/*.js`: 0 `module.exports`, 0 top-level
+  `require(`. The only `require(` outside `webtorrent.js` are the three
+  in `cast.js:47-49` and mentions in comments. Recorded in
+  `docs/vite-baseline.md`.
+- Exports are byte-identical in shape to the old `module.exports`:
+  `init,pause,play,seek,selectDevice,setRate,setVolume,stop,toggleMenu`,
+  all functions, no `default`.
+- Module load is 19ms, so the heavy stack is confirmed still lazy;
+  `init()` then takes 118ms in Node to load and construct it.
+- **Discovery really runs**: monkeypatching `dgram.Socket.prototype.send`
+  before loading cast shows the queries going out --
+  `{"239.255.255.250:1900":2,"224.0.0.251:5353":2}`, i.e. SSDP for DLNA
+  and mDNS for Chromecast + AirPlay. Zero devices were found because
+  there is no cast hardware on this network; the packets are the
+  evidence, not the device count.
+- **The `http` import works**: drove `chromecastPlayer().open()` with a
+  fake device and a real base64 WebVTT track. `serveSubtitles` started
+  the server, `device.play` received
+  `subtitles: ["http://127.0.0.1:<port>/"]` with `autoSubtitles: true`,
+  and fetching that URL returned `content-type: text/vtt;charset=utf-8`
+  with a byte-exact body. `state.playing.location` became
+  `'chromecast'` with no errors pushed.
+- **Test-mode path**: under `NODE_ENV=test`, `init()` installs the three
+  `testPlayer`s synchronously; `toggleMenu('chromecast')` builds the
+  menu, `selectDevice(1)` sets `location='chromecast-pending'` and
+  `castName='chromecast-2'`, `stop()` returns to `'local'`, and an
+  unknown location throws a real `CastingError` (`instanceof` holds
+  across the module boundary).
+- **Startup**: `init: 739ms` against a stash-measured baseline of
+  `init: 665ms` -- within noise, versus `init: 4.5s` for the static
+  import version.
+- **Real renderer**: with build artifacts patched to log, `Cast.init()`
+  completes in the Electron renderer, all three libraries load, and
+  `state.devices` ends up as `chromecast,dlna,airplay`. No severity-3
+  renderer errors other than the pre-existing `getCurrentWindow` one.
+- **The six-step manual smoke test was NOT run** -- non-interactive
+  session. Steps needing a human at the UI (adding a torrent, playing
+  media, clicking a cast button) were not exercised. What this diff
+  touches was verified empirically as above.
+
+**Pre-existing bug found, not fixed (out of scope)**
+
+`delayedInit()` never runs. `main.js` calls
+`electron.remote.getCurrentWindow().isVisible()` to decide whether to
+play the startup sound, but `electron.remote` was removed in Electron
+14, so it throws and aborts the rest of `onState` -- including the
+`window.setTimeout(delayedInit, ...)` two lines below. So
+`checkDownloadPath()`, the visibility listener and `lazyLoadCast()` are
+all dead at startup today, and cast discovery never starts on its own.
+Written up in `docs/vite-baseline.md`; it predates this story and
+belongs to whoever owns the `@electron/remote` migration.
+
+**Learnings for future iterations:**
+
+- **Dynamic `import()` never settles in this Electron renderer.** The
+  renderer loads `build/renderer/main.js` from a classic `<script>` in
+  a `file://` document, so `import()` is Chromium's loader, not
+  Node's, and a bare specifier just hangs -- silently, with no
+  rejection and no console error. It is therefore NOT an available
+  substitute for a lazy `require()` anywhere in the renderer. Do not
+  reach for it in Phase 2.
+- **"Lazy require has no ESM equivalent, so hoist it" has a limit.**
+  That rule held for US-011/US-012 because those modules were cheap.
+  Measure before applying it: the casting stack costs 3.85s. Timestamp
+  either side of the `require` in `build/renderer/main.js` with
+  `performance.now()` and read it back through the console-message
+  hook.
+- **Always A/B startup against a stashed baseline.** `git stash &&
+  npm run build && npx electron .` gives a real number to compare
+  against; without it the 4.5s regression would have read as "the app
+  launches fine".
+- **The renderer's `init:` line you see in the log is from
+  `webtorrent.js`, the hidden window** -- not from `main.js`, whose
+  `console.timeEnd('init')` is unreachable because of the
+  `getCurrentWindow` bug above. Capture `sourceId` in the
+  console-message hook (`a.slice(1, 5)`, not `slice(1, 4)`) or you will
+  attribute renderer messages to the wrong file, as happened here.
+- **A missing log line is evidence too.** Working backwards from "my
+  probe didn't print" is what surfaced the dead `delayedInit()`. Probe
+  the caller before concluding the callee is broken.
+- **Proving a network scan runs without cast hardware**: monkeypatch
+  `dgram.Socket.prototype.send` before requiring the module and count
+  packets by destination. SSDP is `239.255.255.250:1900`, mDNS is
+  `224.0.0.251:5353`. A device count of 0 proves nothing either way.
+---
+
+## 2026-07-27 - US-014
+
+Resolve Node builtins and Electron externals in the Vite build.
+
+**Interpretation:** a build-configuration story, so per execution rule 3
+no failing test was written first -- there is no unit test runner until
+US-019 and nothing behavioural to assert. The gate is the build's own
+diagnostics plus targeted empirical probes, which is what the
+acceptance criteria ask for. Two criteria ("confirmed by grep") are
+findings to record, not code to write.
+
+**What was implemented**
+
+`vite.config.js`:
+
+- `path` aliased to `path-browserify` 1.0.1 (new devDependency, exact
+  pin), in both the `path` and `node:path` spellings. Bundled, not
+  externalized, per FR-7, so its 13 first-party call sites need no
+  change and no Phase 2 shim.
+- `build.rollupOptions.output.format = 'cjs'`. This is the load-bearing
+  change: without it the externals below cannot be emitted as
+  `require()` and would not resolve under Electron.
+- `rollupOptions.external` built from two deliberately separate lists.
+  `firstPartyExternals`: `fs`, `http`, `events`, `electron`,
+  `@electron/remote`. `transitiveExternals` (dependency-only, no
+  renderer importer): `assert`, `constants`, `dgram`, `fs/promises`,
+  `https`, `net`, `os`, `querystring`, `stream`, `timers`, `tls`,
+  `url`, `util`, `worker_threads`. Both spellings of each builtin.
+- `require.resolve` via `createRequire(import.meta.url)` so depcheck
+  can see the `path-browserify` usage.
+
+`events` is not named in the acceptance criteria but is imported by
+`src/renderer/lib/state.js`, and a stub there throws on the first state
+event, so it got the same treatment as `fs`. The transitive list is
+likewise beyond the letter of the criteria: without it the config-save
+and cast-discovery paths would be wired to throwing stubs the moment
+US-015/US-016 make the bundle the one that actually loads. The two
+lists are kept separate so the first-party one stays a faithful
+inventory of Phase 2 shim scope.
+
+`docs/vite-baseline.md`: new section documenting the resolution
+strategy per builtin, including the two grep findings the criteria ask
+to record, and the Electron probe output.
+
+**Files changed**
+
+- `vite.config.js`
+- `package.json`, `package-lock.json` (path-browserify devDependency)
+- `docs/vite-baseline.md`
+- `src/AGENTS.md` (new "Node builtins in `src/renderer/`" section)
+- `progress.log`, `specs/prd.json`
+
+**Verification**
+
+- `npx vite build`: exit 0, 713 modules, **0 unresolved imports** and
+  **0 `has been externalized for browser compatibility` warnings**
+  (was 113). Remaining stderr is a direct-`eval` warning from
+  `@protobufjs/inquire` and the >500 kB chunk-size notice, both
+  pre-existing and neither a resolution failure.
+- Output bundle inspected, not just its exit code: no `import`/`export`
+  statements, 19 distinct `require("...")` specifiers covering every
+  external, **no `require("path")`**, and the `path-browserify`-unique
+  literal `Path must be a string` present -- so `path` is bundled and
+  everything else is externalized, as intended.
+- `crypto`: grep over `src/` returns one hit,
+  `src/renderer/webtorrent.js:5`, which FR-4 exempts from the Vite
+  build. No external entry, confirmed by its absence from the warning
+  stream. `os`: grep returns zero hits in `src/`; the only renderer
+  importer was the telemetry module US-002 deleted.
+- Electron resolution verified empirically, since section 5 of the
+  baseline is precisely the finding that a green build proves nothing
+  here. A temporary `web-contents-created` hook in
+  `build/main/index.js` evaluated `require('electron')` in both live
+  renderers: `hasIpcRenderer: "object"`, `hasRemote: "object"`,
+  `fsExists: "function"`. Probe patched build artifacts only and was
+  removed by the following `npm run build`.
+- `npm test` (standard + depcheck): exit 0.
+- `npm run build` (Babel, FR-2): 64 files, still green.
+- Launch check: `init: 743ms`, both windows, no `getCurrentWindow`
+  error this run.
+- **The six-step manual smoke test was NOT run** -- non-interactive
+  session. It also would not exercise this change yet: the app still
+  loads the Babel build from `static/main.html`, and nothing points at
+  the Vite bundle until US-015/US-016. The risk this story carries is
+  therefore deferred to US-017, and it is concentrated in the
+  externals that no probe here exercised -- the config-persistence
+  stack under `lib/state.js` and the casting stack under `lib/cast.js`.
+
+**Learnings for future iterations:**
+
+- **`output.format: 'cjs'` is what makes an external real.** Marking a
+  module external only records "do not bundle this"; something has to
+  emit a working `require()` at the other end. Under the default ESM
+  output the same config produces `import` statements a classic
+  `<script>` renderer cannot execute. Verify by grepping the bundle,
+  not by reading the config.
+- **Count the externalization warnings, every time.** Going from 113 to
+  0 was the whole story, and the exit code was 0 both before and after.
+- **A separate list beats a `builtinModules` catch-all.** Externalizing
+  every builtin wholesale would work and would also erase the
+  distinction between "the renderer needs this" and "a dependency needs
+  this" -- which is exactly the inventory Phase 2 is scoped from. It
+  would also absorb a new dependency's builtin silently.
+- **Acceptance criteria can under-specify a build fix.** `events` and
+  the 14 dependency-only builtins were not listed but would have been
+  live throwing stubs the moment the bundle is actually loaded. When a
+  criterion enumerates examples of a class, measure the whole class.
+- **Probe Electron resolution in the renderer, never in Node.** In a
+  plain Node process `require('electron')` returns the CLI helper's
+  path string; inside a renderer with `nodeIntegration: true` the same
+  call returns the runtime API. Only the second one answers the
+  question, and `wc.executeJavaScript` from a `web-contents-created`
+  hook is how to ask it non-interactively.
+---
+
+## 2026-07-27 - US-015
+
+Serve the renderer HTML through the Vite bundle.
+
+**Interpretation:** no failing test was written first. This repo still
+has no unit test runner (it arrives in US-019) and the change is one
+markup line plus build config; the meaningful verification is
+empirical, so the evidence below is a launch check plus a DOM/CSS probe
+of the running renderer.
+
+**What was implemented**
+
+- `static/main.html` now loads the Vite output with a plain
+  `<script src="../build-vite/renderer/main.js">` instead of the inline
+  `require('../build/renderer/main.js')`. The tag stays in the same
+  position, at the end of `<body>` after `<div id='body'>`, so
+  `document.getElementById('body')` is present when the bundle runs.
+- `vite.config.js` pins the entry filename to `renderer/main.js`
+  (`output.entryFileNames`). The default `assets/main-[hash].js`
+  changes on every build and cannot be referenced from a static
+  `<script src>`. Chunks and assets keep their hashes -- nothing links
+  to them by name.
+- `vite.config.js` adds `define: { 'process.env': 'globalThis.process.env' }`.
+  This was the one real bug the story surfaced: see below.
+- `static/webtorrent.html` and `static/main.css` are untouched
+  (`git diff --stat` lists only `static/main.html` and
+  `vite.config.js`).
+
+**Files changed**
+
+- `static/main.html`, `vite.config.js`, `src/AGENTS.md`,
+  `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `npx vite build`: 0 `has been externalized` warnings, 0 lines
+  matching `^import|^export` in the output, and the emitted `require()`
+  set is exactly the configured external list.
+- Launch check with `npx electron --no-sandbox .`: the log shows
+  `'Main Window'` and the main window's `init:` line. The only
+  severity-3 renderer error is the pre-existing
+  `Cannot read properties of undefined (reading 'getCurrentWindow')`
+  from `electron.remote`, which is on master.
+- DOM/CSS probe via `wc.executeJavaScript` after load:
+  `{"url":".../static/main.html","hasHeader":true,"bodyLen":29047,
+  "css":"rgb(40, 40, 40)"}`. `.header` present and a 29 kB body means
+  the React tree rendered from the Vite bundle;
+  `getComputedStyle(document.body).backgroundColor` matching
+  `main.css:13` (`background: rgb(40, 40, 40)`) is the evidence that
+  `main.css` is still applied. `main.html` has no inline background, so
+  the value can only come from the stylesheet.
+- `npm test` (standard + depcheck) passes.
+- **Smoke test not run.** This session is non-interactive. The launch
+  check and the DOM probe cover "the window opens and renders from the
+  Vite bundle"; what they do not cover is interaction -- adding a
+  torrent, playback, the menus. Since this is the first commit where
+  anything actually executes the Vite output, that is where the
+  residual risk sits, and US-017 is the verification pass that owns it.
+
+**Learnings for future iterations**
+
+- **Vite rewrites bare `process.env` to `{}`.** It is a browser-first
+  default and it is silent: `application-config-path` compiled to
+  `path.join({}["HOME"], ...)`, so the very first `path.join` of
+  startup threw `Path must be a string. Received undefined` and the
+  whole renderer died before rendering anything. The fix is
+  `define: { 'process.env': 'globalThis.process.env' }` -- going
+  through `globalThis` hands back the real object without re-triggering
+  the substitution. `process.env.NODE_ENV` is a longer key and still
+  wins, so mode-dependent library code is unaffected. Expect the same
+  class of silent substitution for any other Node-ism Vite assumes is
+  absent in a browser.
+- **Getting a stack trace out of the renderer.** The `console-message`
+  hook gives a message and no stack. To get the stack, temporarily add
+  an inline `<script>window.addEventListener('error', e =>
+  console.log('STACK:' + e.error.stack))</script>` to `static/main.html`
+  *before* the bundle tag, and build with
+  `npx vite build --minify false` so the frames name real functions.
+  Terminal output mangles the escaped `\n`; pipe through
+  `tr '\\n' '\n'` to read it.
+- **Probing the DOM needs a delay after `did-finish-load`.** The event
+  fires before the React tree exists; a `setTimeout(..., 4000)` inside
+  the handler is what makes the probe meaningful. Both windows fire it,
+  so key the assertion on `location.pathname` -- the hidden
+  `webtorrent.html` legitimately reports a 53-char body and no
+  `.header`.
+- **Background colour is a usable CSS-applied assertion** here because
+  `main.html` sets no inline background: a computed
+  `rgb(40, 40, 40)` can only have come from `main.css`. Check the
+  stylesheet actually declares the value you assert on before treating
+  a match as proof -- `#282828` appears in `webtorrent.html`'s inline
+  style too, and that coincidence would have made the check vacuous.
+---
+
+## 2026-07-27 - US-016
+
+Wire the npm scripts to the Vite build.
+
+**Interpretation:** no failing test was written first. Per execution
+rule 3 this is a pure build-configuration story, and the repo still has
+no unit test runner (US-019 owns that). The meaningful verification is
+empirical, so the evidence below is a from-scratch build, a launch
+check, a real `electron-packager` run with an asar inventory, and a
+timed `npm run watch` observation.
+
+**What was implemented**
+
+- `npm run build` is now
+  `npm run build:main && npm run build:renderer`.
+  - `build:main` is the old `babel src --out-dir build` plus an
+    `--ignore` list covering the four paths Vite now owns exclusively:
+    `src/renderer/main.js`, `components/**`, `controllers/**`,
+    `pages/**`. Babel still compiles `src/config.js`, `src/main/**`,
+    `src/renderer/webtorrent.js` and `src/renderer/lib/**` (38 files),
+    which is exactly the set something still `require()`s: `index.js`
+    -> `build/main`, `static/webtorrent.html` -> `build/renderer/
+    webtorrent.js`, and `src/main/index.js` -> `../renderer/lib/state`.
+  - `build:renderer` is `vite build`.
+- `npm start` is unchanged (`npm run build && electron ...`); it now
+  picks up the Vite output because `build` does.
+- `npm run watch` gains `--ignore build-vite/`. Without it nodemon --
+  which already watches `--ext js,css` -- would see the freshly emitted
+  `build-vite/renderer/main.js` and restart itself forever. `build/`
+  was already ignored for the same reason.
+- `npm test` gains `build-vite` to `--ignore-dirs`, matching `build`
+  and `dist`. depcheck passed either way; this just keeps it from
+  parsing a 1.4 MB bundle.
+- `bin/package.js` nukes `build-vite/` alongside `build/` and `dist/`
+  before building, via a new `BUILD_VITE_PATH`. The packager `ignore`
+  regex needed no change -- verified by running it against
+  `/build-vite/renderer/main.js`.
+- `bin/clean.js` removes `build-vite/` too.
+- `src/AGENTS.md`: the "Module systems" section said `npm run build` is
+  `babel src --out-dir build`, which is no longer true. Rewritten to
+  describe both halves and why the ignore list is what it is.
+
+**Files changed**
+
+- `package.json`, `bin/package.js`, `bin/clean.js`, `src/AGENTS.md`,
+  `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- From-scratch `rm -rf build build-vite && npm run build`: exit 0,
+  Babel reports 38 files, Vite emits `build-vite/renderer/main.js`.
+  `build/main/index.js`, `build/config.js` and
+  `build/renderer/webtorrent.js` are present; `build/renderer/main.js`
+  is correctly absent.
+- Bundle invariants held: 0 `has been externalized` warnings, 0 lines
+  matching `^import|^export`, and the emitted `require()` set is
+  exactly the configured external list.
+- `npm start` launch check: process alive after 14s, log shows
+  `'Main Window'` and `init: 4.456s`.
+- `npm run package`, the packager step: run for real via a throwaway
+  script that reuses `bin/package.js`'s exact `all` + `darwin` option
+  objects, skipping only the `rimraf(node_modules)` + `npm ci`
+  prelude. `electron-packager` succeeded. `asar list` on the resulting
+  `app.asar` confirms `/build-vite/renderer/main.js`,
+  `/build/main/index.js`, `/build/renderer/webtorrent.js`,
+  `/static/main.html` and `/index.js` are all inside. Launching the
+  packaged `WebTorrent.app` binary: alive after 15s, log shows
+  `'Main Window'`, `init: 4.278s`, and `'WebTorrent Hidden Window'` --
+  so both the Vite half and the Babel half work from inside the asar.
+- `npm run watch`: started from a clean tree, 0 restarts in the first
+  30s (proving `--ignore build-vite/` works), then `touch
+  src/renderer/components/header.js` produced exactly 1 restart, with
+  both halves re-running (2 `Successfully compiled` from Babel, 2
+  `built in` from Vite). Killed afterwards; no stray processes left.
+- `npm test` (standard + depcheck) passes.
+- **Smoke test not run.** Non-interactive session. The launch checks
+  cover "the window opens and renders" for both the dev build and the
+  packaged bundle; what they do not cover is interaction -- adding a
+  torrent, playback, the menus. US-017 is the Phase 1 verification pass
+  that owns that risk.
+
+**Learnings for future iterations**
+
+- **`npm run package` cannot be run as-is in a session:** `build()` in
+  `bin/package.js` starts with `rimraf(node_modules)` + `npm ci`. To
+  verify the packaging path, copy the `all` + `darwin` option objects
+  into a throwaway script and call `electronPackager` directly. That
+  exercises the parts a build-config change can actually break (the
+  `ignore` regex, what lands in the asar) without a several-minute
+  reinstall. `prune: true` operates on electron-packager's own temp
+  copy, so it does not touch the working `node_modules`.
+- **`asar list` is the real proof that a new build directory ships.**
+  The `ignore` regex in `bin/package.js` is a single 700-char
+  alternation with `^\/src|^\/dist` anchors and a trailing
+  `\.[^/]*|.*\.md` group; reading it is not verification. Either test
+  the regex against literal paths in `node -e`, or list the asar.
+- **A new generated directory needs four registrations, not one:**
+  `.gitignore`, nodemon's `--ignore` list in the `watch` script
+  (anything under `--ext js,css` otherwise causes an infinite restart
+  loop), depcheck's `--ignore-dirs`, and the `rimraf` block in
+  `bin/package.js`. `bin/clean.js` is a fifth. Missing the nodemon one
+  is the only silent-at-build-time, broken-at-dev-time failure.
+- **Babel's `--ignore` takes one comma-separated string of globs** and
+  a bare directory name does not match files inside it -- use
+  `dir/**/*`. Verify by compiling to a temp `--out-dir` and diffing the
+  file list; the exit code is 0 whether the ignore matched anything or
+  not.
+- **The set of files Babel must still compile is defined by the
+  non-Vite `require()` callers**, and there are exactly three today:
+  `index.js` -> `build/main`, `static/webtorrent.html` ->
+  `build/renderer/webtorrent.js`, and `src/main/index.js` ->
+  `../renderer/lib/state`. That last one is easy to miss and is why
+  `src/renderer/lib/**` is built by both Vite and Babel.
+---
+
+## 2026-07-28 - US-018
+- Created the platform shim's API surface as design-only stubs:
+  `src/renderer/lib/platform/` with `index.js`, `ipc-os.js`,
+  `ipc-engine.js`, `shell.js`, `clipboard.js`, `dialog.js`,
+  `window.js`, `menu.js`, `fs.js`. Every export is `async`, has a
+  JSDoc signature, and throws
+  `'platform/<module>: not implemented yet (US-0xx)'` naming the story
+  that implements it.
+- Wrote `docs/platform-shim.md`: the whole surface mapped onto the
+  call sites it replaces, with file and line references, plus the
+  rules the surface follows and the shape changes each migration has
+  to absorb.
+- No call site was changed. Nothing imports the shim yet.
+- Fixed a `no-mixed-operators` error in `spectron-probe.cjs` that a
+  prior `wip` commit left on the branch. `npm test` was already red on
+  HEAD before this session's changes; the two-paren fix was the
+  minimum needed to reach a green gate.
+- **Tests:** skipped deliberately. This story is stubs plus docs with
+  no behaviour to assert, and there is still no unit test runner --
+  US-019 adds it, and US-020 onward carry the unit coverage. Gate run
+  was `npm test` (standard + depcheck), plus `npm run build` and a
+  background launch check (alive at 14s, `init: 922ms`, process
+  killed, `pgrep` clean).
+- Files changed: `src/renderer/lib/platform/*` (new, 9 files),
+  `src/renderer/lib/platform/AGENTS.md` (new),
+  `docs/platform-shim.md` (new), `spectron-probe.cjs`,
+  `progress.log`, `specs/prd.json`.
+- **Learnings for future iterations:**
+  - **`npm test` was red on `HEAD` before this session.**
+    `spectron-probe.cjs`, a throwaway probe committed by accident in
+    `739ca31 wip`, fails `standard`. Run `npm test` *before* you start
+    changing anything, or you will spend time proving your own diff
+    innocent. The file is still tracked and is a candidate for
+    deletion by whoever owns it.
+  - **Do not use `export * as ns from './x'` in `index.js`.** The
+    barrel uses `import * as x` plus a plain `export { x }` block
+    instead, which parses identically under `standard`'s parser,
+    Babel, and Rolldown. `export * as` is newer syntax and there is no
+    reason to bet the build on all three agreeing about it.
+  - **`standard` sets `no-unused-vars` with `args: 'none'`**, so stub
+    bodies that ignore all their parameters lint clean. No
+    `// eslint-disable` is needed for a directory full of throwing
+    stubs.
+  - **The shim surface is 8 modules and ~70 exports, sized from a
+    real inventory, not guessed.** The inventory command that produced
+    it:
+    `grep -rn "ipcRenderer\.\|shell\.\|clipboard\.\|remote\.\|fs\." --include=*.js src/renderer`
+    filtered to drop `webtorrent.js` and `lib/cast.js`. Re-run it if
+    you need to check a migration story for missed call sites.
+  - **`main.js:422` is a pre-existing bug the shim will surface.**
+    `state.window.wasMaximized = electron.remote.getCurrentWindow().isMaximized`
+    assigns the *function*, not the boolean. US-027 cannot migrate it
+    without changing behaviour; the doc flags it so that change is a
+    decision rather than an accident.
+  - **`screen.getAllDisplays()` is out of scope for good.** Its only
+    consumer was `lib/telemetry.js`, deleted in US-002. US-025's
+    "include or explicitly exclude" criterion is answered by excluding
+    it.
+  - **Two `wt-*` channels stay out of `ipc-engine.js`:**
+    `wt-new-torrent` and `wt-uncaught-error`. `webtorrent.js` sends
+    them and `src/main/` receives them, so they never cross the
+    renderer-UI boundary the shim guards.
+---
+
+## 2026-07-28 - US-019
+- Added a unit test runner. New `test-unit` npm script runs
+  `npm run build:main && tape test/unit/*.js`, and `npm test` now
+  runs it after `standard` and `depcheck`. No new dependency: `tape`
+  was already a devDependency and the Babel `build/` output is the
+  documented bridge from the ESM renderer sources to CommonJS test
+  files.
+- Wrote `test/unit/time.js` first, against
+  `build/renderer/lib/time.js` -- five real assertions on
+  `calculateEta` (both no-op guards, seconds-only, minutes, hours).
+  Written before the script existed; the seconds-only case failed on
+  the first run (the template literal emits two leading spaces, not
+  one) and the expectation was corrected against real behaviour.
+- Files changed: `package.json` (scripts), `test/unit/time.js` (new),
+  `test/AGENTS.md` (new), `progress.log`, `specs/prd.json`.
+- **Learnings for future iterations:**
+  - **Only `src/renderer/lib/**` and `src/main/**` are unit testable
+    through `build/`.** `build:main` ignores `src/renderer/main.js`,
+    `components/`, `controllers/` and `pages/` because Vite owns them,
+    so nothing under those four paths can be required from a unit
+    test. The platform shim lives in `src/renderer/lib/platform/`, so
+    US-020 through US-025 are all in range -- which is presumably why
+    the shim was put there.
+  - **`test-unit` builds first on purpose.** `npx tape test/unit/*.js`
+    on its own silently tests whatever `build/` happens to contain,
+    which can be an arbitrarily old copy of `src/`. A stale `build/`
+    is why the first run of the new test resolved the module at all
+    despite `build/` never having been rebuilt this session.
+  - **The integration suite is a pre-existing failure**, promoted to
+    the Codebase Patterns section above along with the process-cleanup
+    consequence. US-019's "`npm run test-integration` still passes"
+    criterion is unsatisfiable as written; it is unchanged by this
+    story (verified against stashed HEAD) rather than passing.
+  - `test/index.js` requires each integration file by hand, so adding
+    `test/unit/` cannot affect the integration run.
+---
+
+## 2026-07-28 - US-020
+- Implemented `src/renderer/lib/platform/ipc-os.js` over `ipcRenderer`.
+  Every stub body from US-018 now sends or listens on its real
+  channel; the JSDoc surface is unchanged, so `docs/platform-shim.md`
+  needed no signature edits. A private `listen(channel, listener,
+  options)` helper strips the Electron event object, honours
+  `{ once: true }` and returns the unsubscribe closure, so every
+  `on*` export resolves to a `() => void`.
+  `checkForExternalPlayer` collapses the existing send-then-`once`
+  pair into one promise, registering the reply listener before the
+  send (today's `media-controller.js` registers it after, which is a
+  race the shim closes).
+- Test-first: `test/unit/platform-ipc-os.js` was written and shown
+  failing 8/10 before any implementation. It stubs `ipcRenderer` via
+  `require.cache` and covers send, receive, unsubscribe, `once`, and
+  the request/response round trip, plus two structural assertions --
+  every export is an `AsyncFunction`, and calling every export touches
+  no `wt-*` channel (FR-9).
+- No call site was migrated, per the story.
+- Verified every channel the module sends on is registered in
+  `src/main/`: 22 via `ipcMain.on` in `src/main/ipc.js`, plus
+  `ipcReady` (`ipc.js:24`, `once`) and `stateSaved`
+  (`src/main/index.js:126`, `once`).
+- Files changed: `src/renderer/lib/platform/ipc-os.js`,
+  `test/unit/platform-ipc-os.js`, `docs/platform-shim.md`,
+  `src/renderer/lib/platform/AGENTS.md`, `test/AGENTS.md`,
+  `specs/prd.json`, `progress.log`.
+- Gates: `npm run lint` clean, `npm test` 18/18 (13 new), and
+  `npx vite build` still succeeds -- the shim is compiled by both
+  toolchains, so Babel passing alone would not prove it.
+- **Learnings for future iterations:**
+  - The `require.cache` stubbing recipe is promoted to Codebase
+    Patterns and written up in `test/AGENTS.md`. It is what makes the
+    rest of the shim (US-021 through US-025) unit-testable, so keep
+    every shim module on a top-level *named* import from `electron`;
+    a destructuring `require` binds eagerly and breaks it.
+  - The implementation shape US-021 should copy is recorded in
+    `src/renderer/lib/platform/AGENTS.md`, not here: one-line exports
+    over a shared `listen()` helper.
+  - The two structural tests (all-async, no-`wt-*`) are cheap and
+    directly encode FR-9/FR-10. Worth repeating verbatim in the
+    `ipc-engine.js` tests with the assertion inverted.
+  - The app was not launched this session: nothing imports the shim
+    yet, so a launch could not exercise the new code and would only
+    reproduce the known pre-existing `electron.remote` error.
+---
+
+## 2026-07-28 - US-021
+- Implemented `src/renderer/lib/platform/ipc-engine.js` over
+  `ipcRenderer`: 11 commands (`wt-set-global-trackers`,
+  `wt-start-torrenting`, `wt-stop-torrenting`, `wt-create-torrent`,
+  `wt-save-torrent-file`, `wt-generate-torrent-poster`,
+  `wt-get-audio-metadata`, `wt-start-server`, `wt-stop-server`,
+  `wt-select-files`) and 15 event registrations, including the two
+  dynamic channels (`wt-ready-${infoHash}`, `wt-server-${infoHash}`)
+  which take the info hash as an argument and concatenate internally.
+  Same private `listen()` helper as `ipc-os.js`. All exports async;
+  every listener registration resolves to an unsubscribe function.
+- Added `test/unit/platform-ipc-engine.js` (18 assertions): all-async,
+  "every export touches exactly one channel and it is `wt-*`",
+  send/receive/unsubscribe/`{once:true}` for the static `wt-progress`
+  channel, send/receive/unsubscribe for the dynamic
+  `wt-ready-${infoHash}` channel plus `wt-server-${infoHash}`, and a
+  disjointness check against `ipc-os.js` exports (FR-9).
+- No call site was migrated (US-032 does that).
+- Files changed: `src/renderer/lib/platform/ipc-engine.js`,
+  `test/unit/platform-ipc-engine.js`, `docs/platform-shim.md`,
+  `src/renderer/lib/platform/AGENTS.md`, `specs/prd.json`,
+  `progress.log`.
+- Gates: `npm run lint` clean, `npm test` 36/36, `npm run
+  build:renderer` succeeds.
+- **Learnings for future iterations:**
+  - The `ipc-os.js` unit-test harness (seeding `require.cache` for
+    `require.resolve('electron')` with a getter, then a hand-rolled
+    `ipc` stub with `emit`/`count`) transplanted verbatim. Copy
+    `makeIpcStub()` for any future shim module that talks to
+    `ipcRenderer`; it is ~40 lines and not worth extracting into a
+    shared helper until a third file needs it, since `test/unit/*.js`
+    is globbed and a shared non-test file in that directory would be
+    run as a test.
+  - The FR-9 structural test is strongest as a pair: `ipc-os` asserts
+    "no channel starts with `wt-`", `ipc-engine` asserts "every
+    channel starts with `wt-`" *and* "one channel per export" (the
+    latter catches a stub that silently does nothing, which a
+    filter-based assertion alone would pass).
+  - Naming convention worth keeping: the two per-torrent exports end
+    in `For` and take `infoHash` first, which lets a test drive every
+    export generically by branching on `name.endsWith('For')` /
+    `name.startsWith('on')`.
+  - `webtorrent.js` also sends `wt-new-torrent` and
+    `wt-uncaught-error`, which are consumed by the main process and
+    deliberately absent from the shim (documented in
+    `docs/platform-shim.md`). Do not add them when US-033 documents
+    the protocol.
+  - The app was not launched: nothing imports `ipc-engine.js` yet, so
+    a launch could not exercise it.
+---
+
+## 2026-07-28 - US-022
+- Implemented `lib/platform/shell.js` and `lib/platform/clipboard.js`,
+  replacing the US-018 throwing stubs. `openExternal` calls Electron's
+  renderer-side `shell.openExternal`; `showItemInFolder`, `openPath`
+  and `moveItemToTrash` keep their existing `ipcRenderer.send` trip to
+  the main process, whose handlers already exist in `src/main/ipc.js`.
+  `clipboard` wraps Electron's synchronous `readText`/`writeText`.
+- Added `test/unit/platform-shell.js` (9 assertions) and
+  `test/unit/platform-clipboard.js` (6), stubbing `electron` via the
+  `require.cache` recipe in `test/AGENTS.md`. Written first and watched
+  fail against the stubs before implementing.
+- Files changed: `src/renderer/lib/platform/shell.js`,
+  `src/renderer/lib/platform/clipboard.js`,
+  `test/unit/platform-shell.js`, `test/unit/platform-clipboard.js`,
+  `docs/platform-shim.md`, `specs/prd.json`.
+- **Learnings for future iterations:**
+  - The `require.cache` electron stub generalises past `ipcRenderer`:
+    one cache entry with a getter per surface (`shell`, `clipboard`,
+    `ipcRenderer`) covers a module that imports several. Babel emits a
+    property read per call site for each, so all of them stay
+    swappable between tests.
+  - A "returns a promise" assertion on a stub-backed export must reset
+    the stubs first: before implementation those exports reject, and
+    an un-awaited rejected promise crashes the tape process rather
+    than failing an assertion. That is the signal the test is really
+    red, not a broken test.
+  - `moveItemToTrash` is main-process-only in Electron, so the three
+    path channels stay on IPC even though `shell` is importable in the
+    renderer. Do not "simplify" them to direct `shell.*` calls in
+    US-026.
+  - No app launch was needed or performed: nothing imports these
+    modules yet (call sites move in US-026). Nothing was left running.
+---
+
+## 2026-07-28 - US-023
+- Implemented `src/renderer/lib/platform/fs.js` against `fs/promises`.
+  The nine stub exports from US-018 (`readFile`, `writeFile`,
+  `copyFile`, `mkdir`, `rename`, `unlink`, `readdir`, `stat`,
+  `exists`) are now real; the surface itself did not change. It was
+  re-enumerated first by grepping `src/renderer/` for `fs` usage,
+  excluding `webtorrent.js` and `lib/platform/` -- five files
+  (`main.js`, `lib/state.js`, `lib/migrations.js`,
+  `controllers/torrent-list-controller.js`,
+  `controllers/subtitles-controller.js`), nine operations, which is
+  exactly the US-018 table. Nothing added, nothing removed.
+- Tests first: `test/unit/platform-fs.js` (34 assertions) was written
+  against the stubs, watched fail with `not implemented yet (US-023)`,
+  then made to pass. Covers read and write paths, the `stat`
+  flattening, both `exists` branches, error propagation and that every
+  export returns a promise.
+- No call site was migrated (US-028 owns that). No app launch was
+  needed: nothing imports the barrel yet, so `fs.js` is not in the
+  Vite graph.
+- Files changed: `src/renderer/lib/platform/fs.js`,
+  `test/unit/platform-fs.js`, `vite.config.js`,
+  `docs/platform-shim.md`, `test/AGENTS.md`,
+  `src/renderer/lib/platform/AGENTS.md`, `specs/prd.json`.
+- **Learnings for future iterations:**
+  - `require.cache` seeding does NOT stub a Node builtin. Node never
+    consults the cache for `fs`/`fs/promises`, so the `electron`
+    trick from US-020/022 silently does nothing. Their exports are
+    writable properties on one shared module object, and Babel emits
+    the same per-call-site property read, so assign over them and
+    restore in the same test. Written up in `test/AGENTS.md`.
+  - `fs/promises` was already externalized in `vite.config.js`, but in
+    the `transitiveExternals` list. Moved it to `firstPartyExternals`,
+    since the shim now imports it directly and that list is
+    documented as the accurate statement of what Phase 2 covers. As
+    US-028 moves call sites, `fs` drains out of that list and
+    `fs/promises` is what remains.
+  - `readFile` resolves to a plain `Uint8Array` view, not a `Buffer`
+    (same no-Node-objects rule that flattens `stat`). This is a trap
+    for US-028: `lib/state.js` does `JSON.parse(readFileSync(p))`
+    today, and a `Uint8Array` stringifies to `"1,2,3"`, so that call
+    site needs a `TextDecoder`. Recorded in `docs/platform-shim.md`.
+  - An un-awaited promise in a tape test that rejects kills the whole
+    process with an unhandled rejection and the run still prints
+    `ok` lines above it. The "every export is async" test has to stub
+    enough for every export to actually resolve.
+---
+
+## 2026-07-28 - US-024
+- Implemented `src/renderer/lib/platform/dialog.js` against
+  `@electron/remote`'s `dialog` + `getCurrentWindow`:
+  `showOpenDialog(options)` resolves to `string[]` (empty on cancel,
+  where `showOpenDialogSync` returns `undefined`) and
+  `showSaveDialog(options)` resolves to `string|null`. Both parent to
+  the current window internally, so no caller passes one.
+- Implemented `src/renderer/lib/platform/window.js`: `isVisible()`
+  and `isMaximized()`, each resolving the current window per call.
+- **Interpretation of the "current-window access" criterion.** The
+  criterion reads "covers `isVisible()`, `isMaximized()`, and
+  current-window access, all async". I took that to mean `window.js`
+  *owns* current-window access, not that it exports a handle. A
+  `BrowserWindow` proxy is not serialisable and exporting it would
+  put an Electron object back in front of callers, against FR-12 and
+  the directory's "nothing here returns a Node object" rule. A test
+  asserts the module's export list is exactly the two reads.
+- `screen.getAllDisplays()` stays excluded; its absence was already
+  recorded in `docs/platform-shim.md` and is unchanged.
+- Documented the sync-to-async risk site for US-027: `setDimensions()`
+  in `src/renderer/main.js`. The PRD cites lines 443-455; the code is
+  at 407-422 today (the US-002 telemetry deletion moved it), and the
+  doc says so rather than repeating the stale numbers.
+- Files changed: `src/renderer/lib/platform/dialog.js`,
+  `src/renderer/lib/platform/window.js`,
+  `src/renderer/lib/platform/AGENTS.md`, `test/AGENTS.md`,
+  `test/unit/platform-dialog.js` (new),
+  `test/unit/platform-window.js` (new), `docs/platform-shim.md`,
+  `specs/prd.json`.
+- **Learnings for future iterations:**
+  - `@electron/remote`'s renderer entry sets `__esModule: true` and
+    defines each builtin (`dialog`, `clipboard`, ...) as a lazy
+    getter on `exports` via `addBuiltinProperty`, with **no
+    `default`**. So `import { dialog } from '@electron/remote'` is
+    the correct shape inside the shim -- same situation as
+    `material-ui/styles/colors`. The `import remote from
+    '@electron/remote'` in `path-selector.js`,
+    `subtitles-controller.js` and `torrent-list-controller.js` works
+    only because Rolldown's CJS-external interop synthesises a
+    default; under Babel (which builds `lib/`) that form would be
+    `undefined`. Anything moved into `src/renderer/lib/` must use
+    named imports.
+  - Stubbing `@electron/remote` in a unit test needs
+    `__esModule: true` on the seeded `exports`, otherwise Babel's
+    interop wraps the stub in a `default` and the named import reads
+    `undefined`. `require.resolve('@electron/remote')` is safe: it
+    resolves without executing, so the real module's "cannot be
+    required in the browser process" throw never fires.
+  - The sync-to-async hazard in `setDimensions` is *ordering*, not
+    just plumbing: the `window.screenX`/`outerWidth` reads and the
+    maximize check currently describe one instant. US-027 must take
+    the DOM reads before the first `await` and collapse the two
+    `isMaximized()` calls into one.
+---
+
+## 2026-07-28 - US-025
+
+Implement the data-driven `menu.js` API.
+
+**What was implemented**
+
+- `src/renderer/lib/platform/menu.js` is now real. `showContextMenu`
+  maps an array of `{ type, label, click, enabled }` descriptors to
+  `MenuItem` options, builds a `remote.Menu`, and pops it up parented
+  to `getCurrentWindow()`. Named import from `@electron/remote`
+  (`Menu`, `MenuItem`, `getCurrentWindow`), per the directory's
+  convention, which is also what makes it unit-testable.
+- Validation happens for the whole array *before* the `Menu` is
+  constructed: an unknown `type` or a missing `label` on a normal item
+  rejects, and nothing half-built ever reaches the screen.
+- Each caller `click` is wrapped in a zero-arg closure, so Electron's
+  `(menuItem, browserWindow, event)` arguments stop at the shim. FR-12
+  is about objects not crossing the boundary in either direction.
+- `enabled` defaults to `true`; only an explicit `false` disables.
+- `test/unit/platform-menu.js`: 15 assertions with `@electron/remote`
+  stubbed -- item count and label order for the real torrent context
+  menu, popup parenting, separator shape, `enabled` defaulting, the
+  click-arity guarantee, both rejection paths, and the export surface.
+- `docs/platform-shim.md`: the descriptor table, the click-arity and
+  validation-order rules, and the explicit no-submenu decision.
+- `src/renderer/lib/platform/AGENTS.md` and `test/AGENTS.md` updated.
+
+**Interpretation of the acceptance criteria**
+
+- "Separators and submenus are representable if the existing menus use
+  them." Verified by grepping `src/renderer/` for `MenuItem` /
+  `new remote.Menu`: `torrent-list-controller.js:258-310` is the only
+  menu in the renderer, and it has separators but **no submenus**. So
+  separators are implemented and submenus are deliberately not, on the
+  same "no more than the renderer does today" rule `fs.js` follows.
+  Documented in `docs/platform-shim.md` rather than left implicit.
+- "the nine-item torrent context menu ... produces nine menu items."
+  The real menu is not nine items. Counting the `menu.append` calls at
+  `:258-310` gives **ten** when `torrentSummary.files` is set (seven
+  items plus three separators) and **eight** when it is not. "Nine" in
+  the story text is a miscount carried over from US-018. The test
+  asserts the stronger, true property -- one `MenuItem` per descriptor
+  for the full ten-descriptor menu, with labels in order -- rather
+  than a number that does not match the code. Flagging it here rather
+  than editing the criterion.
+- No call site was migrated (US-029 does that), so
+  `torrent-list-controller.js` is untouched.
+
+**Files changed**
+
+- `src/renderer/lib/platform/menu.js`
+- `test/unit/platform-menu.js` (new)
+- `docs/platform-shim.md`
+- `src/renderer/lib/platform/AGENTS.md`, `test/AGENTS.md`
+- `specs/prd.json` (US-025 `passes: true`)
+
+**Verification**
+
+`npm test` green: standard, depcheck, 127 unit assertions. `npm run
+build` (Babel + Vite) clean -- no new externalization warnings. The
+implementation was confirmed to be doing the work: stashing only
+`menu.js` and rebuilding drops the new file to 2 passing / 7 failing.
+No app launch this session; nothing renderer-visible changed, since
+the module still has no importers.
+
+- **Learnings for future iterations:**
+  - **A `require.cache` stub's `exports` object is bound once**, at
+    the first require of the module under test. Babel keeps the result
+    of its single `require()` call, so a `reset()` that rebuilds the
+    entire stub leaves the module holding the *first* one -- the
+    symptom is a recorder that stays empty while the code under test
+    is demonstrably running. `platform-window.js` gets away with it
+    because it swaps state *behind* a stable `getCurrentWindow`
+    function. Do the same: stable functions/classes (or getters) on
+    one `exports` object, mutable state behind them. Even an
+    `exports` *getter* on the cache entry is too late.
+  - A class-valued Electron export (`Menu`, `MenuItem`) stubs exactly
+    like a function one -- Babel emits `new _remote.Menu()`, a
+    per-call-site property read, same as everything else here.
+  - The remaining Phase 2 stories are all call-site migrations now;
+    the shim itself is complete as of this commit.
+---
+
+## 2026-07-28 - US-026
+
+Migrate the shell and clipboard call sites to the platform shim.
+
+**What was implemented**
+
+- `components/update-available-modal.js` and
+  `components/unsupported-media-modal.js` now
+  `import * as shell from '../lib/platform/shell'` and call
+  `shell.openExternal(...)` as a promise.
+- `components/open-torrent-address-modal.js` imports
+  `../lib/platform/clipboard`. `componentDidMount` prefills the field
+  from `clipboard.readText().then(...)` instead of synchronously, and
+  bails if `this.torrentURL` is gone by the time it resolves.
+- `controllers/torrent-list-controller.js` drops `clipboard` from its
+  `electron` import and gets a module-level `copyToClipboard(text)`
+  helper, which the two "Copy ... Link to Clipboard" context-menu
+  items call. Menu `click` handlers cannot await, so the helper is
+  where the promise is terminated.
+- `main.js` `onPaste` was also on `electron.clipboard.readText()` --
+  `docs/platform-shim.md` lists `main.js:497` as a `readText` call
+  site, so it is in scope for this story even though the acceptance
+  criteria name only the four component/controller files. It now
+  imports `./lib/platform/clipboard` and moves `addTorrent(text)` and
+  `update()` inside the `.then`, so the re-render still happens after
+  the torrent is added.
+- Every one of the five promises ends in
+  `.catch((err) => dispatch('error', err))` -- the repo's established
+  renderer error path -- so nothing floats and nothing is swallowed.
+- New `test/unit/platform-boundary.js` walks `src/renderer/**/*.js`
+  excluding `lib/platform/` and asserts no file imports `shell` or
+  `clipboard` from `electron`, or reads `electron.shell` /
+  `electron.clipboard`. Written first: 5 failures before the
+  migration, exactly the 5 call sites; 0 after.
+- Docblock/`docs/platform-shim.md` status lines updated from "call
+  sites are migrated in US-026" to past tense.
+
+**Files changed**
+
+- `src/renderer/components/update-available-modal.js`
+- `src/renderer/components/unsupported-media-modal.js`
+- `src/renderer/components/open-torrent-address-modal.js`
+- `src/renderer/controllers/torrent-list-controller.js`
+- `src/renderer/main.js`
+- `src/renderer/lib/platform/shell.js`,
+  `src/renderer/lib/platform/clipboard.js` (comments only)
+- `test/unit/platform-boundary.js` (new)
+- `docs/platform-shim.md`, `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `npm test` passes, 207 assertions, exit 0 (`standard` + `depcheck` +
+  `test-unit`).
+- `npm run build` exit 0, both halves; `grep -c 'has been
+  externalized'` on the Vite stderr is 0.
+- Real launch probe (build artifact patched, then rebuilt): wrote a
+  magnet URI to the OS clipboard from the main process, dispatched
+  `openTorrentAddress`, and read `#torrent-address-field` back --
+  `PROBE readText prefill:
+  "magnet:?xt=urn:btih:probe00000..."`. That is the migrated
+  `clipboard.readText` path running in the real renderer. `init:
+  872ms`, both windows up, no new severity-3 console errors (the
+  `getCurrentWindow` one is the known pre-existing `electron.remote`
+  failure).
+- **Not verified empirically:** `shell.openExternal` and
+  `clipboard.writeText` at their new call sites. Both are reachable
+  only through a native context menu or a modal button that would
+  open a real browser window on the user's machine; the shim
+  functions themselves have unit tests from US-022. The six-step
+  manual smoke test was not run -- this is a non-interactive session.
+  The risk sits on the two context-menu copy items and the two
+  "open in browser" buttons.
+
+**Learnings for future iterations:**
+
+- **`dispatch('error', err)` is the renderer's error sink** and the
+  right tail for every shim promise a migrated call site cannot
+  await. `main.js` defines it and `lib/dispatcher` re-exports it;
+  components already import `dispatch` alongside `dispatcher`. Use
+  `.then(...).catch((err) => dispatch('error', err))` rather than
+  making the handler `async`, which would just relocate the floating
+  promise into React's callback.
+- **A menu `click` handler is a hard await boundary.** Extract a small
+  named helper (`copyToClipboard`) instead of inlining `.catch()` in
+  the descriptor -- US-029 rewrites these same descriptors and the
+  helper survives that rewrite unchanged.
+- **`docs/platform-shim.md` lists call sites the acceptance criteria
+  omit.** US-026's criteria name four files; the doc's `readText` row
+  also names `main.js:497`. Cross-check the doc's tables against the
+  criteria at the start of every remaining migration story, or the
+  grep criterion in the same story will fail.
+- **The boundary grep belongs in a test, not just in the session.**
+  `test/unit/platform-boundary.js` reads `src/` (not `build/`, which
+  contains no `components/` or `controllers/`) and is the one place a
+  migration regression gets caught. Extend its concern list --
+  `['shell', 'clipboard']` today -- as each of US-027..US-032 lands,
+  until US-034 replaces it with a lint rule.
+- **Probing a modal non-interactively:** `wc.executeJavaScript(
+  "window.dispatch('openTorrentAddress')")` opens it and the DOM is
+  readable ~1.5s later. Seed OS state (clipboard, etc.) from the main
+  process with a plain `require('electron')` in the appended probe
+  block -- it does not have to come from the renderer.
+---
+
+## 2026-07-28 - US-027
+- Migrated the `@electron/remote` dialog API and the two window-state
+  reads onto the platform shim. Four call sites:
+  - `components/path-selector.js`: `remote.dialog.showOpenDialogSync(
+    remote.getCurrentWindow(), opts)` -> `platformDialog.showOpenDialog(
+    opts)`. The `Array.isArray(filenames)` guard became a
+    `filenames.length` check, per docs/platform-shim.md.
+  - `controllers/subtitles-controller.js`: same conversion for
+    `openSubtitles()`, plus a `dispatch('update')` in the continuation.
+  - `controllers/torrent-list-controller.js`: `saveTorrentFileAs()`
+    now uses `platformDialog.showSaveDialog(opts)`; the local
+    `const win = remote.getCurrentWindow()` is gone.
+  - `src/renderer/main.js`: the startup-sound `isVisible()` check and
+    `setDimensions()`.
+- `setDimensions()` was split. It now takes the four
+  `window.screenX`/`outerWidth` geometry reads synchronously, *before*
+  the `isMaximized()` suspension point, and hands them plus the single
+  awaited boolean to a new `applyDimensions()` holding the rest of the
+  old body in its original order. That is the resolution the shim
+  design doc asked for. `applyDimensions()` ends with `update()`.
+- Every shim promise is terminated with
+  `.catch(err => dispatch('error', err))`; none float.
+- `test/unit/platform-boundary.js` grew a second block of checks
+  (dialog API, `getCurrentWindow().isVisible|isMaximized`). 4 failures
+  before the migration -- exactly the 4 call sites -- 0 after. Full
+  suite 287/287, `standard` clean.
+- Files changed: `src/renderer/components/path-selector.js`,
+  `src/renderer/controllers/subtitles-controller.js`,
+  `src/renderer/controllers/torrent-list-controller.js`,
+  `src/renderer/main.js`, `test/unit/platform-boundary.js`,
+  `docs/platform-shim.md`, `test/AGENTS.md`,
+  `src/renderer/controllers/AGENTS.md`, `specs/prd.json`.
+
+**Deviation from the acceptance criteria, stated plainly.** "Zero
+`@electron/remote` imports remain under `src/renderer/` outside
+`lib/platform/`" is NOT met, and cannot be met by this story:
+`controllers/torrent-list-controller.js` still imports `remote` for
+`remote.Menu` / `remote.MenuItem` and one `remote.getCurrentWindow()`
+inside `menu.popup()`. That is the context-menu concern, which is
+US-029's whole scope. Doing it here would be doing US-029's work. The
+boundary test therefore checks *concerns* (dialog, window-state reads)
+rather than the `@electron/remote` specifier, and the grep goes to
+zero when US-029 lands. Every other criterion is met except the manual
+smoke test (see below).
+
+- **Learnings for future iterations:**
+  - **Fixing `main.js:149` un-broke `delayedInit()`.** The
+    `electron.remote.getCurrentWindow().isVisible()` call there had
+    been throwing since Electron 14, aborting the rest of `onState()`.
+    Two things are observably different now, both previously recorded
+    in this file as known-dead: `console.timeEnd('init')` in `main.js`
+    finally prints (the launch log now has *two* `init:` lines --
+    `init: 25ms` from `build-vite/renderer/main.js` alongside the
+    `webtorrent.js` one), and `delayedInit()` runs, so
+    `checkDownloadPath()`, the visibility listener and `Cast.init()`
+    all execute. Delete the "delayedInit is dead code" and
+    "the init: line comes from webtorrent.js" entries from the
+    patterns section -- they are now false.
+  - **New pre-existing bug surfaced by that.** With `Cast.init()`
+    running for the first time, the launch log gains a severity-3
+    `Uncaught Error: no such type:
+    extensions.api.cast_channel.CastMessage` from the bundled
+    chromecast protobuf stack. It does not stop the app (init
+    completes, the UI renders, probes work). It is dormant code being
+    reached, not a regression from this story, and it is unowned by
+    any current story -- likely a Vite-bundling casualty in
+    `lib/cast.js`, whose deps were flagged as a deferred casualty in
+    the shim AGENTS.md.
+  - **Probing a *native* modal non-interactively.**
+    `showOpenDialogSync` blocks the whole main process. So
+    `wc.executeJavaScript("window.dispatch('openSubtitles')")` followed
+    by any further `executeJavaScript` or `setTimeout` in the appended
+    probe block produces *silence* -- and that silence is the
+    evidence the dialog opened. Even `kill <pid>` does not land while
+    the dialog is up; `pkill -f "$PWD/node_modules/"` is needed. Plan
+    the blocking probe LAST in a launch, because nothing after it
+    runs.
+  - **`dispatch()` re-renders synchronously, shim calls do not.**
+    `dispatch(action)` runs the handler then `update()` in the same
+    turn, so state written inside a `.then()` misses that render.
+    End the continuation with `dispatch('update')` (there is a no-op
+    `update` handler for exactly this) unless it already dispatches
+    something that re-renders. `path-selector.js` needs no such call:
+    its `onChange` is `dispatch('updatePreferences', ...)`.
+  - **Boundary tests should name concerns, not specifiers.** A file
+    can hold two shim concerns owned by two different stories
+    (`torrent-list-controller.js` holds dialog and menu). Banning the
+    import specifier makes the story unpassable; banning
+    `remote.dialog` and `getCurrentWindow().isMaximized` does not.
+---
+
+## 2026-07-28 - US-028
+
+Migrate every renderer `fs` call site onto `lib/platform/fs.js`.
+
+**What was implemented**
+
+- `lib/migrations.js`: dropped `import fs, { copyFileSync } from 'fs'`
+  for `import * as fs from './platform/fs'`. `run()` is now `async`;
+  `migrate_0_7_0`, `migrate_0_12_0` and `migrate_0_17_2` -- the three
+  that touch the filesystem -- are `async` and are `await`ed one at a
+  time in the existing version order. The two `forEach` loops holding
+  fs work became `for..of` so the `await` is inside the loop rather
+  than inside a callback the loop never waits for.
+  `statSync`-in-a-try became `await fs.exists()`.
+- `lib/state.js`: `setupStateSaved()` and its inner
+  `createTorrentObject()` are `async`; both `mkdir`s are awaited before
+  the copies start. `load(cb)` -- already an `async function` -- now
+  awaits `setupStateSaved()` and `migrations.run()` before firing `cb`,
+  so nothing starts torrenting off a half-migrated config. The inner
+  `onSavedState` helper was inlined; it existed only to be called from
+  two places, one of which was the error path.
+- `main.js`: `checkDownloadPath()` uses `platformFs.stat().then/catch`,
+  with `stat.isDirectory` as a boolean.
+- `controllers/torrent-list-controller.js`: four sites -- the
+  path-still-there `stat`, `findFilesRecursive`'s `stat`+`readdir`,
+  `deleteFile`'s `unlink`, and `saveTorrentFileAs`'s
+  `readFile`+`writeFile`, which folds into the dialog promise chain
+  that already ends in `.catch(err => dispatch('error', err))`.
+- `controllers/subtitles-controller.js`: `createReadStream(...).pipe(
+  srtToVtt())` became a bare `srtToVtt()` transform fed by
+  `fs.readFile()`. `concat()` is registered before the write, so no
+  chunk is missed.
+- `docs/platform-shim.md`, `test/AGENTS.md` updated.
+
+**Tests (written first, both failing before the change)**
+
+- `test/unit/platform-boundary.js`: new check banning any `fs`,
+  `fs/promises` or `original-fs` import under `src/renderer/` outside
+  `lib/platform/`, with `webtorrent.js` exempt per FR-4. Failed on
+  exactly the five files the story names.
+- `test/unit/migrations.js` (new): runs the real migrations against a
+  real temp profile, with `build/config` stubbed via `require.cache`.
+  Asserts `run()` returns a promise, that the 0.7.0 and 0.17.2 file
+  copies are on disk by the time it resolves, that the version-ordered
+  chain still works (0.7.2 creating `prefs` before 0.11.0 reads it),
+  and that `setDefaultFileHandler` is still sent. Failed with
+  `Cannot read properties of undefined (reading 'then')`.
+
+**Files changed**
+
+- `src/renderer/main.js`, `src/renderer/lib/state.js`,
+  `src/renderer/lib/migrations.js`,
+  `src/renderer/controllers/torrent-list-controller.js`,
+  `src/renderer/controllers/subtitles-controller.js`
+- `test/unit/platform-boundary.js`, `test/unit/migrations.js` (new)
+- `docs/platform-shim.md`, `test/AGENTS.md`, `progress.log`,
+  `specs/prd.json`
+
+**Verification**
+
+- `npm test` passes: 337 assertions, exit 0.
+- `npm run lint` clean.
+- `npm run build` (Babel + Vite) clean, 0 `has been externalized`
+  warnings.
+- Empirical, two launches under `HOME=/tmp/wt-fresh-home`:
+  1. Fresh profile. Log shows `Missing config file: Creating new one`,
+     then `init: 858ms`. The profile ends up with `config.json`
+     (`version 0.24.0`, 5 torrents, `prefs` present), 5 files in
+     `Posters/` and 5 in `Torrents/` -- so the awaited `mkdir`s and
+     copies in `setupStateSaved()` all completed.
+  2. Same profile, `config.json` hand-staled to `version: "0.20.0"`
+     with `soundNotifications` and `externalPlayerPath` deleted and
+     `downloadPath` set to a marker. Relaunch shows no
+     `Missing config file` line (state persisted and was read), the
+     5 torrents and the marker `downloadPath` survive, and
+     `soundNotifications: true` / `externalPlayerPath: ""` /
+     `version 0.24.0` are back -- migrations ran and their result was
+     saved.
+  With the `console-message` hook installed on `build/main/index.js`,
+  the only severity-3 renderer line is the known dormant
+  `extensions.api.cast_channel.CastMessage` from `Cast.init()`.
+  `build/` was regenerated with `npm run build` afterwards.
+- **The six-step manual smoke test was NOT run** -- it needs a real
+  interactive session. The two launches above cover the two things the
+  story's smoke criterion actually names (persistence across relaunch,
+  migrations on a fresh profile). The residual risk is in the paths
+  neither launch exercises: saving a .torrent file via the Save-As
+  dialog, drag-and-drop folder seeding (`findFilesRecursive`), and
+  loading a subtitle file.
+
+**Learnings for future iterations:**
+
+- **A fresh profile is one env var away.** `application-config` reads
+  `process.env.HOME` at call time, so
+  `HOME=/tmp/whatever npx electron --no-sandbox .` gives a completely
+  clean config directory without touching the real one. Hand-editing
+  the `version` field in that profile's `config.json` between launches
+  is how you make migrations run on demand. This is the only practical
+  way to test anything in `lib/state.js` or `lib/migrations.js`
+  end-to-end.
+- **`parse-torrent` 9 rejects a bare `Uint8Array`** with
+  `Invalid torrent identifier`; it wants a `Buffer`. Wrap without
+  copying: `Buffer.from(u.buffer, u.byteOffset, u.byteLength)`. The
+  shim deliberately hands out `Uint8Array` (no Node objects across the
+  boundary), so any consumer that sniffs for `Buffer` needs this at the
+  call site. Check the consumer before assuming a `Uint8Array` is
+  interchangeable.
+- **`await` inside `.forEach()` does nothing.** Both migrations that
+  copy files did their work in a `forEach` callback; converting to
+  `for..of` is not cosmetic, it is the difference between `run()`
+  resolving after the copies and resolving before them. Grep for
+  `forEach` whenever you make a function async.
+- **Stub `build/config` the same way you stub `electron`.** Seed
+  `require.cache[require.resolve('../../build/config')]` with
+  `{ __esModule: true, default: {...} }` -- the `__esModule` flag
+  matters because every renderer module imports config as a default
+  import. That is what makes `lib/state.js` and `lib/migrations.js`
+  unit-testable at all: point `POSTER_PATH`/`TORRENT_PATH` at a
+  `mkdtemp` directory and let the real fs calls run.
+- **The migration chain is order-coupled in both directions.**
+  `migrate_0_7_0` *deletes* `ts.files`, which `migrate_0_17_2` then
+  reads -- so a single test fixture cannot exercise both. Two fixtures
+  at two starting versions is the honest shape; one fixture at
+  `version: 1` crashes exactly the way a real pre-0.7.0 config with a
+  WIRED CD entry would.
+- **A stream can be replaced without replacing its consumer.**
+  `srt-to-vtt` is a transform, so dropping `createReadStream` only
+  means constructing the transform directly and `.end()`ing it with the
+  bytes. Register the `concat()` consumer before writing.
+---
+
+## 2026-07-28 - US-029
+
+Rewrite the torrent row context menu against the `menu.js` descriptor
+API.
+
+**What was implemented**
+
+- `controllers/torrent-list-controller.js`: `openTorrentContextMenu()`
+  now builds one flat array of `{ label, click, enabled }` /
+  `{ type: 'separator' }` descriptors and hands it to
+  `menu.showContextMenu(items)`, tailed with
+  `.catch(err => dispatch('error', err))`. The conditional "Show in
+  Finder"/"Show in Folder" item and the separator after it are spread
+  in from a ternary on `torrentSummary.files`, so the two shapes stay
+  one expression.
+- `import remote from '@electron/remote'` is deleted from the
+  controller; that specifier no longer appears in it at all. Labels,
+  order, the `enabled` condition on "Save Torrent File As...", the
+  three separators and the manual `checkmark ` prefix on "Sort by
+  Name" are byte-identical to before.
+- New test `test/unit/torrent-context-menu.js` (45 assertions) --
+  written first and failing on
+  `Cannot read properties of undefined (reading 'Menu')`. It compiles
+  the controller with `@babel/core` into
+  `build/renderer/controllers/`, stubs `lib/platform/menu` and
+  `lib/platform/clipboard` through `require.cache`, and drives
+  `openTorrentContextMenu()` against a fixture state. It asserts the
+  descriptor array is plain objects, both label orders (with and
+  without `files`), separators carrying nothing else, the `enabled`
+  rule in both directions, the check-mark label, and what each of the
+  seven `click` handlers does (dispatch args, the `showItemInFolder`
+  IPC send, both clipboard strings) -- plus that every `click` takes
+  zero parameters.
+- `test/unit/platform-boundary.js` gains the menu concern:
+  `new remote.Menu` / `new remote.MenuItem` (both the `remote.` and
+  `electron.remote.` spellings) and a named `Menu`/`MenuItem` import
+  from `@electron/remote`.
+- Docs: `docs/platform-shim.md` records the migration under
+  `menu.js`; `test/AGENTS.md` gains the controller-compilation recipe
+  and drops the now-stale note that a blanket `@electron/remote` ban
+  would fail because of `remote.Menu`.
+
+**Verification**
+
+- `npm test` green: 422 assertions, standard and depcheck clean.
+- `npm run build` clean, 0 `has been externalized` warnings, and the
+  minified renderer bundle contains
+  `platform/menu: unsupported item type` -- the shim reached the Vite
+  graph, which it had not before (nothing imported it).
+- Launch check: `init: 531ms`, `'Main Window'`, no new errors in the
+  log; process tree killed and `pgrep` verified clean.
+- **The smoke-test criterion ("every item in the torrent row context
+  menu exercised") was NOT run.** A native context menu needs a real
+  right-click and then blocks the main process, so it cannot be driven
+  non-interactively (`openTorrentContextMenu` is on the do-not-dispatch
+  list in `controllers/AGENTS.md` for that reason). The unit test
+  covers what each item *does* -- the residual risk is purely that the
+  menu renders/pops up, which is `showContextMenu`'s two lines,
+  unchanged since US-025.
+
+**Learnings for future iterations:**
+
+- **Compiling one ignored file in the test is cheaper than moving it
+  into the build.** Adding `controllers/` to `build:main` would have
+  worked too, but it changes what ships and what `build/` contains for
+  every future session. A per-test `transformFileSync` is contained to
+  the test, and emitting into `build/renderer/controllers/` is the
+  whole trick -- relative imports resolve from the *output* location.
+- **`setDispatch()` beats stubbing the dispatcher.** `lib/dispatcher`
+  already has an injection point, so the real module stays in the
+  graph and only the sink is a test double. Look for an existing seam
+  before seeding `require.cache`.
+- **Counting menu items is a trap.** The story calls it "nine-item";
+  the menu is 7 normal items plus 3 separators (10 entries) with
+  `files`, 8 without. Assert the label array, not a count.
+---
+
+## 2026-07-28 - US-030
+Migrated the controller layer's non-`wt-*` `ipcRenderer` call sites, plus
+the one in `lib/migrations.js`, onto the platform shim. Every `wt-*` call
+in those files is untouched and still goes out over `ipcRenderer`;
+US-032 moves those.
+
+- `lib/dispatcher.js` gains `reportErrors(promise)` --
+  `.catch(err => dispatch('error', err))` in one call. Five controllers
+  needed the same three lines, so it lives with `dispatch` rather than
+  being copy-pasted per file.
+- `folder-watcher-controller.js`, `prefs-controller.js`: fully migrated,
+  no `electron` import left.
+- `media-controller.js`: the `checkForExternalPlayer` send+`once` pair
+  collapses into the shim's single promise; `openExternalPlayer` moves
+  too. Keeps `ipcRenderer.once('wt-server-running')`.
+- `torrent-controller.js`: `downloadFinished` -> `notifyDownloadFinished`,
+  `show` -> `show`.
+- `playback-controller.js`: the five player-state notifications,
+  `quitExternalPlayer`, `setAspectRatio` and `setBounds` -> `ipc-os.js`;
+  `openPath` -> `shell.js`.
+- `torrent-list-controller.js`: `moveItemToTrash` and `showItemInFolder`
+  -> `shell.js`.
+- `lib/migrations.js`: `installHandlers()` becomes async and is awaited;
+  it was the last `electron` import in that file.
+
+**Interpretation note.** The acceptance criteria say these files' non-`wt-*`
+calls should "use `lib/platform/ipc-os.js`", but three channels --
+`openPath`, `showItemInFolder`, `moveItemToTrash` -- are owned by
+`shell.js` per `lib/platform/AGENTS.md` and the shim doc. They went to
+`shell.js`. US-026 was supposed to catch them and did not, because it
+grepped for `electron.shell`, not for the channel names.
+
+**No `removeListener` existed** at any of these call sites (the AC
+anticipates some), so nothing needed the unsubscribe function. The only
+listener registrations left in these files are `wt-*` `.once` calls.
+
+### Files changed
+- `src/renderer/lib/dispatcher.js`, `src/renderer/lib/migrations.js`
+- `src/renderer/controllers/{media,torrent,folder-watcher,prefs,
+  torrent-list,playback}-controller.js`
+- `test/unit/platform-boundary.js` (US-030 concern + a wt-* counter-check)
+- `test/unit/os-ipc-call-sites.js` (new, behavioural)
+- `test/unit/migrations.js`, `test/unit/torrent-context-menu.js` (retargeted)
+- `docs/platform-shim.md`, `test/AGENTS.md`,
+  `src/renderer/controllers/AGENTS.md`, `specs/prd.json`
+
+### Verification
+`npm test` 459/459, `npm run lint` clean, `npm run build` (both halves)
+clean, and a background launch check reached `'Main Window'` and
+`init: 705.85ms` with no new errors. **The six-step manual smoke test was
+not run** -- it needs an interactive session. The AC calls out
+preferences changes and folder-watcher pickup as the risk; both are
+covered by real unit tests in `test/unit/os-ipc-call-sites.js`
+(setup/destroy toggling `setAllowNav`, `update()` routing to
+`setDefaultFileHandler`/`setStartup`, `start`/`stop` reaching the
+watcher exports), which is the closest honest substitute. The
+uncovered risk is the playback-controller and torrent-controller
+notification sites, which are fire-and-forget and only observable by
+watching the dock.
+
+- **Learnings for future iterations:**
+  - **`tape test/unit/*.js` is ONE process and requires every file
+    before running any test.** Two things leak across files as a
+    result, and both bit this story:
+    `setDispatch()` (last file loaded wins for the whole run -- call it
+    inside the per-test `reset()`), and `require.cache` stubs of built
+    shim modules (`platform-ipc-os.js` tests the real `ipc-os`, so a
+    stub left at its path fails it). Withdraw a shim stub immediately
+    after requiring the module under test; Babel has already bound the
+    module object by then, so the test keeps its stub. Glob order is
+    alphabetical, which is why this only shows up as "my new file
+    broke a file I never touched".
+  - **Migrating a call site can break another story's test.** US-029's
+    `torrent-context-menu.js` asserted on `record.sent` for
+    `showItemInFolder`; moving that channel to `shell.js` moved the
+    assertion too. Grep the tests for the channel name before
+    migrating, not after.
+  - **`controllers/AGENTS.md` already had the rule that matters here:**
+    state written inside a `.then()` lands after the render, so end the
+    continuation with `dispatch('update')`. `media-controller.mediaError`
+    needed it (the unsupported-media modal). The pre-shim code had the
+    same latency through `ipcRenderer.once` and never fixed it -- a
+    migration is a good moment to apply the rule, but say so, because it
+    is a behaviour change, not a pure refactor.
+  - **A boundary test can assert what did *not* move.** The story
+    explicitly defers `wt-*`, so `platform-boundary.js` now asserts both
+    that no non-`wt-` channel survives *and* that the four
+    engine-facing controllers still speak `wt-*`. That catches
+    over-migration, which lint and a launch check never would.
+---
+
+## 2026-07-28 - US-031
+- Migrated every `ipcRenderer` call site in `src/renderer/main.js` onto
+  the platform shim, and removed the file's `import electron from
+  'electron'`.
+- The OS channels went to `lib/platform/ipc-os.js`: `setTitle`,
+  `setProgress`, `setBadge` in `updateElectron()`;
+  `openTorrentFileDialog`, `openFilesDialog` and `toggleFullScreen` in
+  the dispatch table; `setAspectRatio` + `setBounds` in
+  `applyDimensions()` and `setAspectRatio` again in
+  `onFullscreenChanged()`; `signalReady` / `signalStateSaved` and the
+  five inbound listeners in `setupIpc()`.
+- `setupIpc()` is now `async`. It `await Promise.all([...])`s all
+  eighteen listener registrations, then `await ipcOs.signalReady()`.
+  Ordering is the point: `ipcReady` is what tells the main process the
+  renderer is listening, and while the Electron shim registers
+  synchronously before resolving, a non-Electron host is free not to.
+  The single caller became `reportErrors(setupIpc())`.
+- `onFullscreenChanged(e, isFullScreen)` and
+  `onWindowBoundsChanged(e, newBounds)` lost their leading event
+  parameter -- the shim's `listen()` strips it.
+- **Scope call: `main.js`'s thirteen `wt-*` listeners moved to
+  `ipc-engine.js` too, ahead of US-032.** AC-2 requires `main.js` to
+  stop importing `electron`, and those listeners were the only thing
+  still holding the import. Doing only the OS half would have left a
+  direct Electron import in the renderer entry point purely to respect
+  a story boundary. US-032 still owns the four engine-facing
+  controllers, which is the bulk of it. Recorded in
+  `docs/platform-shim.md` and in the boundary test's comments.
+- Tests: new `test/unit/main-ipc-call-sites.js` (17 assertions).
+  `test/unit/platform-boundary.js` widened -- the OS-IPC check now
+  walks the whole renderer minus `webtorrent.js` instead of a
+  hand-maintained file list, and its `wt-*` counterpart drops
+  `main.js`. Both written failing first (12 failures), then
+  implemented to green. Full suite 503/503, `standard` clean.
+- Files changed: `src/renderer/main.js`,
+  `src/renderer/lib/platform/ipc-os.js` (header comment),
+  `src/renderer/lib/platform/ipc-engine.js` (header comment),
+  `docs/platform-shim.md`, `test/AGENTS.md`,
+  `test/unit/platform-boundary.js`,
+  `test/unit/main-ipc-call-sites.js`, `specs/prd.json`.
+- **Verification.** Launch check with the renderer-console hook
+  appended to `build/main/index.js`. Two pieces of direct evidence for
+  the risky part:
+  - `init: 749.898ms` in the log is `console.timeEnd('init')` from
+    `app.once('ipcReady', ...)` in `src/main/index.js:114`, so
+    `signalReady()` genuinely reached the main process after the
+    awaited registrations.
+  - `RENDERER-CONSOLE: [1,"dispatch: %s %o stateSaveImmediate "]` is
+    the main process pushing a dispatch *into* the renderer, so
+    `ipcOs.onDispatch` works end to end.
+  The only severity-3 line is the known dormant Cast error. **The
+  six-step manual smoke test (AC-5) was NOT run** -- it cannot be, in a
+  non-interactive session. The steps carrying residual risk are the
+  ones no probe above touched: dock badge/progress during a real
+  download (`setBadge`/`setProgress`), the fullscreen round trip
+  (`onFullscreenChanged` -> `setAspectRatio`), and the window-bounds
+  save on resize.
+- **Learnings for future iterations:**
+  - **`init: <n>ms` in the launch log is not the renderer's.** There
+    are now three `init:` timers: the two renderer ones already noted
+    above, plus one in the *main* process that stops inside
+    `app.once('ipcReady')`. That third one is a free, precise assertion
+    that the renderer's ready signal arrived -- useful for any story
+    that touches renderer->main handshake ordering.
+  - **Main-to-renderer IPC can be observed without any probe.** The
+    app dispatches `stateSaveImmediate` into the renderer on quit
+    (`src/main/index.js:125`), and the renderer's own `dispatch()`
+    logs it. So killing the launch check is itself a live test of the
+    inbound `dispatch` channel -- read the tail of the log rather than
+    writing an `executeJavaScript` probe for it.
+  - **A shim listener registration is synchronous in Electron but
+    promised by contract.** Anything that has to happen *after*
+    listeners are live (here, `ipcReady`) must await them, or the
+    ordering silently depends on an implementation detail the Tauri
+    host is free to break. Await the registrations; don't rely on
+    `listen()` returning before the microtask queue drains.
+  - **`main.js` is not unit-testable at all**, not even with US-030's
+    compile-the-file-yourself recipe -- its module body calls
+    `State.load()` and it drags in React plus the whole controller
+    graph. The substitute that still has teeth: resolve each
+    `shim.member` the source references against the `export function`
+    names in the shim source, so a typo fails a test instead of
+    becoming `undefined` at runtime. See `test/AGENTS.md`.
+  - **A per-story file list in a boundary test is a maintenance
+    burden that ends.** Once the last file in a concern is migrated,
+    replace the list with a walk of the whole tree; keep a named list
+    only for the inverse assertion (what has *not* moved yet), where
+    the list failing on change is the feature.
+---
+
+## 2026-07-28 - US-032
+Migrated the `wt-*` engine call sites in the four engine-facing
+controllers onto `lib/platform/ipc-engine.js`. `src/renderer/` now has
+no `ipcRenderer` and no `electron` import outside `lib/platform/` and
+`webtorrent.js` (FR-4's counterparty), which is the whole point of the
+story: the engine is now a swappable unit behind one module.
+
+Files changed:
+- `src/renderer/controllers/torrent-controller.js` -- `stopTorrenting`,
+  `saveTorrentFile`, `generateTorrentPoster`
+- `src/renderer/controllers/torrent-list-controller.js` --
+  `startTorrenting` (x2), `createTorrent`, `setGlobalTrackers`,
+  `stopTorrenting` (x3), `selectFiles`; gained `reportErrors` from
+  `lib/dispatcher`
+- `src/renderer/controllers/playback-controller.js` --
+  `onTorrentReadyFor` (x2), `startServer`, `onServerRunning`,
+  `getAudioMetadata`, `stopServer`
+- `src/renderer/controllers/media-controller.js` -- `onServerRunning`
+- `src/renderer/lib/platform/ipc-engine.js` -- docblock only
+- `test/unit/engine-ipc-call-sites.js` -- new
+- `test/unit/platform-boundary.js`, `test/unit/os-ipc-call-sites.js`,
+  `test/AGENTS.md`, `src/renderer/controllers/AGENTS.md`
+
+Every migrated command is wrapped in `reportErrors(...)` -- the shim
+returns promises and a floating rejection is invisible. The two
+one-shot listeners became `{ once: true }` options rather than a
+separate export, and the dynamic `wt-ready-${infoHash}` subscriptions
+became `ipcEngine.onTorrentReadyFor(infoHash, fn, { once: true })`, so
+no caller builds a channel string.
+
+Verification: `npm test` green (570 assertions), `npm run lint` clean,
+`npm run build` clean with 0 externalization warnings, and a launch
+check showing `'Main Window'` and `init: 811ms` with no new severity-3
+console errors. The six-step manual smoke test was **not** run --
+non-interactive session. AC-6 names torrent add, progress updates,
+file selection and streaming start/stop; the unit tests cover the
+call sites and arguments for all four, but nothing here proves the
+engine end actually reacts, so that is the residual risk.
+
+- **Learnings for future iterations:**
+  - **`wt-server-${infoHash}` has no subscriber in the renderer UI.**
+    `webtorrent.js` sends it, but only `wt-server-running` is listened
+    for. `ipcEngine.onServerRunningFor` therefore has zero call sites
+    after this story -- that is not an omission, and US-033 should
+    document the channel as part of the protocol regardless.
+  - **Two unit files compiling the same controller collide.** The
+    compiled copy is keyed in `require.cache` by its emitted path, so
+    whichever test file loads first (glob order) hands its stubs to
+    the other. `os-ipc-call-sites.js` and `torrent-context-menu.js`
+    already compile `media-controller.js` / `torrent-list-controller.js`
+    into `build/renderer/controllers/`; the fix is to emit under a
+    suffixed file name in the same directory (the *directory* is what
+    resolves `../lib/...`, not the name).
+  - **Stub every built module the controller graph reaches, not just
+    the shim under test.** Letting a real shim module load in your
+    file binds *your* `electron` stub into it for the whole run, and
+    the failure surfaces in an unrelated later file. Two real cases
+    here: `torrent-list-controller` -> `lib/platform/clipboard` broke
+    `platform-clipboard.js`, and `playback-controller` -> `lib/state`
+    -> `lib/migrations` broke `migrations.js`. Symptom is always "a
+    test I never touched now fails"; the cause is always the first
+    require winning.
+  - **Migrating a file can break another story's test through a new
+    import.** `media-controller` gaining `ipc-engine` made
+    `os-ipc-call-sites.js` load the real `ipc-engine`, which then
+    failed `platform-ipc-engine.js`. Whenever you add a shim import to
+    a file some other unit test compiles, that test needs the new
+    module stubbed too.
+  - **A `\bipcRenderer\b` ban catches prose.** `lib/state.js` mentions
+    the word in a comment. Match `ipcRenderer\s*\.` for the usage ban
+    and let the import check cover the rest.
+---
+
+## 2026-07-28 - US-033
+
+Document the `wt-*` protocol at the shim boundary.
+
+**Interpretation:** this is a documentation story. Per execution rule 3
+and the global "do not write tests for docs" rule, no failing test was
+written first -- a test asserting the doc's text against a channel list
+would be exactly the brittle doc test that rule forbids, and the
+existing `test/unit/platform-boundary.js` already gates the property
+that matters (no `wt-*` literal outside `webtorrent.js` and
+`ipc-engine.js`). The cross-check criterion was satisfied empirically
+with grep instead, and the counts are recorded in the doc so a future
+session can re-run the same grep and compare.
+
+**What was implemented**
+
+- Added a `## The wt-* protocol` section to `docs/platform-shim.md`,
+  after the `ipc-engine.js` call-site tables and before the exempt-files
+  section. It covers: the transport (the `ipcMain.emit` relay), the two
+  directions, a commands table and an events table with payload and
+  one-shot/subscription/fire-and-forget for every channel, the two
+  dynamic families as families, the five payload shapes (`TorrentInfo`,
+  `Progress`, `ServerInfo`, `FileModtimes`, `CreateOptions`,
+  `AudioMetadata`), and the cross-check against what the renderer
+  actually sends.
+- Stated plainly at the top of that section that it is the contract any
+  librqbit implementation must satisfy.
+- Updated the `ipc-engine.js` section's forward reference (it said
+  US-033 would record the protocol "once the call sites have moved").
+- Corrected `torrentKey` in `ipc-engine.js`'s JSDoc from `string` to
+  `number` in all 13 places. It is `state.nextTorrentKey++`, seeded at
+  `1` in `lib/state.js:64`. Documenting the protocol is the point of the
+  story, and the JSDoc is part of that documentation.
+- Added a pointer to the new section in
+  `src/renderer/lib/platform/AGENTS.md`.
+
+**Files changed**
+
+- `docs/platform-shim.md`
+- `src/renderer/lib/platform/ipc-engine.js` (JSDoc types only)
+- `src/renderer/lib/platform/AGENTS.md`
+- `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `npm run lint` clean.
+- `npm test` green: 570/570, standard + depcheck + test-unit.
+- No app launch: nothing behavioural changed. The only code edit is
+  JSDoc comment text.
+
+**Learnings for future iterations:**
+
+- **`wt-new-torrent` and `wt-uncaught-error` have no listener
+  anywhere.** The pre-existing note in `docs/platform-shim.md` said
+  their "only receiver is `src/main/`", which is only true of the
+  `ipcMain.emit` relay -- it forwards them to the main window on the
+  `wt-` prefix and nothing there subscribes. Grep the whole repo before
+  repeating a claim about who consumes a channel; the relay makes
+  "reaches `src/main/`" and "is handled" look identical.
+- **`bitfield` is the one non-JSON payload field, and the UI already
+  copes.** `pages/player-page.js:943` calls
+  `BitField.prototype.get.call(prog.bitfield, i)`, not
+  `prog.bitfield.get(i)`, because structured clone strips the
+  prototype. Do not "fix" that borrowed method call -- it is what makes
+  a plain-object bitfield work, and it is what will let a librqbit host
+  send JSON there.
+- **`torrentKey` is a number.** Several JSDoc blocks said `string`.
+  Nothing breaks (it is opaque and only echoed back), but any typed
+  reimplementation of the protocol would have inherited the error.
+- **The renderer's `wt-*` inventory, for re-checking:** 24 distinct
+  static channels plus the two dynamic family prefixes across
+  `src/renderer/**/*.js`; all 24 in `webtorrent.js`, 22 of them in
+  `ipc-engine.js`. Command to reproduce:
+  `grep -rhoE "'wt-[a-z-]*[a-z]'" --include=*.js src/renderer/ |
+  sort -u`. Note the trailing `[a-z]` -- without it the family prefixes
+  `'wt-ready-'` and `'wt-server-'` are counted as static channels and
+  the total reads 26.
+---
+
+## 2026-07-28 - US-034
+
+Enforced the shim boundary with a real lint rule.
+
+- `eslint-boundary.config.js` (new, repo root): a standalone ESLint
+  config setting exactly one rule, `no-restricted-imports`, over
+  `src/renderer/**/*.js`. Banned specifiers: `electron`,
+  `@electron/remote`, `fs`, `os`, `crypto`, `http`, plus the
+  `fs/promises`, `node:` and `original-fs` spellings of the same
+  modules so the ban cannot be sidestepped by renaming the import.
+  Parser is `@babel/eslint-parser`, the same one `standard` uses, so
+  the rule parses exactly what `standard` parses -- JSX in `.js`
+  included. Exemptions in override order: a directory glob for
+  `src/renderer/lib/platform/**/*.js`, then exactly two per-file
+  overrides for the deferred casualties `src/renderer/webtorrent.js`
+  and `src/renderer/lib/cast.js`, each commented as such.
+- `package.json`: new `lint:boundary` script
+  (`eslint --no-eslintrc -c eslint-boundary.config.js src/renderer`);
+  `lint` is now `standard && npm run lint:boundary`; `test` calls
+  `npm run lint` instead of `standard` directly, so there is one
+  source of truth. `eslint` 8.15.0 added as an explicit devDependency
+  (it was already resolved at 8.15.0 as a transitive of `standard`;
+  the lock diff is one line) and added to depcheck's `--ignores`.
+- `test/unit/lint-boundary.js` (new, 46 assertions): drives the config
+  through ESLint's Node API. Asserts every banned specifier is
+  rejected with a message pointing at the shim, that the side-effect
+  (`import 'fs'`) and re-export (`export {x} from 'fs'`) forms are
+  caught too, that `path` / `react` / relative shim imports are still
+  allowed, that all four exempt paths (including a not-yet-existing
+  new shim module) may import freely, that files outside
+  `src/renderer/` are untouched by the config, that exactly two
+  per-file overrides exist, and that the real renderer tree lints
+  clean.
+- `test/unit/platform-boundary.js`: added a `require()` counterpart
+  check over the same specifier list, and rewrote the header comment.
+- Docs: new "Enforcing the boundary" section in
+  `docs/platform-shim.md`; `test/AGENTS.md` and
+  `src/renderer/lib/platform/AGENTS.md` updated.
+
+### Acceptance criteria
+
+All seven met. AC-5 verified literally: added `import os from 'os'` as
+line 1 of `src/renderer/lib/dispatcher.js`, ran `npm test`, and the run
+stopped at `lint:boundary` with `'os' import is restricted from being
+used. The renderer must not reach Node builtins directly. Import it
+from src/renderer/lib/platform/ instead (FR-11)` -- before `depcheck`
+or the unit tests executed. Reverted; boundary lint back to exit 0.
+AC-6 ("no other eslint or standard setting is changed") holds: the
+`standard` key in `package.json` is untouched and the new config is
+run with `--no-eslintrc`.
+
+`npm test` exits 0: standard, lint:boundary, depcheck, 654/654 unit
+assertions. No file under `src/` changed, so FR-2 is unaffected; the
+launch check was run anyway and reports `init: 922.1ms` with no
+leftover processes.
+
+**Learnings for future iterations:**
+- **`standard` has no `rules` escape hatch.** Its config key accepts
+  only `ignore`, `globals`, `env`, `parser`, `plugins`, `settings`.
+  Every project-specific rule needs a second standalone ESLint run.
+  Consolidated at the top.
+- **US-034 does NOT supersede `test/unit/platform-boundary.js`,**
+  despite what `test/AGENTS.md` and that file's own header comment
+  predicted before this session. `no-restricted-imports` sees `import`
+  declarations only -- it cannot see `require('fs')`, `ipcRenderer.`
+  member reads, `wt-` channel strings, or `new remote.Menu`. Deleting
+  the source scan would have been a straight loss of coverage, so it
+  stayed and grew a `require()` check instead. Both stale comments
+  were corrected. The story's acceptance criteria never asked for the
+  deletion; that was a forward guess made in US-026.
+- **Order matters when probing a lint failure.** The first attempt at
+  the AC-5 verification appended `import os from 'os'` to the *end* of
+  `dispatcher.js`, and `standard` failed first on `import/first` --
+  which proves nothing about the new rule. Put the probe import on
+  line 1 so `standard` passes and the boundary rule is unambiguously
+  the thing that failed.
+- **ESLint's Node API is the right way to test a config.**
+  `lintText(source, { filePath })` lints a path that need not exist,
+  so exemption coverage can be asserted for a hypothetical future shim
+  module without creating a file under `src/` that a crashed run would
+  leave behind. Consolidated at the top.
+- **`depcheck` does not credit a devDependency used only from an npm
+  script.** `standard` and `@babel/eslint-parser` were already in
+  `--ignores` for that reason; `eslint` joins them. Adding a
+  tool-only devDependency means editing that list in the same commit
+  or `npm test` fails on the next line.
+---

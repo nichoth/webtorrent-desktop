@@ -1,17 +1,18 @@
-const { ipcRenderer } = require('electron')
-const telemetry = require('../lib/telemetry')
-const Playlist = require('../lib/playlist')
+import { dispatch, reportErrors } from '../lib/dispatcher'
+import * as ipcEngine from '../lib/platform/ipc-engine'
+import * as ipcOs from '../lib/platform/ipc-os'
+import * as Playlist from '../lib/playlist'
 
 // Controls local play back: the <video>/<audio> tag and VLC
 // Does not control remote casting (Chromecast etc)
-module.exports = class MediaController {
+export default class MediaController {
   constructor (state) {
     this.state = state
   }
 
-  mediaSuccess () {
-    telemetry.logPlayAttempt('success')
-  }
+  // Dispatched by the <video>/<audio> tag; nothing to do, but the dispatcher
+  // resolves every action by name so the method has to exist
+  mediaSuccess () {}
 
   mediaStalled () {
     this.state.playing.isStalled = true
@@ -20,16 +21,20 @@ module.exports = class MediaController {
   mediaError (error) {
     const state = this.state
     if (state.location.url() === 'player') {
-      telemetry.logPlayAttempt('error')
       state.playing.location = 'error'
-      ipcRenderer.send('checkForExternalPlayer', state.saved.prefs.externalPlayerPath)
-      ipcRenderer.once('checkForExternalPlayer', (e, isInstalled) => {
-        state.modal = {
-          id: 'unsupported-media-modal',
-          error,
-          externalPlayerInstalled: isInstalled
-        }
-      })
+      ipcOs.checkForExternalPlayer(state.saved.prefs.externalPlayerPath)
+        .then((isInstalled) => {
+          state.modal = {
+            id: 'unsupported-media-modal',
+            error,
+            externalPlayerInstalled: isInstalled
+          }
+          // The shim answers a turn later than the render that opened
+          // the error screen, so the modal needs its own render (see
+          // controllers/AGENTS.md).
+          dispatch('update')
+        })
+        .catch((err) => dispatch('error', err))
     }
   }
 
@@ -58,17 +63,18 @@ module.exports = class MediaController {
 
     const onServerRunning = () => {
       state.playing.isReady = true
-      telemetry.logPlayAttempt('external')
 
       const mediaURL = Playlist.getCurrentLocalURL(state)
-      ipcRenderer.send('openExternalPlayer',
+      reportErrors(ipcOs.openExternalPlayer(
         state.saved.prefs.externalPlayerPath,
         mediaURL,
-        state.window.title)
+        state.window.title))
     }
 
     if (state.server != null) onServerRunning()
-    else ipcRenderer.once('wt-server-running', onServerRunning)
+    else {
+      reportErrors(ipcEngine.onServerRunning(onServerRunning, { once: true }))
+    }
   }
 
   externalPlayerNotFound () {

@@ -1,9 +1,9 @@
-const React = require('react')
+import React from 'react'
 
-const ModalOKCancel = require('./modal-ok-cancel')
-const { dispatch, dispatcher } = require('../lib/dispatcher')
+import ModalOKCancel from './modal-ok-cancel'
+import { dispatch, dispatcher } from '../lib/dispatcher'
 
-module.exports = class RemoveTorrentModal extends React.Component {
+export default class RemoveTorrentModal extends React.Component {
   render () {
     const state = this.props.state
     const message = state.modal.deleteData

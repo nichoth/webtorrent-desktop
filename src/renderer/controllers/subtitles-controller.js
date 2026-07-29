@@ -1,23 +1,33 @@
-const remote = require('@electron/remote')
-const fs = require('fs')
-const path = require('path')
-const parallel = require('run-parallel')
+import path from 'path'
+import parallel from 'run-parallel'
+import concat from 'simple-concat'
+import LanguageDetect from 'languagedetect'
+import srtToVtt from 'srt-to-vtt'
+import iso639 from 'iso-639-1'
 
-const { dispatch } = require('../lib/dispatcher')
+import { dispatch } from '../lib/dispatcher'
+import * as platformDialog from '../lib/platform/dialog'
+import * as fs from '../lib/platform/fs'
 
-module.exports = class SubtitlesController {
+export default class SubtitlesController {
   constructor (state) {
     this.state = state
   }
 
   openSubtitles () {
-    const filenames = remote.dialog.showOpenDialogSync({
+    platformDialog.showOpenDialog({
       title: 'Select a subtitles file.',
       filters: [{ name: 'Subtitles', extensions: ['vtt', 'srt'] }],
       properties: ['openFile']
     })
-    if (!Array.isArray(filenames)) return
-    this.addSubtitles(filenames, true)
+      .then(filenames => {
+        if (filenames.length === 0) return // They clicked Cancel
+        this.addSubtitles(filenames, true)
+        // dispatch()'s own update() already ran while the dialog was
+        // open, so the new subtitles need one of their own.
+        dispatch('update')
+      })
+      .catch(err => dispatch('error', err))
   }
 
   selectSubtitle (ix) {
@@ -83,15 +93,13 @@ module.exports = class SubtitlesController {
 }
 
 function loadSubtitle (file, cb) {
-  // Lazy load to keep startup fast
-  const concat = require('simple-concat')
-  const LanguageDetect = require('languagedetect')
-  const srtToVtt = require('srt-to-vtt')
-
   // Read the .SRT or .VTT file, parse it, add subtitle track
   const filePath = file.path || file
 
-  const vttStream = fs.createReadStream(filePath).pipe(srtToVtt())
+  // The shim has no createReadStream, so the whole file is read and
+  // pushed through the same srt-to-vtt transform. Subtitle files are
+  // small, and the stream was concatenated in full anyway.
+  const vttStream = srtToVtt()
 
   concat(vttStream, (err, buf) => {
     if (err) return dispatch('error', 'Can\'t parse subtitles file.')
@@ -111,12 +119,15 @@ function loadSubtitle (file, cb) {
 
     cb(null, track)
   })
+
+  fs.readFile(filePath)
+    .then(bytes => vttStream.end(Buffer.from(bytes)))
+    .catch(() => vttStream.destroy(new Error('Can\'t read subtitles file.')))
 }
 
 // Checks whether a language name like 'English' or 'German' matches the system
 // language, aka the current locale
 function isSystemLanguage (language) {
-  const iso639 = require('iso-639-1')
   const osLangISO = window.navigator.language.split('-')[0] // eg 'en'
   const langIso = iso639.getCode(language) // eg 'de' if language is 'German'
   return langIso === osLangISO

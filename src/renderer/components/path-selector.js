@@ -1,12 +1,14 @@
-const path = require('path')
+import path from 'path'
 
-const colors = require('material-ui/styles/colors')
-const remote = require('@electron/remote')
-const React = require('react')
-const PropTypes = require('prop-types')
+import { grey50 } from 'material-ui/styles/colors'
+import React from 'react'
+import PropTypes from 'prop-types'
 
-const RaisedButton = require('material-ui/RaisedButton').default
-const TextField = require('material-ui/TextField').default
+import RaisedButton from 'material-ui/RaisedButton'
+import TextField from 'material-ui/TextField'
+
+import * as platformDialog from '../lib/platform/dialog'
+import { dispatch } from '../lib/dispatcher'
 
 // Lets you pick a file or directory.
 // Uses the system Open File dialog.
@@ -34,9 +36,14 @@ class PathSelector extends React.Component {
       properties: ['openFile', 'openDirectory']
     }, this.props.dialog)
 
-    const filenames = remote.dialog.showOpenDialogSync(remote.getCurrentWindow(), opts)
-    if (!Array.isArray(filenames)) return
-    this.props.onChange && this.props.onChange(filenames[0])
+    // The shim parents the dialog to the current window itself, and
+    // resolves to [] rather than undefined when the user cancels.
+    platformDialog.showOpenDialog(opts)
+      .then(filenames => {
+        if (filenames.length === 0) return
+        this.props.onChange && this.props.onChange(filenames[0])
+      })
+      .catch(err => dispatch('error', err))
   }
 
   render () {
@@ -54,7 +61,7 @@ class PathSelector extends React.Component {
       whiteSpace: 'nowrap'
     }
     const textareaStyle = {
-      color: colors.grey50
+      color: grey50
     }
     const textFieldStyle = {
       flex: '1'
@@ -82,4 +89,4 @@ class PathSelector extends React.Component {
   }
 }
 
-module.exports = PathSelector
+export default PathSelector

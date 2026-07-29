@@ -13,7 +13,7 @@ const WebTorrent = require('webtorrent')
 
 const config = require('../config')
 const { TorrentKeyNotFoundError } = require('./lib/errors')
-const torrentPoster = require('./lib/torrent-poster')
+const torrentPoster = require('./lib/torrent-poster').default
 
 /**
  * WebTorrent version.

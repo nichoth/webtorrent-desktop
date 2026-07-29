@@ -1,18 +1,18 @@
-const createTorrent = require('create-torrent')
-const path = require('path')
-const prettyBytes = require('prettier-bytes')
-const React = require('react')
+import createTorrent from 'create-torrent'
+import path from 'path'
+import prettyBytes from 'prettier-bytes'
+import React from 'react'
 
-const { dispatch, dispatcher } = require('../lib/dispatcher')
+import { dispatch, dispatcher } from '../lib/dispatcher'
 
-const FlatButton = require('material-ui/FlatButton').default
-const RaisedButton = require('material-ui/RaisedButton').default
-const TextField = require('material-ui/TextField').default
-const Checkbox = require('material-ui/Checkbox').default
+import FlatButton from 'material-ui/FlatButton'
+import RaisedButton from 'material-ui/RaisedButton'
+import TextField from 'material-ui/TextField'
+import Checkbox from 'material-ui/Checkbox'
 
-const CreateTorrentErrorPage = require('../components/create-torrent-error-page')
-const Heading = require('../components/heading')
-const ShowMore = require('../components/show-more')
+import CreateTorrentErrorPage from '../components/create-torrent-error-page'
+import Heading from '../components/heading'
+import ShowMore from '../components/show-more'
 
 // Shows a basic UI to create a torrent, from an already-selected file or folder.
 // Includes a "Show Advanced..." button and more advanced UI.
@@ -224,4 +224,4 @@ function containsDots (path, pathPrefix) {
   return ('/' + suffix).includes('/.')
 }
 
-module.exports = CreateTorrentPage
+export default CreateTorrentPage

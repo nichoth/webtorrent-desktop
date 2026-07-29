@@ -1,17 +1,20 @@
-const fs = require('fs')
-const path = require('path')
-const { ipcRenderer, clipboard } = require('electron')
-const remote = require('@electron/remote')
+import path from 'path'
 
-const { dispatch } = require('../lib/dispatcher')
-const { TorrentKeyNotFoundError } = require('../lib/errors')
-const sound = require('../lib/sound')
-const TorrentSummary = require('../lib/torrent-summary')
+import { dispatch, reportErrors } from '../lib/dispatcher'
+import { TorrentKeyNotFoundError } from '../lib/errors'
+import * as sound from '../lib/sound'
+import * as TorrentSummary from '../lib/torrent-summary'
+import * as clipboard from '../lib/platform/clipboard'
+import * as platformDialog from '../lib/platform/dialog'
+import * as fs from '../lib/platform/fs'
+import * as ipcEngine from '../lib/platform/ipc-engine'
+import * as menu from '../lib/platform/menu'
+import * as shell from '../lib/platform/shell'
 
 const instantIoRegex = /^(https:\/\/)?instant\.io\/#/
 
 // Controls the torrent list: creating, adding, deleting, & manipulating torrents
-module.exports = class TorrentListController {
+export default class TorrentListController {
   constructor (state) {
     this.state = state
   }
@@ -37,7 +40,7 @@ module.exports = class TorrentListController {
     const torrentKey = this.state.nextTorrentKey++
     const path = this.state.saved.prefs.downloadPath
 
-    ipcRenderer.send('wt-start-torrenting', torrentKey, torrentId, path)
+    reportErrors(ipcEngine.startTorrenting(torrentKey, torrentId, path))
 
     dispatch('backToList')
   }
@@ -72,7 +75,7 @@ module.exports = class TorrentListController {
   createTorrent (options) {
     const state = this.state
     const torrentKey = state.nextTorrentKey++
-    ipcRenderer.send('wt-create-torrent', torrentKey, options)
+    reportErrors(ipcEngine.createTorrent(torrentKey, options))
     state.location.cancel()
   }
 
@@ -94,27 +97,23 @@ module.exports = class TorrentListController {
     if (!fileOrFolder) return start()
 
     // Existing torrent: check that the path is still there
-    fs.stat(fileOrFolder, err => {
-      if (err) {
-        s.error = 'path-missing'
-        dispatch('backToList')
-        return
-      }
-      start()
+    fs.stat(fileOrFolder).then(start, () => {
+      s.error = 'path-missing'
+      dispatch('backToList')
     })
 
     function start () {
-      ipcRenderer.send('wt-start-torrenting',
+      reportErrors(ipcEngine.startTorrenting(
         s.torrentKey,
         TorrentSummary.getTorrentId(s),
         s.path,
         s.fileModtimes,
-        s.selections)
+        s.selections))
     }
   }
 
   setGlobalTrackers (globalTrackers) {
-    ipcRenderer.send('wt-set-global-trackers', globalTrackers)
+    reportErrors(ipcEngine.setGlobalTrackers(globalTrackers))
   }
 
   // TODO: use torrentKey, not infoHash
@@ -135,7 +134,7 @@ module.exports = class TorrentListController {
       if (torrentSummary.status === 'downloading' ||
           torrentSummary.status === 'seeding') {
         torrentSummary.status = 'paused'
-        ipcRenderer.send('wt-stop-torrenting', torrentSummary.infoHash)
+        reportErrors(ipcEngine.stopTorrenting(torrentSummary.infoHash))
       }
     })
     sound.play('DISABLE')
@@ -153,7 +152,7 @@ module.exports = class TorrentListController {
 
   pauseTorrent (torrentSummary, playSound) {
     torrentSummary.status = 'paused'
-    ipcRenderer.send('wt-stop-torrenting', torrentSummary.infoHash)
+    reportErrors(ipcEngine.stopTorrenting(torrentSummary.infoHash))
 
     if (playSound) sound.play('DISABLE')
   }
@@ -190,7 +189,8 @@ module.exports = class TorrentListController {
 
     // Let the WebTorrent process know to start or stop fetching that file
     if (torrentSummary.status !== 'paused') {
-      ipcRenderer.send('wt-select-files', infoHash, torrentSummary.selections)
+      reportErrors(
+        ipcEngine.selectFiles(infoHash, torrentSummary.selections))
     }
   }
 
@@ -255,59 +255,51 @@ module.exports = class TorrentListController {
 
   openTorrentContextMenu (infoHash) {
     const torrentSummary = TorrentSummary.getByKey(this.state, infoHash)
-    const menu = new remote.Menu()
-
-    menu.append(new remote.MenuItem({
-      label: 'Remove From List',
-      click: () => dispatch('confirmDeleteTorrent', torrentSummary.infoHash, false)
-    }))
-
-    menu.append(new remote.MenuItem({
-      label: 'Remove Data File',
-      click: () => dispatch('confirmDeleteTorrent', torrentSummary.infoHash, true)
-    }))
-
-    menu.append(new remote.MenuItem({
-      type: 'separator'
-    }))
-
-    if (torrentSummary.files) {
-      menu.append(new remote.MenuItem({
-        label: process.platform === 'darwin' ? 'Show in Finder' : 'Show in Folder',
-        click: () => showItemInFolder(torrentSummary)
-      }))
-      menu.append(new remote.MenuItem({
-        type: 'separator'
-      }))
-    }
-
-    menu.append(new remote.MenuItem({
-      label: 'Copy Magnet Link to Clipboard',
-      click: () => clipboard.writeText(torrentSummary.magnetURI)
-    }))
-
-    menu.append(new remote.MenuItem({
-      label: 'Copy Instant.io Link to Clipboard',
-      click: () => clipboard.writeText(`https://instant.io/#${torrentSummary.infoHash}`)
-    }))
-
-    menu.append(new remote.MenuItem({
-      label: 'Save Torrent File As...',
-      click: () => dispatch('saveTorrentFileAs', torrentSummary.torrentKey),
-      enabled: torrentSummary.torrentFileName != null
-    }))
-
-    menu.append(new remote.MenuItem({
-      type: 'separator'
-    }))
-
     const sortedByName = this.state.saved.prefs.sortByName
-    menu.append(new remote.MenuItem({
-      label: `${sortedByName ? '✓ ' : ''}Sort by Name`,
-      click: () => dispatch('updatePreferences', 'sortByName', !sortedByName)
-    }))
 
-    menu.popup({ window: remote.getCurrentWindow() })
+    // The menu is data (FR-12): plain descriptors, no MenuItem here.
+    // The shim pops it up and parents it to the current window itself.
+    const items = [
+      {
+        label: 'Remove From List',
+        click: () => dispatch('confirmDeleteTorrent', torrentSummary.infoHash, false)
+      },
+      {
+        label: 'Remove Data File',
+        click: () => dispatch('confirmDeleteTorrent', torrentSummary.infoHash, true)
+      },
+      { type: 'separator' },
+      // Nothing to reveal until the torrent's metadata has arrived.
+      ...(torrentSummary.files
+        ? [
+            {
+              label: process.platform === 'darwin' ? 'Show in Finder' : 'Show in Folder',
+              click: () => showItemInFolder(torrentSummary)
+            },
+            { type: 'separator' }
+          ]
+        : []),
+      {
+        label: 'Copy Magnet Link to Clipboard',
+        click: () => copyToClipboard(torrentSummary.magnetURI)
+      },
+      {
+        label: 'Copy Instant.io Link to Clipboard',
+        click: () => copyToClipboard(`https://instant.io/#${torrentSummary.infoHash}`)
+      },
+      {
+        label: 'Save Torrent File As...',
+        click: () => dispatch('saveTorrentFileAs', torrentSummary.torrentKey),
+        enabled: torrentSummary.torrentFileName != null
+      },
+      { type: 'separator' },
+      {
+        label: `${sortedByName ? '✓ ' : ''}Sort by Name`,
+        click: () => dispatch('updatePreferences', 'sortByName', !sortedByName)
+      }
+    ]
+
+    menu.showContextMenu(items).catch((err) => dispatch('error', err))
   }
 
   // Takes a torrentSummary or torrentKey
@@ -317,7 +309,6 @@ module.exports = class TorrentListController {
     if (!torrentSummary) throw new TorrentKeyNotFoundError(torrentKey)
     const downloadPath = this.state.saved.prefs.downloadPath
     const newFileName = path.parse(torrentSummary.name).name + '.torrent'
-    const win = remote.getCurrentWindow()
     const opts = {
       title: 'Save Torrent File',
       defaultPath: path.join(downloadPath, newFileName),
@@ -328,17 +319,16 @@ module.exports = class TorrentListController {
       buttonLabel: 'Save'
     }
 
-    const savePath = remote.dialog.showSaveDialogSync(win, opts)
-
-    if (!savePath) return // They clicked Cancel
-    console.log('Saving torrent ' + torrentKey + ' to ' + savePath)
-    const torrentPath = TorrentSummary.getTorrentPath(torrentSummary)
-    fs.readFile(torrentPath, (err, torrentFile) => {
-      if (err) return dispatch('error', err)
-      fs.writeFile(savePath, torrentFile, err => {
-        if (err) return dispatch('error', err)
+    // The shim parents the dialog to the current window itself.
+    platformDialog.showSaveDialog(opts)
+      .then(savePath => {
+        if (!savePath) return // They clicked Cancel
+        console.log('Saving torrent ' + torrentKey + ' to ' + savePath)
+        const torrentPath = TorrentSummary.getTorrentPath(torrentSummary)
+        return fs.readFile(torrentPath)
+          .then(torrentFile => fs.writeFile(savePath, torrentFile))
       })
-    })
+      .catch(err => dispatch('error', err))
   }
 }
 
@@ -361,48 +351,56 @@ function findFilesRecursive (paths, cb_) {
   }
 
   const fileOrFolder = paths[0]
-  fs.stat(fileOrFolder, (err, stat) => {
-    if (err) return dispatch('error', err)
+  // The shim's stat resolves a plain object, so `isDirectory` is a
+  // boolean rather than a method.
+  fs.stat(fileOrFolder)
+    .then(stat => {
+      // Files: return name, path, and size
+      if (!stat.isDirectory) {
+        const filePath = fileOrFolder
+        return cb_([{
+          name: path.basename(filePath),
+          path: filePath,
+          size: stat.size
+        }])
+      }
 
-    // Files: return name, path, and size
-    if (!stat.isDirectory()) {
-      const filePath = fileOrFolder
-      return cb_([{
-        name: path.basename(filePath),
-        path: filePath,
-        size: stat.size
-      }])
-    }
-
-    // Folders: recurse, make a list of all the files
-    const folderPath = fileOrFolder
-    fs.readdir(folderPath, (err, fileNames) => {
-      if (err) return dispatch('error', err)
-      const paths = fileNames.map((fileName) => path.join(folderPath, fileName))
-      findFilesRecursive(paths, cb_)
+      // Folders: recurse, make a list of all the files
+      const folderPath = fileOrFolder
+      return fs.readdir(folderPath).then(fileNames => {
+        const paths = fileNames.map((fileName) =>
+          path.join(folderPath, fileName))
+        findFilesRecursive(paths, cb_)
+      })
     })
-  })
+    .catch(err => dispatch('error', err))
 }
 
 function deleteFile (path) {
   if (!path) return
-  fs.unlink(path, err => {
-    if (err) dispatch('error', err)
-  })
+  fs.unlink(path).catch(err => dispatch('error', err))
+}
+
+// Context-menu click handlers cannot await, so the shim's promise
+// (FR-10) is terminated here rather than left floating.
+function copyToClipboard (text) {
+  clipboard.writeText(text).catch((err) => dispatch('error', err))
 }
 
 // Delete all files in a torrent
 function moveItemToTrash (torrentSummary) {
   const filePath = TorrentSummary.getFileOrFolder(torrentSummary)
-  if (filePath) ipcRenderer.send('moveItemToTrash', filePath)
+  if (!filePath) return
+  shell.moveItemToTrash(filePath).catch((err) => dispatch('error', err))
 }
 
 function showItemInFolder (torrentSummary) {
-  ipcRenderer.send('showItemInFolder', TorrentSummary.getFileOrFolder(torrentSummary))
+  shell.showItemInFolder(TorrentSummary.getFileOrFolder(torrentSummary))
+    .catch((err) => dispatch('error', err))
 }
 
 function deleteTorrentFile (torrentSummary, deleteData) {
-  ipcRenderer.send('wt-stop-torrenting', torrentSummary.infoHash)
+  reportErrors(ipcEngine.stopTorrenting(torrentSummary.infoHash))
 
   // remove torrent and poster file
   deleteFile(TorrentSummary.getTorrentPath(torrentSummary))

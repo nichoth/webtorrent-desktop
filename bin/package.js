@@ -19,6 +19,10 @@ const pkg = require('../package.json')
 
 const BUILD_NAME = config.APP_NAME + '-v' + config.APP_VERSION
 const BUILD_PATH = path.join(config.ROOT_PATH, 'build')
+// The Vite renderer bundle. `static/main.html` loads it with a plain
+// `<script src>`, so it has to be nuked and rebuilt alongside `build/`
+// and shipped inside the packaged app.
+const BUILD_VITE_PATH = path.join(config.ROOT_PATH, 'build-vite')
 const DIST_PATH = path.join(config.ROOT_PATH, 'dist')
 const NODE_MODULES_PATH = path.join(config.ROOT_PATH, 'node_modules')
 
@@ -40,13 +44,14 @@ function build () {
   rimraf.sync(NODE_MODULES_PATH)
   cp.execSync('npm ci', { stdio: 'inherit' })
 
-  console.log('Nuking dist/ and build/...')
+  console.log('Nuking dist/, build/ and build-vite/...')
   rimraf.sync(DIST_PATH)
   rimraf.sync(BUILD_PATH)
+  rimraf.sync(BUILD_VITE_PATH)
 
-  console.log('Build: Transpiling to ES5...')
+  console.log('Build: Compiling main process and renderer bundle...')
   cp.execSync('npm run build', { NODE_ENV: 'production', stdio: 'inherit' })
-  console.log('Build: Transpiled to ES5.')
+  console.log('Build: Compiled.')
 
   const platform = argv._[0]
   if (platform === 'darwin') {

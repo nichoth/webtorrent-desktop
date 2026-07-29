@@ -1,11 +1,12 @@
-const path = require('path')
-const { ipcRenderer } = require('electron')
+import path from 'path'
 
-const TorrentSummary = require('../lib/torrent-summary')
-const sound = require('../lib/sound')
-const { dispatch } = require('../lib/dispatcher')
+import * as TorrentSummary from '../lib/torrent-summary'
+import * as sound from '../lib/sound'
+import * as ipcEngine from '../lib/platform/ipc-engine'
+import * as ipcOs from '../lib/platform/ipc-os'
+import { dispatch, reportErrors } from '../lib/dispatcher'
 
-module.exports = class TorrentController {
+export default class TorrentController {
   constructor (state) {
     this.state = state
   }
@@ -20,7 +21,7 @@ module.exports = class TorrentController {
 
       // Check if an existing (non-active) torrent has the same info hash
       if (torrents.find((t) => t.infoHash === infoHash)) {
-        ipcRenderer.send('wt-stop-torrenting', infoHash)
+        reportErrors(ipcEngine.stopTorrenting(infoHash))
         return dispatch('error', 'Cannot add duplicate torrent')
       }
 
@@ -75,10 +76,14 @@ module.exports = class TorrentController {
     dispatch('update')
 
     // Save the .torrent file, if it hasn't been saved already
-    if (!torrentSummary.torrentFileName) ipcRenderer.send('wt-save-torrent-file', torrentKey)
+    if (!torrentSummary.torrentFileName) {
+      reportErrors(ipcEngine.saveTorrentFile(torrentKey))
+    }
 
     // Auto-generate a poster image, if it hasn't been generated already
-    if (!torrentSummary.posterFileName) ipcRenderer.send('wt-generate-torrent-poster', torrentKey)
+    if (!torrentSummary.posterFileName) {
+      reportErrors(ipcEngine.generateTorrentPoster(torrentKey))
+    }
   }
 
   torrentDone (torrentKey, torrentInfo) {
@@ -93,7 +98,7 @@ module.exports = class TorrentController {
         this.state.dock.badge += 1
       }
       showDoneNotification(torrentSummary)
-      ipcRenderer.send('downloadFinished', getTorrentPath(torrentSummary))
+      reportErrors(ipcOs.notifyDownloadFinished(getTorrentPath(torrentSummary)))
     }
 
     dispatch('update')
@@ -178,7 +183,7 @@ function showDoneNotification (torrent) {
   })
 
   notif.onclick = () => {
-    ipcRenderer.send('show')
+    reportErrors(ipcOs.show())
   }
 
   // Only play notification sound if player is inactive

@@ -1,0 +1,240 @@
+const test = require('tape')
+const fs = require('fs')
+const path = require('path')
+
+// Static boundary check (FR-8): once a shim module's call sites are
+// migrated, nothing outside `src/renderer/lib/platform/` may reach the
+// corresponding Electron API directly again. This grew one concern at
+// a time as the US-026..US-032 migrations landed.
+//
+// US-034 added a lint rule (`eslint-boundary.config.js`, driven by
+// `test/unit/lint-boundary.js`) but did NOT replace this file. The two
+// cover different things and both are needed: the lint rule bans the
+// import *specifiers*, which catches a brand new file reaching for a
+// host module; this file bans the *concerns* -- `ipcRenderer.` member
+// reads, `wt-` channel strings, `new remote.Menu`, `remote.dialog` --
+// which no import-level rule can express, plus the `require()`
+// spellings that `no-restricted-imports` does not see.
+//
+// It reads the ESM sources under `src/` rather than the Babel output,
+// because the boundary is a property of the source we hand to the
+// bundler, and `build/` does not contain `components/` or
+// `controllers/` at all.
+
+const RENDERER = path.join(__dirname, '..', '..', 'src', 'renderer')
+const SHIM = path.join(RENDERER, 'lib', 'platform')
+
+// FR-4 exempts the hidden WebTorrent window from the shim: it is a
+// Node process by design and keeps its own `require('fs')`.
+const EXEMPT = new Set([path.join(RENDERER, 'webtorrent.js')])
+
+// The two deferred casualties, matching the per-file overrides in
+// `eslint-boundary.config.js`.
+const DEFERRED = new Set([
+  path.join(RENDERER, 'webtorrent.js'),
+  path.join(RENDERER, 'lib', 'cast.js')
+])
+
+function rendererSources () {
+  const out = []
+  ;(function walk (dir) {
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        if (full !== SHIM) walk(full)
+      } else if (entry.name.endsWith('.js')) {
+        out.push(full)
+      }
+    }
+  })(RENDERER)
+  return out
+}
+
+// `import { shell, clipboard } from 'electron'` in any spelling, plus
+// the namespace form `electron.clipboard` / `electron.shell`.
+function offendingLines (source, name) {
+  const named = new RegExp(
+    'import\\s*\\{[^}]*\\b' + name + '\\b[^}]*\\}\\s*from\\s*[\'"]electron[\'"]'
+  )
+  const member = new RegExp('\\belectron\\.' + name + '\\b')
+  return source.split('\n')
+    .map((line, i) => ({ line, n: i + 1 }))
+    .filter(({ line }) => named.test(line) || member.test(line))
+    .map(({ line, n }) => n + ': ' + line.trim())
+}
+
+for (const name of ['shell', 'clipboard']) {
+  test('no renderer code outside the shim uses electron.' + name, function (t) {
+    const files = rendererSources()
+    t.ok(files.length > 20, 'walked the renderer sources')
+    for (const file of files) {
+      const rel = path.relative(RENDERER, file)
+      const hits = offendingLines(fs.readFileSync(file, 'utf8'), name)
+      t.deepEqual(hits, [], rel + ' does not reach for electron.' + name)
+    }
+    t.end()
+  })
+}
+
+// US-027 covers two of `@electron/remote`'s concerns: the dialog API and
+// the two window-state reads. `remote.Menu` / `remote.MenuItem` in
+// `controllers/torrent-list-controller.js` is a third, migrated in
+// US-029, so a blanket ban on the `@electron/remote` specifier would be
+// dishonest here. These patterns name the concerns instead. The
+// namespace forms cover both `remote.x` (`@electron/remote`) and
+// `electron.remote.x` (the long-broken Electron 13 spelling that
+// `main.js` still used).
+const REMOTE_CHECKS = [
+  {
+    concern: 'the @electron/remote dialog API',
+    patterns: [
+      /\bremote\.dialog\b/,
+      /import\s*\{[^}]*\bdialog\b[^}]*\}\s*from\s*['"]@electron\/remote['"]/
+    ]
+  },
+  {
+    concern: 'window-state reads via getCurrentWindow()',
+    patterns: [/getCurrentWindow\s*\(\s*\)\s*\.\s*(isVisible|isMaximized)\b/]
+  },
+  // US-029: the menu concern. `Menu` and `MenuItem` are only ever
+  // reached by construction, so the patterns name `new`.
+  {
+    concern: 'the @electron/remote menu API',
+    patterns: [
+      /\bnew\s+(electron\.)?remote\.Menu(Item)?\b/,
+      /import\s*\{[^}]*\bMenu(Item)?\b[^}]*\}\s*from\s*['"]@electron\/remote['"]/
+    ]
+  }
+]
+
+for (const { concern, patterns } of REMOTE_CHECKS) {
+  test('no renderer code outside the shim uses ' + concern, function (t) {
+    const files = rendererSources()
+    t.ok(files.length > 20, 'walked the renderer sources')
+    for (const file of files) {
+      const rel = path.relative(RENDERER, file)
+      const hits = fs.readFileSync(file, 'utf8').split('\n')
+        .map((line, i) => ({ line, n: i + 1 }))
+        .filter(({ line }) => patterns.some((re) => re.test(line)))
+        .map(({ line, n }) => n + ': ' + line.trim())
+      t.deepEqual(hits, [], rel + ' does not use ' + concern)
+    }
+    t.end()
+  })
+}
+
+// US-028: the filesystem concern. Unlike the Electron checks above the
+// offending API is a Node builtin, so the pattern names the module
+// specifier -- there is only one way to reach `fs` and no second
+// concern sharing it. `src/renderer/webtorrent.js` is exempt by FR-4,
+// and `lib/platform/` is already skipped by the walk.
+test('no renderer code outside the shim imports fs', function (t) {
+  const files = rendererSources().filter((f) => !EXEMPT.has(f))
+  t.ok(files.length > 20, 'walked the renderer sources')
+  const patterns = [
+    /from\s*['"](fs|fs\/promises|original-fs)['"]/,
+    /require\s*\(\s*['"](fs|fs\/promises|original-fs)['"]\s*\)/
+  ]
+  for (const file of files) {
+    const rel = path.relative(RENDERER, file)
+    const hits = fs.readFileSync(file, 'utf8').split('\n')
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line }) => patterns.some((re) => re.test(line)))
+      .map(({ line, n }) => n + ': ' + line.trim())
+    t.deepEqual(hits, [], rel + ' does not import fs directly')
+  }
+  t.end()
+})
+
+// US-030/US-031 covered the OS-facing IPC concern (`ipc-os.js`) and
+// US-032 the engine protocol (`ipc-engine.js`). Between them the two
+// shims own every renderer <-> main channel (FR-9), so there is no
+// longer a channel prefix to carve out: nothing outside
+// `lib/platform/` may name a channel at all. `webtorrent.js` is the
+// counterparty, exempt by FR-4.
+test('no renderer file outside the shim touches ipcRenderer',
+  function (t) {
+    const files = rendererSources().filter((f) => !EXEMPT.has(f))
+    t.ok(files.length > 20, 'walked the renderer sources')
+    for (const file of files) {
+      const rel = path.relative(RENDERER, file)
+      const hits = fs.readFileSync(file, 'utf8').split('\n')
+        .map((line, i) => ({ line, n: i + 1 }))
+        .filter(({ line }) => /\bipcRenderer\s*\./.test(line))
+        .map(({ line, n }) => n + ': ' + line.trim())
+      t.deepEqual(hits, [], rel + ' routes every channel through a shim')
+    }
+    t.end()
+  })
+
+// The dynamic channel families are the one place a caller could route
+// through the shim and still know the protocol: building
+// `'wt-ready-' + infoHash` and handing it over defeats the point. The
+// shim takes the info hash instead (`onTorrentReadyFor`), so no
+// `wt-`-prefixed string literal belongs outside it.
+test('no renderer file outside the shim builds a wt-* channel string',
+  function (t) {
+    const files = rendererSources().filter((f) => !EXEMPT.has(f))
+    for (const file of files) {
+      const rel = path.relative(RENDERER, file)
+      const hits = fs.readFileSync(file, 'utf8').split('\n')
+        .map((line, i) => ({ line, n: i + 1 }))
+        .filter(({ line }) => /['"`]wt-/.test(line))
+        .map(({ line, n }) => n + ': ' + line.trim())
+      t.deepEqual(hits, [], rel + ' names no wt-* channel')
+    }
+    t.end()
+  })
+
+// US-034: `no-restricted-imports` only sees `import` declarations, so
+// the lint rule cannot stop a renderer file from reaching a host
+// module through a call-scoped `require()` -- which is exactly the
+// escape hatch `lib/cast.js` uses for the casting libraries, and the
+// only deferral mechanism that works in this renderer at all. This
+// covers the same specifier list for the `require()` spelling.
+test('no renderer file outside the shim requires a banned host module',
+  function (t) {
+    const files = rendererSources().filter((f) => !DEFERRED.has(f))
+    t.ok(files.length > 20, 'walked the renderer sources')
+    const banned = [
+      'electron', '@electron/remote',
+      'fs', 'fs/promises', 'original-fs',
+      'os', 'crypto', 'http'
+    ]
+    const pattern = new RegExp(
+      'require\\s*\\(\\s*[\'"](node:)?(' +
+      banned.map((s) => s.replace('/', '\\/')).join('|') +
+      ')[\'"]\\s*\\)'
+    )
+    for (const file of files) {
+      const rel = path.relative(RENDERER, file)
+      const hits = fs.readFileSync(file, 'utf8').split('\n')
+        .map((line, i) => ({ line, n: i + 1 }))
+        .filter(({ line }) => pattern.test(line))
+        .map(({ line, n }) => n + ': ' + line.trim())
+      t.deepEqual(hits, [], rel + ' requires no host module directly')
+    }
+    t.end()
+  })
+
+// US-032 AC-4: with both IPC concerns migrated, the only renderer
+// modules left importing Electron are the shim itself (skipped by the
+// walk) and the hidden WebTorrent window (FR-4). AC-4 also exempts
+// `lib/cast.js`, but it reaches Chromecast through `chromecasts` /
+// `airplay-js`, not Electron, so the assertion below is exact rather
+// than allowing it.
+test('only the shim and webtorrent.js import electron',
+  function (t) {
+    const patterns = [
+      /from\s*['"](electron|@electron\/remote)['"]/,
+      /require\s*\(\s*['"](electron|@electron\/remote)['"]\s*\)/
+    ]
+    const importers = rendererSources()
+      .filter((file) => patterns.some((re) =>
+        re.test(fs.readFileSync(file, 'utf8'))))
+      .map((file) => path.relative(RENDERER, file).split(path.sep).join('/'))
+      .sort()
+    t.deepEqual(importers, ['webtorrent.js'],
+      'no renderer module outside the exempt set imports electron')
+    t.end()
+  })

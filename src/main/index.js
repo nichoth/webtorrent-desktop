@@ -13,7 +13,8 @@ const config = require('../config')
 const ipc = require('./ipc')
 const log = require('./log')
 const menu = require('./menu')
-const State = require('../renderer/lib/state')
+// state.js is ESM; Babel emits its `export default` as `.default`
+const State = require('../renderer/lib/state').default
 const windows = require('./windows')
 
 const WEBTORRENT_VERSION = require('webtorrent/package.json').version
