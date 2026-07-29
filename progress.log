@@ -2845,3 +2845,93 @@ watching the dock.
     engine-facing controllers still speak `wt-*`. That catches
     over-migration, which lint and a launch check never would.
 ---
+
+## 2026-07-28 - US-031
+- Migrated every `ipcRenderer` call site in `src/renderer/main.js` onto
+  the platform shim, and removed the file's `import electron from
+  'electron'`.
+- The OS channels went to `lib/platform/ipc-os.js`: `setTitle`,
+  `setProgress`, `setBadge` in `updateElectron()`;
+  `openTorrentFileDialog`, `openFilesDialog` and `toggleFullScreen` in
+  the dispatch table; `setAspectRatio` + `setBounds` in
+  `applyDimensions()` and `setAspectRatio` again in
+  `onFullscreenChanged()`; `signalReady` / `signalStateSaved` and the
+  five inbound listeners in `setupIpc()`.
+- `setupIpc()` is now `async`. It `await Promise.all([...])`s all
+  eighteen listener registrations, then `await ipcOs.signalReady()`.
+  Ordering is the point: `ipcReady` is what tells the main process the
+  renderer is listening, and while the Electron shim registers
+  synchronously before resolving, a non-Electron host is free not to.
+  The single caller became `reportErrors(setupIpc())`.
+- `onFullscreenChanged(e, isFullScreen)` and
+  `onWindowBoundsChanged(e, newBounds)` lost their leading event
+  parameter -- the shim's `listen()` strips it.
+- **Scope call: `main.js`'s thirteen `wt-*` listeners moved to
+  `ipc-engine.js` too, ahead of US-032.** AC-2 requires `main.js` to
+  stop importing `electron`, and those listeners were the only thing
+  still holding the import. Doing only the OS half would have left a
+  direct Electron import in the renderer entry point purely to respect
+  a story boundary. US-032 still owns the four engine-facing
+  controllers, which is the bulk of it. Recorded in
+  `docs/platform-shim.md` and in the boundary test's comments.
+- Tests: new `test/unit/main-ipc-call-sites.js` (17 assertions).
+  `test/unit/platform-boundary.js` widened -- the OS-IPC check now
+  walks the whole renderer minus `webtorrent.js` instead of a
+  hand-maintained file list, and its `wt-*` counterpart drops
+  `main.js`. Both written failing first (12 failures), then
+  implemented to green. Full suite 503/503, `standard` clean.
+- Files changed: `src/renderer/main.js`,
+  `src/renderer/lib/platform/ipc-os.js` (header comment),
+  `src/renderer/lib/platform/ipc-engine.js` (header comment),
+  `docs/platform-shim.md`, `test/AGENTS.md`,
+  `test/unit/platform-boundary.js`,
+  `test/unit/main-ipc-call-sites.js`, `specs/prd.json`.
+- **Verification.** Launch check with the renderer-console hook
+  appended to `build/main/index.js`. Two pieces of direct evidence for
+  the risky part:
+  - `init: 749.898ms` in the log is `console.timeEnd('init')` from
+    `app.once('ipcReady', ...)` in `src/main/index.js:114`, so
+    `signalReady()` genuinely reached the main process after the
+    awaited registrations.
+  - `RENDERER-CONSOLE: [1,"dispatch: %s %o stateSaveImmediate "]` is
+    the main process pushing a dispatch *into* the renderer, so
+    `ipcOs.onDispatch` works end to end.
+  The only severity-3 line is the known dormant Cast error. **The
+  six-step manual smoke test (AC-5) was NOT run** -- it cannot be, in a
+  non-interactive session. The steps carrying residual risk are the
+  ones no probe above touched: dock badge/progress during a real
+  download (`setBadge`/`setProgress`), the fullscreen round trip
+  (`onFullscreenChanged` -> `setAspectRatio`), and the window-bounds
+  save on resize.
+- **Learnings for future iterations:**
+  - **`init: <n>ms` in the launch log is not the renderer's.** There
+    are now three `init:` timers: the two renderer ones already noted
+    above, plus one in the *main* process that stops inside
+    `app.once('ipcReady')`. That third one is a free, precise assertion
+    that the renderer's ready signal arrived -- useful for any story
+    that touches renderer->main handshake ordering.
+  - **Main-to-renderer IPC can be observed without any probe.** The
+    app dispatches `stateSaveImmediate` into the renderer on quit
+    (`src/main/index.js:125`), and the renderer's own `dispatch()`
+    logs it. So killing the launch check is itself a live test of the
+    inbound `dispatch` channel -- read the tail of the log rather than
+    writing an `executeJavaScript` probe for it.
+  - **A shim listener registration is synchronous in Electron but
+    promised by contract.** Anything that has to happen *after*
+    listeners are live (here, `ipcReady`) must await them, or the
+    ordering silently depends on an implementation detail the Tauri
+    host is free to break. Await the registrations; don't rely on
+    `listen()` returning before the microtask queue drains.
+  - **`main.js` is not unit-testable at all**, not even with US-030's
+    compile-the-file-yourself recipe -- its module body calls
+    `State.load()` and it drags in React plus the whole controller
+    graph. The substitute that still has teeth: resolve each
+    `shim.member` the source references against the `export function`
+    names in the shim source, so a typo fails a test instead of
+    becoming `undefined` at runtime. See `test/AGENTS.md`.
+  - **A per-story file list in a boundary test is a maintenance
+    burden that ends.** Once the last file in a concern is migrated,
+    replace the list with a walk of the whole tree; keep a named list
+    only for the inverse assertion (what has *not* moved yet), where
+    the list failing on change is the feature.
+---

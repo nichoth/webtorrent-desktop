@@ -14,8 +14,16 @@ US-026 onwards; the `shell.openExternal` and `clipboard` ones are
 migrated as of US-026, the `dialog` and `window` ones as of US-027,
 the `fs` ones as of US-028, and the context menu as of US-029. US-030
 moves the controller layer's non-`wt-*` `ipcRenderer` calls (plus the
-one in `lib/migrations.js`) onto `ipc-os.js`; `src/renderer/main.js`
-follows in US-031 and the `wt-*` channels in US-032.
+one in `lib/migrations.js`) onto `ipc-os.js`, and US-031 does the same
+for `src/renderer/main.js`. US-032 moves the remaining `wt-*` channels,
+which now live only in the four engine-facing controllers.
+
+US-031 also took `main.js`'s `wt-*` listeners onto `ipc-engine.js`,
+ahead of US-032. Its acceptance criteria require `main.js` to stop
+importing `electron` altogether, and those thirteen `ipcRenderer.on`
+calls were the only thing left keeping the import alive. Splitting the
+file across two stories would have meant leaving a direct Electron
+import in the renderer entry point purely to satisfy a story boundary.
 
 Three of those call sites landed on `shell.js` rather than `ipc-os.js`:
 `openPath`, `showItemInFolder` and `moveItemToTrash` are IPC channels

@@ -119,11 +119,19 @@ direct use of an Electron API that has already been migrated behind
 the shim (`shell` and `clipboard`; plus, since US-027, the
 `@electron/remote` dialog API and the `getCurrentWindow().isVisible` /
 `.isMaximized` reads; plus, since US-028, any import of `fs`; plus,
-since US-029, `new remote.Menu` / `new remote.MenuItem`). Each
-of US-027..US-032 adds its concern to that list as it lands; US-034
-supersedes the whole file with a lint rule.
+since US-029, `new remote.Menu` / `new remote.MenuItem`; plus, since
+US-030/US-031, any `ipcRenderer` channel that is not `wt-`-prefixed).
+Each of US-027..US-032 adds its concern to that list as it lands;
+US-034 supersedes the whole file with a lint rule.
 Reading source rather than build output is the point -- do not
 repoint it at `build/`.
+
+The OS-IPC check walked a hand-maintained file list while the
+migration was partial. Since US-031 it walks the whole renderer minus
+`webtorrent.js`, so there is no list to keep in step any more. Its
+counterpart test -- "the `wt-*` call sites are left alone" -- still
+names files, on purpose: it asserts what has *not* been migrated yet,
+so it has to fail when the set changes.
 
 The `fs` check is the one exception to the rule below: `fs` is a Node
 builtin with a single concern behind it, so it bans the specifier
@@ -163,3 +171,22 @@ every file before running any test:
   module under test keeps the stub afterwards. Stubs of `electron` and
   `@electron/remote` do not need this; every file that cares seeds its
   own.
+
+## Testing `src/renderer/main.js`
+
+`main.js` cannot be required in a unit test at all -- not even with
+the compile-it-yourself recipe above. Its module body calls
+`State.load()`, and it pulls in React, ReactDOM, every page and the
+whole controller graph. `test/unit/main-ipc-call-sites.js` therefore
+checks it statically, but goes one step past a channel-string ban: it
+extracts every `ipcOs.x` / `ipcEngine.x` member the file reaches for
+and resolves each against the `export function` names in the shim
+source, so a typo'd or invented export fails there instead of
+silently becoming `undefined` at runtime. It also asserts the set of
+shim exports covers every channel `main.js` spoke before the
+migration, which is the only automated guard against a channel being
+dropped.
+
+The behaviour of the shim functions themselves stays in
+`platform-ipc-os.js` / `platform-ipc-engine.js`; do not duplicate it
+here.

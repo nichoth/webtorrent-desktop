@@ -1,7 +1,6 @@
 import createGetter from 'fn-getter'
 import debounce from 'debounce'
 import dragDrop from 'drag-drop'
-import electron from 'electron'
 import React from 'react'
 import ReactDOM from 'react-dom'
 
@@ -10,9 +9,11 @@ import * as Cast from './lib/cast'
 import State from './lib/state'
 import * as sound from './lib/sound'
 import * as TorrentPlayer from './lib/torrent-player'
-import { setDispatch } from './lib/dispatcher'
+import { setDispatch, reportErrors } from './lib/dispatcher'
 import * as clipboard from './lib/platform/clipboard'
 import * as platformFs from './lib/platform/fs'
+import * as ipcEngine from './lib/platform/ipc-engine'
+import * as ipcOs from './lib/platform/ipc-os'
 import * as platformWindow from './lib/platform/window'
 
 // Perf optimization: Needed immediately, so do not lazy load it below
@@ -39,11 +40,6 @@ console.time('init')
 // asynchronous config file read overlapped with them. ESM hoists every import
 // to the top of the module, so that overlap is no longer expressible here.
 State.load(onState)
-
-// Electron apps have two processes: a main process (node) runs first and starts
-// a renderer process (essentially a Chrome window). We're in the renderer process,
-// and this IPC channel receives from and sends messages to the main process
-const ipcRenderer = electron.ipcRenderer
 
 // Yo-yo pattern: state object lives here and percolates down thru all the views.
 // Events come back up from the views via dispatch(...)
@@ -118,7 +114,7 @@ function onState (err, _state) {
   setInterval(update, 1000)
 
   // Listen for messages from the main process
-  setupIpc()
+  reportErrors(setupIpc())
 
   // Drag and drop files/text to start torrenting or seeding
   dragDrop('body', {
@@ -196,26 +192,30 @@ function update () {
 }
 
 // Some state changes can't be reflected in the DOM, instead we have to
-// tell the main process to update the window or OS integrations
+// tell the platform to update the window or OS integrations. This runs
+// on a 1s timer as well as after every dispatch, so the `state.prev`
+// guards matter: they are what keeps it from re-sending unchanged
+// values, and they are set before the (async) shim call, not after it.
 function updateElectron () {
   if (state.window.title !== state.prev.title) {
     state.prev.title = state.window.title
-    ipcRenderer.send('setTitle', state.window.title)
+    reportErrors(ipcOs.setTitle(state.window.title))
   }
   if (state.dock.progress.toFixed(2) !== state.prev.progress.toFixed(2)) {
     state.prev.progress = state.dock.progress
-    ipcRenderer.send('setProgress', state.dock.progress)
+    reportErrors(ipcOs.setProgress(state.dock.progress))
   }
   if (state.dock.badge !== state.prev.badge) {
     state.prev.badge = state.dock.badge
-    ipcRenderer.send('setBadge', state.dock.badge || 0)
+    reportErrors(ipcOs.setBadge(state.dock.badge || 0))
   }
 }
 
 const dispatchHandlers = {
   // Torrent list: creating, deleting, selecting torrents
-  openTorrentFile: () => ipcRenderer.send('openTorrentFile'),
-  openFiles: () => ipcRenderer.send('openFiles'), /* shows the open file dialog */
+  openTorrentFile: () => reportErrors(ipcOs.openTorrentFileDialog()),
+  /* shows the open file dialog */
+  openFiles: () => reportErrors(ipcOs.openFilesDialog()),
   openTorrentAddress: () => { state.modal = { id: 'open-torrent-address-modal' } },
 
   addTorrent: (torrentId) => controllers.torrentList().addTorrent(torrentId),
@@ -309,7 +309,7 @@ const dispatchHandlers = {
 
   // Controlling the window
   setDimensions,
-  toggleFullScreen: (setTo) => ipcRenderer.send('toggleFullScreen', setTo),
+  toggleFullScreen: (setTo) => reportErrors(ipcOs.toggleFullScreen(setTo)),
   setTitle: (title) => { state.window.title = title },
   resetTitle: () => { state.window.title = config.APP_WINDOW_TITLE },
 
@@ -341,34 +341,46 @@ function dispatch (action, ...args) {
   }
 }
 
-// Listen to events from the main and webtorrent processes
-function setupIpc () {
-  ipcRenderer.on('log', (e, ...args) => console.log(...args))
-  ipcRenderer.on('error', (e, ...args) => console.error(...args))
-
-  ipcRenderer.on('dispatch', (e, ...args) => dispatch(...args))
-
-  ipcRenderer.on('fullscreenChanged', onFullscreenChanged)
-  ipcRenderer.on('windowBoundsChanged', onWindowBoundsChanged)
-
+// Listen to events from the main and webtorrent processes.
+//
+// Async, because every shim registration resolves to an unsubscribe
+// function (FR-10). The Electron implementation registers
+// synchronously before it resolves, but a non-Electron host is free
+// not to, so `ipcReady` -- which is what tells the main process the
+// renderer is listening -- waits for all of them. Nothing here is ever
+// unsubscribed: these listeners live as long as the window does, so
+// the returned unsubscribes are deliberately dropped.
+async function setupIpc () {
   const tc = controllers.torrent()
-  ipcRenderer.on('wt-parsed', (e, ...args) => tc.torrentParsed(...args))
-  ipcRenderer.on('wt-metadata', (e, ...args) => tc.torrentMetadata(...args))
-  ipcRenderer.on('wt-done', (e, ...args) => tc.torrentDone(...args))
-  ipcRenderer.on('wt-done', () => controllers.torrentList().resumePausedTorrents())
-  ipcRenderer.on('wt-warning', (e, ...args) => tc.torrentWarning(...args))
-  ipcRenderer.on('wt-error', (e, ...args) => tc.torrentError(...args))
 
-  ipcRenderer.on('wt-progress', (e, ...args) => tc.torrentProgress(...args))
-  ipcRenderer.on('wt-file-modtimes', (e, ...args) => tc.torrentFileModtimes(...args))
-  ipcRenderer.on('wt-file-saved', (e, ...args) => tc.torrentFileSaved(...args))
-  ipcRenderer.on('wt-poster', (e, ...args) => tc.torrentPosterSaved(...args))
-  ipcRenderer.on('wt-audio-metadata', (e, ...args) => tc.torrentAudioMetadata(...args))
-  ipcRenderer.on('wt-server-running', (e, ...args) => tc.torrentServerRunning(...args))
+  await Promise.all([
+    ipcOs.onLog((...args) => console.log(...args)),
+    ipcOs.onError((...args) => console.error(...args)),
 
-  ipcRenderer.send('ipcReady')
+    ipcOs.onDispatch((...args) => dispatch(...args)),
 
-  State.on('stateSaved', () => ipcRenderer.send('stateSaved'))
+    ipcOs.onFullscreenChanged(onFullscreenChanged),
+    ipcOs.onWindowBoundsChanged(onWindowBoundsChanged),
+
+    ipcEngine.onTorrentParsed((...args) => tc.torrentParsed(...args)),
+    ipcEngine.onTorrentMetadata((...args) => tc.torrentMetadata(...args)),
+    ipcEngine.onTorrentDone((...args) => tc.torrentDone(...args)),
+    ipcEngine.onTorrentDone(() =>
+      controllers.torrentList().resumePausedTorrents()),
+    ipcEngine.onTorrentWarning((...args) => tc.torrentWarning(...args)),
+    ipcEngine.onTorrentError((...args) => tc.torrentError(...args)),
+
+    ipcEngine.onProgress((...args) => tc.torrentProgress(...args)),
+    ipcEngine.onFileModtimes((...args) => tc.torrentFileModtimes(...args)),
+    ipcEngine.onTorrentFileSaved((...args) => tc.torrentFileSaved(...args)),
+    ipcEngine.onPosterSaved((...args) => tc.torrentPosterSaved(...args)),
+    ipcEngine.onAudioMetadata((...args) => tc.torrentAudioMetadata(...args)),
+    ipcEngine.onServerRunning((...args) => tc.torrentServerRunning(...args))
+  ])
+
+  await ipcOs.signalReady()
+
+  State.on('stateSaved', () => reportErrors(ipcOs.signalStateSaved()))
 }
 
 // Quits any modal popovers and returns to the torrent list screen
@@ -462,8 +474,10 @@ function applyDimensions (dimensions, bounds, maximized) {
     config.WINDOW_MIN_HEIGHT
   )
 
-  ipcRenderer.send('setAspectRatio', aspectRatio)
-  ipcRenderer.send('setBounds', { contentBounds: true, x: null, y: null, width, height })
+  reportErrors(ipcOs.setAspectRatio(aspectRatio))
+  reportErrors(ipcOs.setBounds(
+    { contentBounds: true, x: null, y: null, width, height }
+  ))
   state.playing.aspectRatio = aspectRatio
   // dispatch()'s own update() already ran before this resolved.
   update()
@@ -572,17 +586,19 @@ function onVisibilityChange () {
   state.window.isVisible = !document.hidden
 }
 
-function onFullscreenChanged (e, isFullScreen) {
+// The shim strips the Electron event object, so these two take only
+// the payload now.
+function onFullscreenChanged (isFullScreen) {
   state.window.isFullScreen = isFullScreen
   if (!isFullScreen) {
     // Aspect ratio gets reset in fullscreen mode, so restore it (Mac)
-    ipcRenderer.send('setAspectRatio', state.playing.aspectRatio)
+    reportErrors(ipcOs.setAspectRatio(state.playing.aspectRatio))
   }
 
   update()
 }
 
-function onWindowBoundsChanged (e, newBounds) {
+function onWindowBoundsChanged (newBounds) {
   if (state.location.url() !== 'player') {
     state.saved.bounds = newBounds
     dispatch('stateSave')

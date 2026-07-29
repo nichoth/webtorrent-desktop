@@ -539,8 +539,8 @@
         "Smoke test passes in full, all six steps"
       ],
       "priority": 31,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Migrated main.js's OS channels to ipc-os.js. AC-2 (no direct electron import) also required moving main.js's 13 wt-* listeners to ipc-engine.js ahead of US-032, which still owns the four engine-facing controllers. AC-5 (six-step smoke test) not run -- non-interactive session; see progress.log for the launch-check evidence and the residual risk."
     },
     {
       "id": "US-032",

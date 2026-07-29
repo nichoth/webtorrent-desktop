@@ -14,8 +14,8 @@
  * Every listener registration resolves to an unsubscribe function, so
  * no caller ever touches `removeListener`.
  *
- * Implemented in US-020; call sites are migrated in US-030 and
- * US-031. See docs/platform-shim.md.
+ * Implemented in US-020; call sites were migrated in US-030 (the
+ * controllers) and US-031 (`main.js`). See docs/platform-shim.md.
  */
 
 import { ipcRenderer } from 'electron'
