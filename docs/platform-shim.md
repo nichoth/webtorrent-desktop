@@ -351,8 +351,9 @@ not listeners.
 
 This is the seam the torrent engine is swapped at. A librqbit
 implementation has to satisfy exactly this surface and nothing more.
-US-033 records the full protocol, including payload shapes, once the
-call sites have moved.
+The full protocol, including payload shapes and delivery semantics, is
+in **The `wt-*` protocol** below (US-033); the tables here map the
+functions onto the call sites they replaced.
 
 The counterparty is `src/renderer/webtorrent.js` in the hidden
 window. Per FR-4 it is not migrated and stays a direct `ipcRenderer`
@@ -405,6 +406,273 @@ their only sender is `webtorrent.js` and their only receiver is
 
 - `wt-new-torrent` (`webtorrent.js:134`)
 - `wt-uncaught-error` (`webtorrent.js:86`)
+
+## The `wt-*` protocol
+
+**This is the contract any librqbit implementation must satisfy.**
+Everything below is what the UI sends and what it expects back. An
+engine that implements exactly these channels, with these payloads,
+can replace `src/renderer/webtorrent.js` without any other renderer
+change. An engine that implements less will break the UI; an engine
+that implements more is adding surface nothing consumes.
+
+Recorded in US-033, after US-031 and US-032 moved the last call sites
+onto `ipc-engine.js`. The tables in the `ipc-engine.js` section above
+map functions onto the call sites they replaced; this section is the
+wire contract those functions carry.
+
+### Transport, and what "the engine" is today
+
+There is no direct renderer-to-renderer channel. Every `wt-*` message
+goes renderer -> `ipcMain` -> the other renderer, relayed by the
+`ipcMain.emit` override in `src/main/ipc.js:220-244`. The main process
+inspects nothing but the channel prefix and the sending window's
+title: anything starting with `wt-` from the `'WebTorrent Hidden
+Window'` is forwarded to the main window, and anything else starting
+with `wt-` is forwarded to the hidden window, or queued until it has
+finished loading.
+
+Two consequences for a replacement engine. First, the relay is
+transport, not protocol: a librqbit host is free to deliver these
+messages any way it likes, as long as the channel names and argument
+lists match. Second, the pre-ready queue is part of the behaviour the
+UI depends on. `main.js` sends `wt-set-global-trackers` and
+`wt-start-torrenting` during startup, before the engine can possibly
+be listening, and expects them to be delivered rather than dropped.
+
+### Direction and delivery
+
+Two directions only:
+
+- **UI -> engine** (commands). Every one is `ipcRenderer.send` from
+  the shim: fire and forget, no return value, no acknowledgement.
+  Failures come back as `wt-error` or `wt-warning`, or as nothing at
+  all.
+- **Engine -> UI** (events). Every one is `ipcRenderer.send` from the
+  engine, delivered to a listener the shim registered.
+
+"One-shot" below means the UI registers the listener with
+`{ once: true }` for a single expected reply. "Subscription" means a
+standing listener registered at startup and never removed. A command
+is "one-shot" when it triggers exactly one reply message, and
+"fire-and-forget" when it triggers no reply at all.
+
+### Commands: UI -> engine
+
+| Channel | Payload | Kind |
+| --- | --- | --- |
+| `wt-set-global-trackers` | `(trackers: string[])` | fire-and-forget |
+| `wt-start-torrenting` | `(torrentKey: number, torrentID: string, path?: string, fileModtimes?: FileModtimes, selections?: boolean[])` | fire-and-forget; drives the whole event stream for this torrent |
+| `wt-stop-torrenting` | `(infoHash: string)` | fire-and-forget |
+| `wt-create-torrent` | `(torrentKey: number, options: CreateOptions)` | fire-and-forget; drives the same event stream |
+| `wt-save-torrent-file` | `(torrentKey: number)` | one-shot; replies on `wt-file-saved` |
+| `wt-generate-torrent-poster` | `(torrentKey: number)` | one-shot; replies on `wt-poster` |
+| `wt-get-audio-metadata` | `(infoHash: string, index: number)` | replies 1 to 3 times on `wt-audio-metadata` (see below) |
+| `wt-start-server` | `(infoHash: string)` | one-shot; replies on `wt-server-running` and `wt-server-${infoHash}` |
+| `wt-stop-server` | `()` | fire-and-forget |
+| `wt-select-files` | `(infoHash: string, selections: boolean[])` | fire-and-forget |
+
+`torrentKey` is a **number**, not a string: it is
+`state.nextTorrentKey++`, seeded at `1` in `lib/state.js:64`. The
+engine treats it as opaque and echoes it back on every event about
+that torrent. Do not derive anything from it.
+
+`torrentID` is whatever the user supplied: a magnet URI, a path to a
+`.torrent` file, an info hash, or an HTTP URL.
+
+Three of these commands have a reply channel but **no failure reply**.
+`wt-save-torrent-file`, `wt-generate-torrent-poster` and
+`wt-get-audio-metadata` all log and return on error today rather than
+sending anything back, so the UI's `{ once: true }` listener simply
+never fires. A librqbit implementation should preserve that (silence
+on failure) or the UI will need new error handling; it must not send a
+malformed reply on the success channel.
+
+### Events: engine -> UI
+
+| Channel | Payload | Kind |
+| --- | --- | --- |
+| `wt-parsed` | `(torrentKey: number, infoHash: string, magnetURI: string)` | subscription (`main.js`) |
+| `wt-metadata` | `(torrentKey: number, info: TorrentInfo)` | subscription (`main.js`) |
+| `wt-ready` | `(torrentKey: number, info: TorrentInfo)` | no UI listener today (see below) |
+| `wt-done` | `(torrentKey: number, info: TorrentInfo)` | subscription (`main.js`, two listeners) |
+| `wt-warning` | `(torrentKey: number\|null, message: string)` | subscription (`main.js`) |
+| `wt-error` | `(torrentKey: number\|null, message: string)` | subscription (`main.js`) |
+| `wt-progress` | `(progress: Progress)` | subscription (`main.js`) |
+| `wt-file-modtimes` | `(torrentKey: number, fileModtimes: FileModtimes)` | subscription (`main.js`) |
+| `wt-file-saved` | `(torrentKey: number, fileName: string)` | subscription (`main.js`) |
+| `wt-poster` | `(torrentKey: number, posterFileName: string)` | subscription (`main.js`) |
+| `wt-audio-metadata` | `(infoHash: string, index: number, metadata: AudioMetadata)` | subscription (`main.js`) plus a one-shot per request (`playback-controller.js:307`) |
+| `wt-server-running` | `(info: ServerInfo)` | subscription (`main.js`) plus one-shots (`playback-controller.js:262`, `media-controller.js:76`) |
+
+`torrentKey` is `null` on `wt-warning` and `wt-error` when the fault
+is client-level rather than attached to one torrent
+(`webtorrent.js:94-95`).
+
+`wt-progress` is not event-driven in the usual sense: the engine
+recomputes the whole aggregate on a 1s timer and on every torrent
+state change, and suppresses the send when the object is deeply equal
+to the previous one. A replacement engine may send it more or less
+often; the UI treats each message as a full replacement, not a delta.
+
+### Dynamic channel families
+
+Two channel *families*, not two channels. Each info hash the engine
+knows about gets its own channel name, so the set is open-ended and
+grows at runtime:
+
+| Family | Payload | Kind |
+| --- | --- | --- |
+| `wt-ready-${infoHash}` | `(torrentKey: number, info: TorrentInfo)` | one-shot, per torrent (`playback-controller.js:254`, `:303`) |
+| `wt-server-${infoHash}` | `(info: ServerInfo)` | no UI listener today |
+
+Both are emitted alongside their broadcast twin: `wt-ready` and
+`wt-ready-${infoHash}` are sent back to back with identical arguments
+(`webtorrent.js:157-158`), as are `wt-server-running` and
+`wt-server-${infoHash}` (`webtorrent.js:316-317`). The families exist
+so a caller waiting on one specific torrent does not have to filter a
+broadcast stream.
+
+Callers never build these strings. `onTorrentReadyFor(infoHash, ...)`
+and `onServerRunningFor(infoHash, ...)` take the info hash as an
+argument and do the concatenation inside the shim, which is what keeps
+the family shape private to `ipc-engine.js`.
+
+`wt-ready` and `wt-server-${infoHash}` are each the unused half of
+their pair: the UI waits per-torrent for readiness, and broadcast for
+the server. Both are still part of the contract. An engine that emits
+only the half currently consumed would break the moment a caller
+switches, and US-013 requires both families to be covered.
+
+### Payload shapes
+
+`TorrentInfo` (`webtorrent.js:177-186`), the JSON-saveable summary
+sent with `wt-metadata`, `wt-ready`, `wt-ready-${infoHash}` and
+`wt-done`:
+
+```
+{
+  infoHash: string,
+  magnetURI: string,
+  name: string,
+  path: string,          // download directory
+  files: Array<{ name: string, length: number, path: string }>,
+  bytesReceived: number
+}
+```
+
+`Progress` (`webtorrent.js:253-292`), the whole-client aggregate sent
+with `wt-progress`:
+
+```
+{
+  progress: number,               // 0..1 across all torrents
+  hasActiveTorrents: boolean,
+  torrents: Array<{
+    torrentKey: number,
+    ready: boolean,
+    progress: number,             // 0..1
+    downloaded: number,           // bytes
+    downloadSpeed: number,        // bytes/sec
+    uploadSpeed: number,          // bytes/sec
+    numPeers: number,
+    length: number,               // bytes
+    bitfield: BitField,
+    files: Array<{
+      startPiece: number,
+      endPiece: number,
+      numPieces: number,
+      numPiecesPresent: number
+    }>
+  }>
+}
+```
+
+`bitfield` is the only payload field anywhere in the protocol that is
+not plain JSON. The engine puts a `bitfield` instance on the wire, but
+structured clone strips the prototype, so what arrives is a plain
+object carrying the backing buffer. The single reader,
+`pages/player-page.js:943`, already accounts for this: it calls
+`BitField.prototype.get.call(prog.bitfield, i)` rather than
+`prog.bitfield.get(i)`. A librqbit implementation therefore only has
+to deliver something whose fields that borrowed method can read, not a
+`bitfield` instance.
+
+`ServerInfo` (`webtorrent.js:308-313`), sent with `wt-server-running`
+and `wt-server-${infoHash}`:
+
+```
+{
+  torrentKey: number,
+  localURL: string,        // http://localhost:PORT
+  networkURL: string,      // http://LAN-IP:PORT
+  networkAddress: string   // LAN IP
+}
+```
+
+The port is chosen by the engine (`server.listen(0)`), so the UI never
+assumes one.
+
+`FileModtimes`, sent with `wt-file-modtimes` and accepted back on
+`wt-start-torrenting`: a map of file path to mtime. The UI stores it
+verbatim and hands it back so an already-complete torrent can skip
+re-verification. Its contents are opaque to the renderer, so a
+librqbit implementation is free to redefine it, as long as it round
+trips.
+
+`CreateOptions`, sent with `wt-create-torrent`
+(`pages/create-torrent-page.js:193-206`):
+
+```
+{
+  name: string,
+  path: string,                  // base path the files sit under
+  files: Array<{ path: string }>,  // full file objects; only .path is read
+  announce: string[],
+  comment: string,
+  private?: true                 // omitted entirely when not private
+}
+```
+
+`AudioMetadata`, sent with `wt-audio-metadata`. One request produces
+up to three messages, each superseding the last
+(`webtorrent.js:325-366`):
+
+1. `{ title: string }` immediately, so the UI can show the filename.
+2. `{ common, format }` from the parser's progress observer, zero or
+   more times.
+3. The full `music-metadata` result on success.
+
+Nothing is sent on failure. The UI's one-shot listener therefore
+receives message 1 and stops listening; the standing listener in
+`main.js` receives all of them.
+
+### Cross-check against what the renderer actually sends
+
+Grepping `src/renderer/**/*.js` for `wt-` string literals yields 24
+distinct static channels plus the two dynamic family prefixes. All 24
+appear in `webtorrent.js`; 22 of them also appear in `ipc-engine.js`,
+along with both families. The two that do not are accounted for:
+
+- `wt-new-torrent` (`webtorrent.js:134`), sent with no arguments after
+  `client.seed()`.
+- `wt-uncaught-error` (`webtorrent.js:86`), the engine's
+  `window.onerror` hook, payload `{ message, stack }`.
+
+Both are engine-outbound only, and **neither has a listener anywhere
+in the repo**. The `ipcMain.emit` override sees them, forwards them to
+the main window because they carry the `wt-` prefix, and nothing there
+subscribes. They are correctly out of the shim -- the shim exists to
+serve the UI renderer, and these never reach a consumer in it -- but a
+librqbit implementation should treat them as optional rather than as
+contract. `wt-uncaught-error` in particular is worth reviving as a
+real error path rather than reimplementing as a message into the void.
+
+No other `wt-` literal exists in any `.js` file under `src/renderer/`
+outside `webtorrent.js` and `ipc-engine.js`. (There is prose mentioning
+`wt-ready-` in `controllers/AGENTS.md`; that is documentation, not a
+call site.) Keeping that true is the job of
+`test/unit/platform-boundary.js` and, from US-034, the lint rule.
 
 ## Files exempt from the shim
 

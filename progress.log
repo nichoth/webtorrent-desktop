@@ -3008,3 +3008,82 @@ engine end actually reacts, so that is the residual risk.
     the word in a comment. Match `ipcRenderer\s*\.` for the usage ban
     and let the import check cover the rest.
 ---
+
+## 2026-07-28 - US-033
+
+Document the `wt-*` protocol at the shim boundary.
+
+**Interpretation:** this is a documentation story. Per execution rule 3
+and the global "do not write tests for docs" rule, no failing test was
+written first -- a test asserting the doc's text against a channel list
+would be exactly the brittle doc test that rule forbids, and the
+existing `test/unit/platform-boundary.js` already gates the property
+that matters (no `wt-*` literal outside `webtorrent.js` and
+`ipc-engine.js`). The cross-check criterion was satisfied empirically
+with grep instead, and the counts are recorded in the doc so a future
+session can re-run the same grep and compare.
+
+**What was implemented**
+
+- Added a `## The wt-* protocol` section to `docs/platform-shim.md`,
+  after the `ipc-engine.js` call-site tables and before the exempt-files
+  section. It covers: the transport (the `ipcMain.emit` relay), the two
+  directions, a commands table and an events table with payload and
+  one-shot/subscription/fire-and-forget for every channel, the two
+  dynamic families as families, the five payload shapes (`TorrentInfo`,
+  `Progress`, `ServerInfo`, `FileModtimes`, `CreateOptions`,
+  `AudioMetadata`), and the cross-check against what the renderer
+  actually sends.
+- Stated plainly at the top of that section that it is the contract any
+  librqbit implementation must satisfy.
+- Updated the `ipc-engine.js` section's forward reference (it said
+  US-033 would record the protocol "once the call sites have moved").
+- Corrected `torrentKey` in `ipc-engine.js`'s JSDoc from `string` to
+  `number` in all 13 places. It is `state.nextTorrentKey++`, seeded at
+  `1` in `lib/state.js:64`. Documenting the protocol is the point of the
+  story, and the JSDoc is part of that documentation.
+- Added a pointer to the new section in
+  `src/renderer/lib/platform/AGENTS.md`.
+
+**Files changed**
+
+- `docs/platform-shim.md`
+- `src/renderer/lib/platform/ipc-engine.js` (JSDoc types only)
+- `src/renderer/lib/platform/AGENTS.md`
+- `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `npm run lint` clean.
+- `npm test` green: 570/570, standard + depcheck + test-unit.
+- No app launch: nothing behavioural changed. The only code edit is
+  JSDoc comment text.
+
+**Learnings for future iterations:**
+
+- **`wt-new-torrent` and `wt-uncaught-error` have no listener
+  anywhere.** The pre-existing note in `docs/platform-shim.md` said
+  their "only receiver is `src/main/`", which is only true of the
+  `ipcMain.emit` relay -- it forwards them to the main window on the
+  `wt-` prefix and nothing there subscribes. Grep the whole repo before
+  repeating a claim about who consumes a channel; the relay makes
+  "reaches `src/main/`" and "is handled" look identical.
+- **`bitfield` is the one non-JSON payload field, and the UI already
+  copes.** `pages/player-page.js:943` calls
+  `BitField.prototype.get.call(prog.bitfield, i)`, not
+  `prog.bitfield.get(i)`, because structured clone strips the
+  prototype. Do not "fix" that borrowed method call -- it is what makes
+  a plain-object bitfield work, and it is what will let a librqbit host
+  send JSON there.
+- **`torrentKey` is a number.** Several JSDoc blocks said `string`.
+  Nothing breaks (it is opaque and only echoed back), but any typed
+  reimplementation of the protocol would have inherited the error.
+- **The renderer's `wt-*` inventory, for re-checking:** 24 distinct
+  static channels plus the two dynamic family prefixes across
+  `src/renderer/**/*.js`; all 24 in `webtorrent.js`, 22 of them in
+  `ipc-engine.js`. Command to reproduce:
+  `grep -rhoE "'wt-[a-z-]*[a-z]'" --include=*.js src/renderer/ |
+  sort -u`. Note the trailing `[a-z]` -- without it the family prefixes
+  `'wt-ready-'` and `'wt-server-'` are counted as static channels and
+  the total reads 26.
+---

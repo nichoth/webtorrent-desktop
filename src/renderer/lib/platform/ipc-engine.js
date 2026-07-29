@@ -67,7 +67,7 @@ export async function setGlobalTrackers (trackers) {
 /**
  * Start downloading or seeding a torrent.
  *
- * @param {string} torrentKey Renderer-assigned key; the engine echoes
+ * @param {number} torrentKey Renderer-assigned key; the engine echoes
  *   it back on every event about this torrent.
  * @param {string} torrentId Magnet URI, .torrent path, or info hash.
  * @param {string} [path] Download directory.
@@ -96,7 +96,7 @@ export async function stopTorrenting (infoHash) {
 /**
  * Seed local files as a new torrent.
  *
- * @param {string} torrentKey
+ * @param {number} torrentKey
  * @param {object} options Seed options, including the file list.
  * @returns {Promise<void>}
  */
@@ -108,7 +108,7 @@ export async function createTorrent (torrentKey, options) {
  * Ask the engine to write the .torrent file to disk. The reply
  * arrives on `onTorrentFileSaved`.
  *
- * @param {string} torrentKey
+ * @param {number} torrentKey
  * @returns {Promise<void>}
  */
 export async function saveTorrentFile (torrentKey) {
@@ -119,7 +119,7 @@ export async function saveTorrentFile (torrentKey) {
  * Ask the engine to generate a poster image. The reply arrives on
  * `onPosterSaved`.
  *
- * @param {string} torrentKey
+ * @param {number} torrentKey
  * @returns {Promise<void>}
  */
 export async function generateTorrentPoster (torrentKey) {
@@ -174,7 +174,7 @@ export async function selectFiles (infoHash, selections) {
 /**
  * A torrent ID was parsed into an info hash and magnet URI.
  *
- * @param {(torrentKey: string, infoHash: string,
+ * @param {(torrentKey: number, infoHash: string,
  *   magnetURI: string) => void} listener
  * @param {ListenOptions} [options]
  * @returns {Promise<Unsubscribe>}
@@ -186,7 +186,7 @@ export async function onTorrentParsed (listener, options) {
 /**
  * Torrent metadata arrived.
  *
- * @param {(torrentKey: string, info: object) => void} listener
+ * @param {(torrentKey: number, info: object) => void} listener
  * @param {ListenOptions} [options]
  * @returns {Promise<Unsubscribe>}
  */
@@ -197,7 +197,7 @@ export async function onTorrentMetadata (listener, options) {
 /**
  * A torrent finished loading and is ready to stream.
  *
- * @param {(torrentKey: string, info: object) => void} listener
+ * @param {(torrentKey: number, info: object) => void} listener
  * @param {ListenOptions} [options]
  * @returns {Promise<Unsubscribe>}
  */
@@ -210,7 +210,7 @@ export async function onTorrentReady (listener, options) {
  * `wt-ready-${infoHash}` channel.
  *
  * @param {string} infoHash
- * @param {(torrentKey: string, info: object) => void} listener
+ * @param {(torrentKey: number, info: object) => void} listener
  * @param {ListenOptions} [options]
  * @returns {Promise<Unsubscribe>}
  */
@@ -221,7 +221,7 @@ export async function onTorrentReadyFor (infoHash, listener, options) {
 /**
  * A torrent finished downloading.
  *
- * @param {(torrentKey: string, info: object) => void} listener
+ * @param {(torrentKey: number, info: object) => void} listener
  * @param {ListenOptions} [options]
  * @returns {Promise<Unsubscribe>}
  */
@@ -233,7 +233,7 @@ export async function onTorrentDone (listener, options) {
  * A non-fatal engine warning. `torrentKey` is `null` for
  * client-level warnings.
  *
- * @param {(torrentKey: string|null, message: string) => void} listener
+ * @param {(torrentKey: number|null, message: string) => void} listener
  * @param {ListenOptions} [options]
  * @returns {Promise<Unsubscribe>}
  */
@@ -244,7 +244,7 @@ export async function onTorrentWarning (listener, options) {
 /**
  * An engine error. `torrentKey` is `null` for client-level errors.
  *
- * @param {(torrentKey: string|null, message: string) => void} listener
+ * @param {(torrentKey: number|null, message: string) => void} listener
  * @param {ListenOptions} [options]
  * @returns {Promise<Unsubscribe>}
  */
@@ -266,7 +266,7 @@ export async function onProgress (listener, options) {
 /**
  * File modification times for a completed torrent.
  *
- * @param {(torrentKey: string, fileModtimes: object) => void} listener
+ * @param {(torrentKey: number, fileModtimes: object) => void} listener
  * @param {ListenOptions} [options]
  * @returns {Promise<Unsubscribe>}
  */
@@ -277,7 +277,7 @@ export async function onFileModtimes (listener, options) {
 /**
  * The .torrent file was written to disk.
  *
- * @param {(torrentKey: string, fileName: string) => void} listener
+ * @param {(torrentKey: number, fileName: string) => void} listener
  * @param {ListenOptions} [options]
  * @returns {Promise<Unsubscribe>}
  */
@@ -288,7 +288,7 @@ export async function onTorrentFileSaved (listener, options) {
 /**
  * A poster image was written to disk.
  *
- * @param {(torrentKey: string, posterFileName: string) => void}
+ * @param {(torrentKey: number, posterFileName: string) => void}
  *   listener
  * @param {ListenOptions} [options]
  * @returns {Promise<Unsubscribe>}

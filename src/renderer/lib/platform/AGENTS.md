@@ -19,7 +19,12 @@ commit when the surface changes.
 - **`ipc-os.js` and `ipc-engine.js` share no exports** (FR-9).
   `ipc-engine.js` is `wt-*` and only `wt-*`; `ipc-os.js` is everything
   else. Adding a `wt-` channel to `ipc-os.js` breaks the seam the
-  engine is swapped at.
+  engine is swapped at. The full `wt-*` wire contract -- direction,
+  payload shape, one-shot vs subscription, and the two dynamic
+  families -- is the **The `wt-*` protocol** section of
+  `docs/platform-shim.md`. Changing a `wt-*` payload means changing
+  that section in the same commit; it is what a librqbit
+  implementation is written against.
 - **`shell.js` owns `showItemInFolder`, `openPath` and
   `moveItemToTrash`**, even though they are IPC channels, because they
   are one concern. Do not move them to `ipc-os.js`. Those three stay
