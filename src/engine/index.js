@@ -115,6 +115,18 @@ function init () {
   process.on('SIGTERM', shutdown)
   process.on('SIGINT', shutdown)
 
+  // When the host spawned us with a stdin pipe it sets this, and the
+  // pipe closing means the host is gone -- including the paths that
+  // never reach its `before-quit`, like a force quit. Without it a
+  // killed host leaves an orphan still seeding. Only honoured when the
+  // flag is set: `node build/engine/index.js` by hand gets /dev/null on
+  // stdin, which ends immediately.
+  if (process.env.WEBTORRENT_ENGINE_PARENT_PIPE) {
+    process.stdin.on('end', shutdown)
+    process.stdin.on('close', shutdown)
+    process.stdin.resume()
+  }
+
   setInterval(updateTorrentProgress, 1000)
 
   bus.listen().then((port) => {

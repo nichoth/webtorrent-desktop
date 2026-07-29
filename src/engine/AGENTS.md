@@ -108,6 +108,11 @@ Differences from the hidden-window engine, all deliberate:
   listener, and still go out on `wt-uncaught-error`.
 - `SIGTERM` and `SIGINT` destroy the client and close the server, so a
   quit does not leave the download directory held open.
+- With `WEBTORRENT_ENGINE_PARENT_PIPE` set, stdin ending shuts the
+  process down the same way. That is the orphan backstop for a host
+  that dies without running its `before-quit`, and it is gated behind
+  the flag because a hand-run `node build/engine/index.js` gets
+  `/dev/null` on stdin, which ends immediately.
 - `getTorrent()` throws a plain `Error` with the same message
   `TorrentKeyNotFoundError` produced. The class lives in
   `src/renderer/lib/errors.js`, only its message ever crossed the wire,
@@ -118,3 +123,13 @@ Differences from the hidden-window engine, all deliberate:
 inside the main-process branch of `getPath()`. Do not hoist that back
 to a top-level import: the packaged sidecar has no
 `node_modules/electron` to resolve.
+
+The host runs the sidecar as **Electron in Node mode**
+(`ELECTRON_RUN_AS_NODE=1`), not as a separate `node` binary, so that the
+packaged app needs no second runtime. In that mode
+`process.versions.electron` is set but `process.type` is not and
+`require('electron')` has no `app`, which is why `getPath()` in
+`src/config.js` branches on `process.type` and treats anything that is
+neither `'renderer'` nor `'browser'` as a plain Node process. A check
+for "is Electron present" there breaks the sidecar at load, and only
+outside `NODE_ENV=test` (portable config skips the branch).

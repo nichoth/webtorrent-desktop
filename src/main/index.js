@@ -10,6 +10,7 @@ crashReporter.init()
 const parallel = require('run-parallel')
 
 const config = require('../config')
+const engineProcess = require('./engine-process')
 const ipc = require('./ipc')
 const log = require('./log')
 const menu = require('./menu')
@@ -86,6 +87,14 @@ function init () {
     menu.init()
     windows.main.init(state, { hidden })
     windows.webtorrent.init()
+
+    // The engine sidecar (US-041, ADR-012). It is supervised from here
+    // and killed on quit; the hidden window above is still the live
+    // engine until US-045 cuts the UI over to it, so a failure to start
+    // is logged rather than fatal.
+    engineProcess.init().catch((err) => {
+      log.error('Engine: ' + err.message)
+    })
 
     // To keep app startup fast, some code is delayed.
     setTimeout(() => {

@@ -330,6 +330,32 @@ it tight.
   `new Server({ port })` starts listening immediately; there is no
   `listen()` call, so "wait for the port" means waiting on the
   `listening` event.
+- **The sidecar runs as Electron in Node mode, not as `node`.** Since
+  US-041 `src/main/engine-process.js` spawns `process.execPath` with
+  `ELECTRON_RUN_AS_NODE=1`, so the packaged app ships no second
+  runtime. In that mode `process.versions.electron` is set but
+  `process.type` is undefined and `require('electron')` has no `app`,
+  so any "am I in Electron?" test has to be on `process.type` --
+  `getPath()` in `src/config.js` is the one that got this wrong. And
+  `NODE_ENV=test` hides the whole class of bug: portable config never
+  calls `getPath()`.
+- **`pgrep -fl "engine/index.js"` is the launch check for the
+  sidecar.** Its log output goes through `src/main/log.js` to the
+  renderer devtools and never to the terminal; to read it, patch
+  `engineProcess.init()` in `build/main/index.js` to pass a `log` that
+  `console.log`s, then `npm run build` to restore. `kill -9` on that
+  pid is how to prove the restart path in the real app.
+- **Never `unref()` a retry/backoff timer.** During the delay it is
+  often the only handle keeping the loop alive, so an unref'd one lets
+  a bare Node process exit mid-backoff. In tape the symptom is "test
+  exited without ending" for every remaining test in the run, which
+  looks like a leak rather than an early exit.
+- **`require('electron')` in a unit test may be a stub.** Other files
+  seed `require.cache` for it and the tape process is shared, so the
+  npm helper's path-string export is not dependable. Read the binary
+  path from `node_modules/electron/path.txt` under
+  `dirname(require.resolve('electron/package.json'))` plus a `dist`
+  segment (`path.txt` omits it), and assert the file exists.
 - **A source-scan test must drop comment lines first.** Scans for
   `window.`, `electron` or `.send(` match prose just as happily as
   code, and a file that *explains* what it no longer uses will fail its
@@ -3607,4 +3633,100 @@ leftover processes.
     the client is a `const`, which is worth remembering if anyone tries
     to port the offline-mode helper: it reassigned `client`, and
     nothing else ever did.
+---
+
+## 2026-07-29 - US-041
+- Added `src/main/engine-process.js`: the host-side supervisor for the
+  engine sidecar. `createEngineProcess(options)` spawns the built engine
+  entry point, parses the single `WEBTORRENT_ENGINE_PORT=` line off its
+  stdout, forwards every other stdout line to `log()` and every stderr
+  line to `log.error()`, restarts the child with doubling backoff
+  (500ms -> 8s, five attempts) when it exits unexpectedly, and logs
+  "giving up" at the cap. `init({ app })` wires the singleton to
+  `before-quit`, `will-quit` and `process.on('exit')`; `getEndpoint()`
+  returns `{ url, token }` or `null`, held in the main process and ready
+  for US-042 to expose through the shim. No `wt-*` message passes
+  through this file (ADR-012).
+- The child is spawned as **Electron in Node mode**
+  (`ELECTRON_RUN_AS_NODE=1`), so the packaged app needs no second
+  runtime. That exposed a real bug in `src/config.js`: `getPath()`
+  tested `process.versions.electron`, which is set in Node mode, so the
+  sidecar took the main-process branch and died on
+  `require('electron').app.getPath` at load. It now branches on
+  `process.type` (`'renderer'` / `'browser'` / anything else is plain
+  Node).
+- Added the orphan backstop: with `WEBTORRENT_ENGINE_PARENT_PIPE=1` the
+  sidecar shuts down when its stdin pipe closes, which covers a host
+  killed without `before-quit` ever running. Gated behind the flag
+  because a hand-run sidecar gets `/dev/null` on stdin and would exit
+  immediately.
+- Wired `engineProcess.init()` into `src/main/index.js`'s `onReady`,
+  after the windows. The hidden window is still the live engine until
+  US-045, so a start failure is logged rather than fatal.
+- Tests, written first and confirmed failing (module not found):
+  `test/unit/engine-process.js`, 38 assertions, all against the real
+  child process rather than a fake `child_process` -- endpoint shape and
+  loopback url, token accepted / wrong token refused by the real child,
+  stdout through `log` and stderr through `log.error`, the app's actual
+  Electron-as-Node configuration, a hand-`SIGKILL`ed child restarting on
+  a new port with the restart logged, the restart cap (spawn count
+  exactly `1 + maxRestarts`, `start()` rejects, nothing scheduled
+  after), `kill()` leaving no orphan and no respawn, `init()`'s
+  `before-quit` listener killing the child, and the parent-pipe
+  shutdown.
+- Files changed: `src/main/engine-process.js` (new),
+  `test/unit/engine-process.js` (new), `src/main/index.js`,
+  `src/engine/index.js`, `src/config.js`, `src/AGENTS.md`,
+  `src/engine/AGENTS.md`, `progress.log`, `specs/prd.json`.
+- Verification: full suite green, 1574 assertions (up from 1535),
+  `npm run lint` clean, `npm run build` clean with 0 externalization
+  warnings. One launch check (`npx electron --no-sandbox .`, probe
+  appended to `build/main/index.js` to route the engine log to the
+  terminal, killed afterwards, `pgrep` clean): `init: 838ms`, the
+  sidecar came up as a child of Electron and printed its port,
+  `kill -9` on it produced `exited with code null, signal SIGKILL` then
+  `restarting in 500ms (attempt 1 of 5)` and a new pid, and quitting the
+  app left no engine process behind. **The six-step manual smoke test
+  was not run** (non-interactive session); nothing was cut over, and the
+  residual risk is the `config.js` `getPath()` change, which the launch
+  check exercises on the main-process branch and the new unit test
+  exercises on the Node-mode branch.
+- **Learnings for future iterations:**
+  - **`ELECTRON_RUN_AS_NODE` is how the sidecar gets a Node runtime, and
+    it is not the same environment as `node`.** `process.versions.electron`
+    is set, `process.type` is undefined, and `require('electron')`
+    resolves to a module with no `app`. Any "am I in Electron?" test
+    written the obvious way sends that process down the main-process
+    branch. Branch on `process.type` instead. US-047 inherits this: the
+    packaged sidecar is the same binary as the app.
+  - **`NODE_ENV=test` hides the config path bug.** It makes config
+    portable, and portable never calls `getPath()`. A test that spawns
+    something which loads `config` and wants to prove the *paths*
+    resolve has to run outside `NODE_ENV=test` -- with the compensating
+    argument that the engine only reads those paths at startup and
+    writes nothing under them until commanded.
+  - **Do not `unref()` a restart timer.** During the backoff it is the
+    only handle keeping the loop alive; unref'd, a bare Node process
+    (a unit test, or the sidecar driven by hand) exits mid-backoff
+    instead of restarting, and the symptom is tape reporting "test
+    exited without ending" for every remaining test in the run.
+  - **`require('electron')` is not reliable in a unit test that runs in
+    the full suite.** Other files seed `require.cache` for `electron`
+    with a stub and one tape process is shared, so the npm helper's
+    path string may already be gone. Read the binary path directly:
+    `path.join(dirname(require.resolve('electron/package.json')),
+    'dist', readFileSync('.../path.txt'))` -- note the `dist` segment,
+    which `path.txt` does not include. Assert the file exists, or a
+    wrong path looks exactly like a sidecar that cannot start.
+  - **The supervisor is testable end to end without Electron**, because
+    the electron import is lazy and inside `init()` and `app` is
+    injectable. Prefer that to `require.cache`-seeding `electron`: it
+    leaks across files, and the fake `app` here is four lines.
+  - **The engine's log output is invisible in a launch check** -- it
+    goes through `src/main/log.js` to the renderer devtools. To see it,
+    patch `engineProcess.init()` in `build/main/index.js` to pass a
+    `log` that `console.log`s, launch, then `npm run build` to restore.
+    `pgrep -fl "engine/index.js"` is the cheaper check for "is the
+    sidecar up", and its pid is what you `kill -9` to prove the restart
+    path in the real app.
 ---

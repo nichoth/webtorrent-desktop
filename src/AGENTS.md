@@ -70,6 +70,15 @@ this module unloadable wherever `node_modules/electron` is absent --
 which is every packaged sidecar. Keep new host imports out of module
 scope here for the same reason.
 
+`getPath()` branches on `process.type`, and that spelling matters. The
+sidecar is spawned as Electron in Node mode (`ELECTRON_RUN_AS_NODE=1`,
+see `src/main/engine-process.js`), where `process.versions.electron` is
+set but `process.type` is not and `require('electron')` has no `app`.
+Testing for the presence of Electron therefore sends the sidecar down
+the main-process branch and it dies at load -- but only when
+`NODE_ENV` is not `test`, because portable config never calls
+`getPath()`.
+
 ## `src/renderer/lib/`
 
 The utility modules that used to do `module.exports = { fnA, fnB }` now

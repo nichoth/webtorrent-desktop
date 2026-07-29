@@ -204,15 +204,20 @@ function getDefaultDownloadPath () {
 // to resolve at all -- even though the branch that uses it can never be
 // reached there.
 function getPath (key) {
-  if (!process.versions.electron) {
-    // Node.js process
-    return ''
-  } else if (process.type === 'renderer') {
+  if (process.type === 'renderer') {
     // Electron renderer process
     return require('@electron/remote').app.getPath(key)
-  } else {
+  } else if (process.type === 'browser') {
     // Electron main process
     return require('electron').app.getPath(key)
+  } else {
+    // A plain Node process -- which includes the engine sidecar when it
+    // is the Electron binary running as Node (US-041). There
+    // `process.versions.electron` is still set but `process.type` is
+    // not, and `require('electron')` yields a module with no `app`, so
+    // the test has to be on `process.type` rather than on the presence
+    // of Electron.
+    return ''
   }
 }
 
