@@ -3388,3 +3388,98 @@ leftover processes.
     export; `require('bitfield').default || require('bitfield')`
     covers both interop shapes.
 ---
+
+## 2026-07-29 - US-039
+- Added `src/engine/bus-electron.js`: the transport seam from ADR-012.
+  `createElectronBus()` returns `{ send, on }` -- `send(channel,
+  ...args)` forwards to `ipcRenderer.send`, `on(channel, handler)`
+  registers an `ipcRenderer` listener that strips the
+  `IpcRendererEvent` before calling the handler and resolves to an
+  unsubscribe function (the shim convention from US-030). The module
+  names no channel and no payload shape.
+- Rewired `src/renderer/webtorrent.js`: dropped
+  `require('electron')`, added one construction site (`const bus =
+  createElectronBus()`), and converted all 22 sends to `bus.send` and
+  all 10 subscriptions to `bus.on`, dropping the now-unused `e`
+  parameter from each handler. Channel names, argument order and
+  payload shapes are byte-for-byte the same; `static/webtorrent.html`
+  is untouched.
+- Added `test/unit/engine-bus-electron.js` (16 assertions): the bus
+  against a stubbed `electron` (verbatim forwarding, `null` preserved,
+  event object stripped, zero-argument channels, two listeners on one
+  channel, unsubscribe removes the listener), plus a source scan of
+  `webtorrent.js` proving no `ipcRenderer`, exactly one construction
+  site, and no send or subscription bypassing the bus. Written first
+  and confirmed failing (module not found) before the implementation.
+- Tightened `test/unit/platform-boundary.js`: `webtorrent.js` was the
+  last exemption on the `ipcRenderer` check and the last entry in the
+  "which renderer files import electron" list. Both are now empty --
+  the check covers the whole renderer with no carve-out and the
+  importer list asserts `[]`. It stays exempt from the `wt-` channel
+  string and banned-`require` checks (it still names channels and still
+  requires `fs`/`crypto`).
+- Added `src/engine/AGENTS.md` (the bus contract); noted
+  `src/engine/**` in the `build:main` list in `src/AGENTS.md`.
+- Files changed: `src/engine/bus-electron.js` (new),
+  `src/engine/AGENTS.md` (new), `test/unit/engine-bus-electron.js`
+  (new), `src/renderer/webtorrent.js`,
+  `test/unit/platform-boundary.js`, `src/AGENTS.md`, `progress.log`,
+  `specs/prd.json`.
+- Full suite green: 1491 assertions, `npm run lint` clean, `npm run
+  build` clean with 0 externalization warnings.
+- **Verification (one launch, probe removed and `build/` rebuilt
+  afterwards):** both directions of the bus were checked empirically,
+  not just "the app starts".
+  - `bus.on` delivering a stripped payload:
+    `wc.executeJavaScript('globalThis.WEBTORRENT_ANNOUNCE')` in the
+    hidden window returned the real 7-tracker array, so
+    `wt-set-global-trackers` arrived as its payload rather than as an
+    event object. The nine `starting torrent %s: %s <key> <path>` lines
+    prove `wt-start-torrenting` arrived with all five arguments in
+    order.
+  - `bus.send` reaching the UI: 137 `'WebTorrent Hidden Window'` lines
+    from the `console.dir` in the `ipcMain.emit` relay, i.e. 137 `wt-*`
+    messages sent by the engine in 14 seconds (the flushed queue plus
+    the per-second `wt-progress`).
+  - Hidden window reached `init: 378ms` and `Initializing...`. The only
+    severity-3 renderer error is the known dormant
+    `cast_channel.CastMessage` one from the UI window.
+  - **The six-step manual smoke test was NOT run** (non-interactive
+    session). Step 3 carries the residual risk: video playback goes
+    through `wt-start-server` / `wt-server-<infoHash>`, and while the
+    launch log shows those channel names unchanged and the codec of the
+    payload untouched, no video was actually played.
+- **Learnings for future iterations:**
+  - **Put the engine's Electron import outside `src/renderer/` and the
+    boundary lists shrink instead of growing.** The obvious placement
+    for the bus was `src/renderer/webtorrent-bus.js`, which would have
+    needed a third entry in `eslint-boundary.config.js` and two more in
+    `platform-boundary.js`'s exempt sets -- and would have forced the
+    exact-importer assertion from `['webtorrent.js']` to a longer list.
+    `src/engine/` is outside both walks (ADR-012 already names it as
+    the destination), so the same change *removed* two exemptions.
+    Prefer the destination directory over the current one whenever a
+    Phase 3 story creates a file that Phase 3 will move anyway.
+  - **`globalThis.WEBTORRENT_ANNOUNCE` in the hidden window is the
+    cheapest proof that an inbound `wt-*` payload arrived intact.**
+    `main.js` sends `wt-set-global-trackers` on every startup and
+    `setGlobalTrackers` writes the argument straight to that global, so
+    reading it back through `executeJavaScript` distinguishes "payload
+    delivered" from "event object delivered" with no patching of the
+    engine at all. Key the `did-finish-load` probe on
+    `location.pathname` -- both windows fire it.
+  - **The `console.dir(e.sender.getTitle())` in the `ipcMain.emit`
+    relay (`src/main/ipc.js:222`) is a free `wt-*` traffic counter.**
+    `grep -c "WebTorrent Hidden Window"` on the launch log counts
+    engine-to-UI messages and `grep -c "'Main Window'"` counts the
+    reverse, with no probe code. Any story that changes the engine
+    transport can use it as a before/after number.
+  - **A handler that only forwards its arguments is worth leaving
+    alone.** `bus.on('wt-stop-torrenting', (infoHash) =>
+    stopTorrenting(infoHash))` reads like it should collapse to
+    `bus.on('wt-stop-torrenting', stopTorrenting)`, but the explicit
+    arrow pins the arity, which is what the source scan checks and what
+    keeps `selectFiles(torrentOrInfoHash, selections)`'s two-argument
+    overload honest. Do not "simplify" these when the engine moves in
+    US-040.
+---

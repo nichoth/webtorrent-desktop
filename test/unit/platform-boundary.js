@@ -150,11 +150,17 @@ test('no renderer code outside the shim imports fs', function (t) {
 // US-032 the engine protocol (`ipc-engine.js`). Between them the two
 // shims own every renderer <-> main channel (FR-9), so there is no
 // longer a channel prefix to carve out: nothing outside
-// `lib/platform/` may name a channel at all. `webtorrent.js` is the
-// counterparty, exempt by FR-4.
+// `lib/platform/` may name a channel at all.
+//
+// `webtorrent.js` was the last exemption here, as the counterparty of
+// the `wt-*` protocol. US-039 put a bus between the engine and the
+// transport (`src/engine/bus-electron.js`, outside this walk), so the
+// exemption is gone and this check now covers the whole renderer with
+// no carve-out. It still names `wt-` channels, so it stays exempt from
+// the channel-string check below.
 test('no renderer file outside the shim touches ipcRenderer',
   function (t) {
-    const files = rendererSources().filter((f) => !EXEMPT.has(f))
+    const files = rendererSources()
     t.ok(files.length > 20, 'walked the renderer sources')
     for (const file of files) {
       const rel = path.relative(RENDERER, file)
@@ -218,12 +224,15 @@ test('no renderer file outside the shim requires a banned host module',
   })
 
 // US-032 AC-4: with both IPC concerns migrated, the only renderer
-// modules left importing Electron are the shim itself (skipped by the
+// modules left importing Electron were the shim itself (skipped by the
 // walk) and the hidden WebTorrent window (FR-4). AC-4 also exempts
 // `lib/cast.js`, but it reaches Chromecast through `chromecasts` /
 // `airplay-js`, not Electron, so the assertion below is exact rather
 // than allowing it.
-test('only the shim and webtorrent.js import electron',
+//
+// Since US-039 the list is empty: the engine's `electron` import moved
+// into `src/engine/bus-electron.js`, which is not under this walk.
+test('nothing outside the shim imports electron',
   function (t) {
     const patterns = [
       /from\s*['"](electron|@electron\/remote)['"]/,
@@ -234,7 +243,7 @@ test('only the shim and webtorrent.js import electron',
         re.test(fs.readFileSync(file, 'utf8'))))
       .map((file) => path.relative(RENDERER, file).split(path.sep).join('/'))
       .sort()
-    t.deepEqual(importers, ['webtorrent.js'],
-      'no renderer module outside the exempt set imports electron')
+    t.deepEqual(importers, [],
+      'no renderer module outside the shim imports electron')
     t.end()
   })
