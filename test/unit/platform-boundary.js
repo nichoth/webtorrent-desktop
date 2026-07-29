@@ -80,6 +80,15 @@ const REMOTE_CHECKS = [
   {
     concern: 'window-state reads via getCurrentWindow()',
     patterns: [/getCurrentWindow\s*\(\s*\)\s*\.\s*(isVisible|isMaximized)\b/]
+  },
+  // US-029: the menu concern. `Menu` and `MenuItem` are only ever
+  // reached by construction, so the patterns name `new`.
+  {
+    concern: 'the @electron/remote menu API',
+    patterns: [
+      /\bnew\s+(electron\.)?remote\.Menu(Item)?\b/,
+      /import\s*\{[^}]*\bMenu(Item)?\b[^}]*\}\s*from\s*['"]@electron\/remote['"]/
+    ]
   }
 ]
 

@@ -263,6 +263,18 @@ it tight.
   use outside `lib/platform/`. Add each newly-migrated concern to its
   name list as US-027..US-032 land; US-034 replaces it with a lint
   rule.
+- **A controller CAN be unit tested, by compiling it in the test.**
+  `build:main` ignores `controllers/`, but `@babel/core`'s
+  `transformFileSync(src, { root, cwd })` picks up the `babel` key in
+  `package.json`, and writing the output into
+  `build/renderer/controllers/` makes the controller's own
+  `../lib/...` imports resolve against the real built
+  `build/renderer/lib/**`. Stub the shims it imports by
+  `require.cache`-seeding their **built** paths, and record dispatches
+  via the real `lib/dispatcher`'s `setDispatch()`. This is the only
+  way to assert controller behaviour instead of asserting on its
+  source text -- see `test/unit/torrent-context-menu.js` and
+  `test/AGENTS.md`.
 
 ---
 
@@ -2654,4 +2666,81 @@ Migrate every renderer `fs` call site onto `lib/platform/fs.js`.
   `srt-to-vtt` is a transform, so dropping `createReadStream` only
   means constructing the transform directly and `.end()`ing it with the
   bytes. Register the `concat()` consumer before writing.
+---
+
+## 2026-07-28 - US-029
+
+Rewrite the torrent row context menu against the `menu.js` descriptor
+API.
+
+**What was implemented**
+
+- `controllers/torrent-list-controller.js`: `openTorrentContextMenu()`
+  now builds one flat array of `{ label, click, enabled }` /
+  `{ type: 'separator' }` descriptors and hands it to
+  `menu.showContextMenu(items)`, tailed with
+  `.catch(err => dispatch('error', err))`. The conditional "Show in
+  Finder"/"Show in Folder" item and the separator after it are spread
+  in from a ternary on `torrentSummary.files`, so the two shapes stay
+  one expression.
+- `import remote from '@electron/remote'` is deleted from the
+  controller; that specifier no longer appears in it at all. Labels,
+  order, the `enabled` condition on "Save Torrent File As...", the
+  three separators and the manual `checkmark ` prefix on "Sort by
+  Name" are byte-identical to before.
+- New test `test/unit/torrent-context-menu.js` (45 assertions) --
+  written first and failing on
+  `Cannot read properties of undefined (reading 'Menu')`. It compiles
+  the controller with `@babel/core` into
+  `build/renderer/controllers/`, stubs `lib/platform/menu` and
+  `lib/platform/clipboard` through `require.cache`, and drives
+  `openTorrentContextMenu()` against a fixture state. It asserts the
+  descriptor array is plain objects, both label orders (with and
+  without `files`), separators carrying nothing else, the `enabled`
+  rule in both directions, the check-mark label, and what each of the
+  seven `click` handlers does (dispatch args, the `showItemInFolder`
+  IPC send, both clipboard strings) -- plus that every `click` takes
+  zero parameters.
+- `test/unit/platform-boundary.js` gains the menu concern:
+  `new remote.Menu` / `new remote.MenuItem` (both the `remote.` and
+  `electron.remote.` spellings) and a named `Menu`/`MenuItem` import
+  from `@electron/remote`.
+- Docs: `docs/platform-shim.md` records the migration under
+  `menu.js`; `test/AGENTS.md` gains the controller-compilation recipe
+  and drops the now-stale note that a blanket `@electron/remote` ban
+  would fail because of `remote.Menu`.
+
+**Verification**
+
+- `npm test` green: 422 assertions, standard and depcheck clean.
+- `npm run build` clean, 0 `has been externalized` warnings, and the
+  minified renderer bundle contains
+  `platform/menu: unsupported item type` -- the shim reached the Vite
+  graph, which it had not before (nothing imported it).
+- Launch check: `init: 531ms`, `'Main Window'`, no new errors in the
+  log; process tree killed and `pgrep` verified clean.
+- **The smoke-test criterion ("every item in the torrent row context
+  menu exercised") was NOT run.** A native context menu needs a real
+  right-click and then blocks the main process, so it cannot be driven
+  non-interactively (`openTorrentContextMenu` is on the do-not-dispatch
+  list in `controllers/AGENTS.md` for that reason). The unit test
+  covers what each item *does* -- the residual risk is purely that the
+  menu renders/pops up, which is `showContextMenu`'s two lines,
+  unchanged since US-025.
+
+**Learnings for future iterations:**
+
+- **Compiling one ignored file in the test is cheaper than moving it
+  into the build.** Adding `controllers/` to `build:main` would have
+  worked too, but it changes what ships and what `build/` contains for
+  every future session. A per-test `transformFileSync` is contained to
+  the test, and emitting into `build/renderer/controllers/` is the
+  whole trick -- relative imports resolve from the *output* location.
+- **`setDispatch()` beats stubbing the dispatcher.** `lib/dispatcher`
+  already has an injection point, so the real module stays in the
+  graph and only the sink is a test double. Look for an existing seam
+  before seeding `require.cache`.
+- **Counting menu items is a trap.** The story calls it "nine-item";
+  the menu is 7 normal items plus 3 separators (10 entries) with
+  `files`, 8 without. Assert the label array, not a count.
 ---

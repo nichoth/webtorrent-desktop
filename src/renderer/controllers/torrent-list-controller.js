@@ -1,6 +1,5 @@
 import path from 'path'
 import { ipcRenderer } from 'electron'
-import remote from '@electron/remote'
 
 import { dispatch } from '../lib/dispatcher'
 import { TorrentKeyNotFoundError } from '../lib/errors'
@@ -9,6 +8,7 @@ import * as TorrentSummary from '../lib/torrent-summary'
 import * as clipboard from '../lib/platform/clipboard'
 import * as platformDialog from '../lib/platform/dialog'
 import * as fs from '../lib/platform/fs'
+import * as menu from '../lib/platform/menu'
 
 const instantIoRegex = /^(https:\/\/)?instant\.io\/#/
 
@@ -253,59 +253,51 @@ export default class TorrentListController {
 
   openTorrentContextMenu (infoHash) {
     const torrentSummary = TorrentSummary.getByKey(this.state, infoHash)
-    const menu = new remote.Menu()
-
-    menu.append(new remote.MenuItem({
-      label: 'Remove From List',
-      click: () => dispatch('confirmDeleteTorrent', torrentSummary.infoHash, false)
-    }))
-
-    menu.append(new remote.MenuItem({
-      label: 'Remove Data File',
-      click: () => dispatch('confirmDeleteTorrent', torrentSummary.infoHash, true)
-    }))
-
-    menu.append(new remote.MenuItem({
-      type: 'separator'
-    }))
-
-    if (torrentSummary.files) {
-      menu.append(new remote.MenuItem({
-        label: process.platform === 'darwin' ? 'Show in Finder' : 'Show in Folder',
-        click: () => showItemInFolder(torrentSummary)
-      }))
-      menu.append(new remote.MenuItem({
-        type: 'separator'
-      }))
-    }
-
-    menu.append(new remote.MenuItem({
-      label: 'Copy Magnet Link to Clipboard',
-      click: () => copyToClipboard(torrentSummary.magnetURI)
-    }))
-
-    menu.append(new remote.MenuItem({
-      label: 'Copy Instant.io Link to Clipboard',
-      click: () => copyToClipboard(`https://instant.io/#${torrentSummary.infoHash}`)
-    }))
-
-    menu.append(new remote.MenuItem({
-      label: 'Save Torrent File As...',
-      click: () => dispatch('saveTorrentFileAs', torrentSummary.torrentKey),
-      enabled: torrentSummary.torrentFileName != null
-    }))
-
-    menu.append(new remote.MenuItem({
-      type: 'separator'
-    }))
-
     const sortedByName = this.state.saved.prefs.sortByName
-    menu.append(new remote.MenuItem({
-      label: `${sortedByName ? '✓ ' : ''}Sort by Name`,
-      click: () => dispatch('updatePreferences', 'sortByName', !sortedByName)
-    }))
 
-    menu.popup({ window: remote.getCurrentWindow() })
+    // The menu is data (FR-12): plain descriptors, no MenuItem here.
+    // The shim pops it up and parents it to the current window itself.
+    const items = [
+      {
+        label: 'Remove From List',
+        click: () => dispatch('confirmDeleteTorrent', torrentSummary.infoHash, false)
+      },
+      {
+        label: 'Remove Data File',
+        click: () => dispatch('confirmDeleteTorrent', torrentSummary.infoHash, true)
+      },
+      { type: 'separator' },
+      // Nothing to reveal until the torrent's metadata has arrived.
+      ...(torrentSummary.files
+        ? [
+            {
+              label: process.platform === 'darwin' ? 'Show in Finder' : 'Show in Folder',
+              click: () => showItemInFolder(torrentSummary)
+            },
+            { type: 'separator' }
+          ]
+        : []),
+      {
+        label: 'Copy Magnet Link to Clipboard',
+        click: () => copyToClipboard(torrentSummary.magnetURI)
+      },
+      {
+        label: 'Copy Instant.io Link to Clipboard',
+        click: () => copyToClipboard(`https://instant.io/#${torrentSummary.infoHash}`)
+      },
+      {
+        label: 'Save Torrent File As...',
+        click: () => dispatch('saveTorrentFileAs', torrentSummary.torrentKey),
+        enabled: torrentSummary.torrentFileName != null
+      },
+      { type: 'separator' },
+      {
+        label: `${sortedByName ? '✓ ' : ''}Sort by Name`,
+        click: () => dispatch('updatePreferences', 'sortByName', !sortedByName)
+      }
+    ]
+
+    menu.showContextMenu(items).catch((err) => dispatch('error', err))
   }
 
   // Takes a torrentSummary or torrentKey

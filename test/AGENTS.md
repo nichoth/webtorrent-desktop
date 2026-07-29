@@ -118,7 +118,8 @@ under `src/renderer/`, skipping `lib/platform/`, and fails on any
 direct use of an Electron API that has already been migrated behind
 the shim (`shell` and `clipboard`; plus, since US-027, the
 `@electron/remote` dialog API and the `getCurrentWindow().isVisible` /
-`.isMaximized` reads; plus, since US-028, any import of `fs`). Each
+`.isMaximized` reads; plus, since US-028, any import of `fs`; plus,
+since US-029, `new remote.Menu` / `new remote.MenuItem`). Each
 of US-027..US-032 adds its concern to that list as it lands; US-034
 supersedes the whole file with a lint rule.
 Reading source rather than build output is the point -- do not
@@ -128,8 +129,20 @@ The `fs` check is the one exception to the rule below: `fs` is a Node
 builtin with a single concern behind it, so it bans the specifier
 outright, with `src/renderer/webtorrent.js` exempted by FR-4.
 
-The checks name **concerns, not module specifiers**. A blanket ban on
-`@electron/remote` would fail today, because `remote.Menu` in
-`controllers/torrent-list-controller.js` is a separate concern that
-does not leave until US-029. Add a pattern for what your story
-actually migrated, not for the import it happens to sit next to.
+The checks name **concerns, not module specifiers**. Add a pattern for what your story
+actually migrated, not for the import it happens to sit next to. (Up
+to US-029 that mattered because `remote.Menu` and `remote.dialog`
+lived in the same file and left in different stories.)
+
+## Unit testing a controller
+
+Controllers are outside `build:main`, so there is no prebuilt copy to
+require. `test/unit/torrent-context-menu.js` compiles the one file
+under test with `@babel/core` (`transformFileSync(src, { root, cwd })`
+picks up the `babel` key in `package.json`) and writes the result into
+`build/renderer/controllers/`. Emitting it *there* is what makes the
+controller's own `../lib/...` imports resolve against the real built
+`build/renderer/lib/**`; a temp directory would not resolve at all.
+Stub the shim modules it imports by `require.cache`-seeding their
+built paths, and record dispatches through the real
+`lib/dispatcher`'s `setDispatch()` rather than stubbing it.

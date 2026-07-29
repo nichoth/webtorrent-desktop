@@ -508,7 +508,7 @@
         "Smoke test passes, with every item in the torrent row context menu exercised"
       ],
       "priority": 29,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

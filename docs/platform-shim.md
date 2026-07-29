@@ -12,7 +12,7 @@ US-023, `dialog.js` and `window.js` as of US-024, and `menu.js` as of
 US-025. The whole surface is implemented. The call sites move from
 US-026 onwards; the `shell.openExternal` and `clipboard` ones are
 migrated as of US-026, the `dialog` and `window` ones as of US-027,
-and the `fs` ones as of US-028.
+the `fs` ones as of US-028, and the context menu as of US-029.
 
 ## Rules the surface follows
 
@@ -191,6 +191,12 @@ call site. `applyDimensions()` ends with its own `update()`, because
 | Function | Replaces |
 | --- | --- |
 | `showContextMenu(items)` | `controllers/torrent-list-controller.js:258-310`, the nine-item torrent context menu |
+
+Migrated in US-029. The controller now builds one flat descriptor
+array -- the reveal item and the separator that follows it are spread
+in from a ternary on `torrentSummary.files` -- and ends with
+`menu.showContextMenu(items).catch(err => dispatch('error', err))`.
+`@electron/remote` is gone from the controller entirely.
 
 A descriptor is a plain object:
 
