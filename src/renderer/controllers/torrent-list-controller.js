@@ -1,4 +1,3 @@
-import fs from 'fs'
 import path from 'path'
 import { ipcRenderer } from 'electron'
 import remote from '@electron/remote'
@@ -9,6 +8,7 @@ import * as sound from '../lib/sound'
 import * as TorrentSummary from '../lib/torrent-summary'
 import * as clipboard from '../lib/platform/clipboard'
 import * as platformDialog from '../lib/platform/dialog'
+import * as fs from '../lib/platform/fs'
 
 const instantIoRegex = /^(https:\/\/)?instant\.io\/#/
 
@@ -96,13 +96,9 @@ export default class TorrentListController {
     if (!fileOrFolder) return start()
 
     // Existing torrent: check that the path is still there
-    fs.stat(fileOrFolder, err => {
-      if (err) {
-        s.error = 'path-missing'
-        dispatch('backToList')
-        return
-      }
-      start()
+    fs.stat(fileOrFolder).then(start, () => {
+      s.error = 'path-missing'
+      dispatch('backToList')
     })
 
     function start () {
@@ -335,12 +331,8 @@ export default class TorrentListController {
         if (!savePath) return // They clicked Cancel
         console.log('Saving torrent ' + torrentKey + ' to ' + savePath)
         const torrentPath = TorrentSummary.getTorrentPath(torrentSummary)
-        fs.readFile(torrentPath, (err, torrentFile) => {
-          if (err) return dispatch('error', err)
-          fs.writeFile(savePath, torrentFile, err => {
-            if (err) return dispatch('error', err)
-          })
-        })
+        return fs.readFile(torrentPath)
+          .then(torrentFile => fs.writeFile(savePath, torrentFile))
       })
       .catch(err => dispatch('error', err))
   }
@@ -365,34 +357,34 @@ function findFilesRecursive (paths, cb_) {
   }
 
   const fileOrFolder = paths[0]
-  fs.stat(fileOrFolder, (err, stat) => {
-    if (err) return dispatch('error', err)
+  // The shim's stat resolves a plain object, so `isDirectory` is a
+  // boolean rather than a method.
+  fs.stat(fileOrFolder)
+    .then(stat => {
+      // Files: return name, path, and size
+      if (!stat.isDirectory) {
+        const filePath = fileOrFolder
+        return cb_([{
+          name: path.basename(filePath),
+          path: filePath,
+          size: stat.size
+        }])
+      }
 
-    // Files: return name, path, and size
-    if (!stat.isDirectory()) {
-      const filePath = fileOrFolder
-      return cb_([{
-        name: path.basename(filePath),
-        path: filePath,
-        size: stat.size
-      }])
-    }
-
-    // Folders: recurse, make a list of all the files
-    const folderPath = fileOrFolder
-    fs.readdir(folderPath, (err, fileNames) => {
-      if (err) return dispatch('error', err)
-      const paths = fileNames.map((fileName) => path.join(folderPath, fileName))
-      findFilesRecursive(paths, cb_)
+      // Folders: recurse, make a list of all the files
+      const folderPath = fileOrFolder
+      return fs.readdir(folderPath).then(fileNames => {
+        const paths = fileNames.map((fileName) =>
+          path.join(folderPath, fileName))
+        findFilesRecursive(paths, cb_)
+      })
     })
-  })
+    .catch(err => dispatch('error', err))
 }
 
 function deleteFile (path) {
   if (!path) return
-  fs.unlink(path, err => {
-    if (err) dispatch('error', err)
-  })
+  fs.unlink(path).catch(err => dispatch('error', err))
 }
 
 // Context-menu click handlers cannot await, so the shim's promise

@@ -11,8 +11,8 @@ US-021, `shell.js` and `clipboard.js` as of US-022, `fs.js` as of
 US-023, `dialog.js` and `window.js` as of US-024, and `menu.js` as of
 US-025. The whole surface is implemented. The call sites move from
 US-026 onwards; the `shell.openExternal` and `clipboard` ones are
-migrated as of US-026, and the `dialog` and `window` ones as of
-US-027.
+migrated as of US-026, the `dialog` and `window` ones as of US-027,
+and the `fs` ones as of US-028.
 
 ## Rules the surface follows
 
@@ -264,6 +264,15 @@ Shape changes for the migration:
 - US-028 has to reckon with `lib/state.js` and `lib/migrations.js`
   being synchronous today and being loaded by `src/main/` as well as
   the renderer. That is the largest single piece of the fs migration.
+
+As migrated in US-028: `migrations.run()` and `state`'s
+`setupStateSaved()` are `async`, and `State.load(cb)` -- already an
+`async function` -- awaits both before calling `cb`. Nothing outside
+`state.js` calls either, so the async spread stops there. `readFile`'s
+`Uint8Array` needed one more accommodation than the note above
+predicted: `parse-torrent` 9 rejects a bare `Uint8Array` with "Invalid
+torrent identifier", so `state.js` wraps the same memory in a
+`Buffer`.
 
 ## `ipc-os.js`
 

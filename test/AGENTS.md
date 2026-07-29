@@ -94,6 +94,16 @@ fsp.readFile = real
 Always restore in the same test, or later tests (and tape itself) run
 against the stub. See `test/unit/platform-fs.js`.
 
+### Stubbing `src/config` in a unit test
+
+A module that reads its paths from `config` can be pointed at a temp
+directory by seeding `require.cache[require.resolve('../../build/config')]`
+before the first require of the module under test. The stub's exports
+have to look like a Babel-compiled ES module -- `{ __esModule: true,
+default: {...} }` -- because every renderer module imports config as a
+default import. `test/unit/migrations.js` uses this to run the real
+migrations, against the real filesystem, in a throwaway profile.
+
 Only `src/renderer/lib/**` and `src/main/**` are reachable this way.
 `build:main` deliberately ignores `src/renderer/main.js`,
 `components/`, `controllers/` and `pages/` (Vite owns those), so those
@@ -108,10 +118,15 @@ under `src/renderer/`, skipping `lib/platform/`, and fails on any
 direct use of an Electron API that has already been migrated behind
 the shim (`shell` and `clipboard`; plus, since US-027, the
 `@electron/remote` dialog API and the `getCurrentWindow().isVisible` /
-`.isMaximized` reads). Each of US-027..US-032 adds its concern to that
-list as it lands; US-034 supersedes the whole file with a lint rule.
+`.isMaximized` reads; plus, since US-028, any import of `fs`). Each
+of US-027..US-032 adds its concern to that list as it lands; US-034
+supersedes the whole file with a lint rule.
 Reading source rather than build output is the point -- do not
 repoint it at `build/`.
+
+The `fs` check is the one exception to the rule below: `fs` is a Node
+builtin with a single concern behind it, so it bans the specifier
+outright, with `src/renderer/webtorrent.js` exempted by FR-4.
 
 The checks name **concerns, not module specifiers**. A blanket ban on
 `@electron/remote` would fail today, because `remote.Menu` in

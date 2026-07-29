@@ -1,4 +1,3 @@
-import fs from 'fs'
 import path from 'path'
 import parallel from 'run-parallel'
 import concat from 'simple-concat'
@@ -8,6 +7,7 @@ import iso639 from 'iso-639-1'
 
 import { dispatch } from '../lib/dispatcher'
 import * as platformDialog from '../lib/platform/dialog'
+import * as fs from '../lib/platform/fs'
 
 export default class SubtitlesController {
   constructor (state) {
@@ -96,7 +96,10 @@ function loadSubtitle (file, cb) {
   // Read the .SRT or .VTT file, parse it, add subtitle track
   const filePath = file.path || file
 
-  const vttStream = fs.createReadStream(filePath).pipe(srtToVtt())
+  // The shim has no createReadStream, so the whole file is read and
+  // pushed through the same srt-to-vtt transform. Subtitle files are
+  // small, and the stream was concatenated in full anyway.
+  const vttStream = srtToVtt()
 
   concat(vttStream, (err, buf) => {
     if (err) return dispatch('error', 'Can\'t parse subtitles file.')
@@ -116,6 +119,10 @@ function loadSubtitle (file, cb) {
 
     cb(null, track)
   })
+
+  fs.readFile(filePath)
+    .then(bytes => vttStream.end(Buffer.from(bytes)))
+    .catch(() => vttStream.destroy(new Error('Can\'t read subtitles file.')))
 }
 
 // Checks whether a language name like 'English' or 'German' matches the system

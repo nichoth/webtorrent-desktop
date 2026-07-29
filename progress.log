@@ -2524,3 +2524,134 @@ smoke test (see below).
     import specifier makes the story unpassable; banning
     `remote.dialog` and `getCurrentWindow().isMaximized` does not.
 ---
+
+## 2026-07-28 - US-028
+
+Migrate every renderer `fs` call site onto `lib/platform/fs.js`.
+
+**What was implemented**
+
+- `lib/migrations.js`: dropped `import fs, { copyFileSync } from 'fs'`
+  for `import * as fs from './platform/fs'`. `run()` is now `async`;
+  `migrate_0_7_0`, `migrate_0_12_0` and `migrate_0_17_2` -- the three
+  that touch the filesystem -- are `async` and are `await`ed one at a
+  time in the existing version order. The two `forEach` loops holding
+  fs work became `for..of` so the `await` is inside the loop rather
+  than inside a callback the loop never waits for.
+  `statSync`-in-a-try became `await fs.exists()`.
+- `lib/state.js`: `setupStateSaved()` and its inner
+  `createTorrentObject()` are `async`; both `mkdir`s are awaited before
+  the copies start. `load(cb)` -- already an `async function` -- now
+  awaits `setupStateSaved()` and `migrations.run()` before firing `cb`,
+  so nothing starts torrenting off a half-migrated config. The inner
+  `onSavedState` helper was inlined; it existed only to be called from
+  two places, one of which was the error path.
+- `main.js`: `checkDownloadPath()` uses `platformFs.stat().then/catch`,
+  with `stat.isDirectory` as a boolean.
+- `controllers/torrent-list-controller.js`: four sites -- the
+  path-still-there `stat`, `findFilesRecursive`'s `stat`+`readdir`,
+  `deleteFile`'s `unlink`, and `saveTorrentFileAs`'s
+  `readFile`+`writeFile`, which folds into the dialog promise chain
+  that already ends in `.catch(err => dispatch('error', err))`.
+- `controllers/subtitles-controller.js`: `createReadStream(...).pipe(
+  srtToVtt())` became a bare `srtToVtt()` transform fed by
+  `fs.readFile()`. `concat()` is registered before the write, so no
+  chunk is missed.
+- `docs/platform-shim.md`, `test/AGENTS.md` updated.
+
+**Tests (written first, both failing before the change)**
+
+- `test/unit/platform-boundary.js`: new check banning any `fs`,
+  `fs/promises` or `original-fs` import under `src/renderer/` outside
+  `lib/platform/`, with `webtorrent.js` exempt per FR-4. Failed on
+  exactly the five files the story names.
+- `test/unit/migrations.js` (new): runs the real migrations against a
+  real temp profile, with `build/config` stubbed via `require.cache`.
+  Asserts `run()` returns a promise, that the 0.7.0 and 0.17.2 file
+  copies are on disk by the time it resolves, that the version-ordered
+  chain still works (0.7.2 creating `prefs` before 0.11.0 reads it),
+  and that `setDefaultFileHandler` is still sent. Failed with
+  `Cannot read properties of undefined (reading 'then')`.
+
+**Files changed**
+
+- `src/renderer/main.js`, `src/renderer/lib/state.js`,
+  `src/renderer/lib/migrations.js`,
+  `src/renderer/controllers/torrent-list-controller.js`,
+  `src/renderer/controllers/subtitles-controller.js`
+- `test/unit/platform-boundary.js`, `test/unit/migrations.js` (new)
+- `docs/platform-shim.md`, `test/AGENTS.md`, `progress.log`,
+  `specs/prd.json`
+
+**Verification**
+
+- `npm test` passes: 337 assertions, exit 0.
+- `npm run lint` clean.
+- `npm run build` (Babel + Vite) clean, 0 `has been externalized`
+  warnings.
+- Empirical, two launches under `HOME=/tmp/wt-fresh-home`:
+  1. Fresh profile. Log shows `Missing config file: Creating new one`,
+     then `init: 858ms`. The profile ends up with `config.json`
+     (`version 0.24.0`, 5 torrents, `prefs` present), 5 files in
+     `Posters/` and 5 in `Torrents/` -- so the awaited `mkdir`s and
+     copies in `setupStateSaved()` all completed.
+  2. Same profile, `config.json` hand-staled to `version: "0.20.0"`
+     with `soundNotifications` and `externalPlayerPath` deleted and
+     `downloadPath` set to a marker. Relaunch shows no
+     `Missing config file` line (state persisted and was read), the
+     5 torrents and the marker `downloadPath` survive, and
+     `soundNotifications: true` / `externalPlayerPath: ""` /
+     `version 0.24.0` are back -- migrations ran and their result was
+     saved.
+  With the `console-message` hook installed on `build/main/index.js`,
+  the only severity-3 renderer line is the known dormant
+  `extensions.api.cast_channel.CastMessage` from `Cast.init()`.
+  `build/` was regenerated with `npm run build` afterwards.
+- **The six-step manual smoke test was NOT run** -- it needs a real
+  interactive session. The two launches above cover the two things the
+  story's smoke criterion actually names (persistence across relaunch,
+  migrations on a fresh profile). The residual risk is in the paths
+  neither launch exercises: saving a .torrent file via the Save-As
+  dialog, drag-and-drop folder seeding (`findFilesRecursive`), and
+  loading a subtitle file.
+
+**Learnings for future iterations:**
+
+- **A fresh profile is one env var away.** `application-config` reads
+  `process.env.HOME` at call time, so
+  `HOME=/tmp/whatever npx electron --no-sandbox .` gives a completely
+  clean config directory without touching the real one. Hand-editing
+  the `version` field in that profile's `config.json` between launches
+  is how you make migrations run on demand. This is the only practical
+  way to test anything in `lib/state.js` or `lib/migrations.js`
+  end-to-end.
+- **`parse-torrent` 9 rejects a bare `Uint8Array`** with
+  `Invalid torrent identifier`; it wants a `Buffer`. Wrap without
+  copying: `Buffer.from(u.buffer, u.byteOffset, u.byteLength)`. The
+  shim deliberately hands out `Uint8Array` (no Node objects across the
+  boundary), so any consumer that sniffs for `Buffer` needs this at the
+  call site. Check the consumer before assuming a `Uint8Array` is
+  interchangeable.
+- **`await` inside `.forEach()` does nothing.** Both migrations that
+  copy files did their work in a `forEach` callback; converting to
+  `for..of` is not cosmetic, it is the difference between `run()`
+  resolving after the copies and resolving before them. Grep for
+  `forEach` whenever you make a function async.
+- **Stub `build/config` the same way you stub `electron`.** Seed
+  `require.cache[require.resolve('../../build/config')]` with
+  `{ __esModule: true, default: {...} }` -- the `__esModule` flag
+  matters because every renderer module imports config as a default
+  import. That is what makes `lib/state.js` and `lib/migrations.js`
+  unit-testable at all: point `POSTER_PATH`/`TORRENT_PATH` at a
+  `mkdtemp` directory and let the real fs calls run.
+- **The migration chain is order-coupled in both directions.**
+  `migrate_0_7_0` *deletes* `ts.files`, which `migrate_0_17_2` then
+  reads -- so a single test fixture cannot exercise both. Two fixtures
+  at two starting versions is the honest shape; one fixture at
+  `version: 1` crashes exactly the way a real pre-0.7.0 config with a
+  WIRED CD entry would.
+- **A stream can be replaced without replacing its consumer.**
+  `srt-to-vtt` is a transform, so dropping `createReadStream` only
+  means constructing the transform directly and `.end()`ing it with the
+  bytes. Register the `concat()` consumer before writing.
+---

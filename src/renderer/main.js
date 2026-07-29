@@ -2,7 +2,6 @@ import createGetter from 'fn-getter'
 import debounce from 'debounce'
 import dragDrop from 'drag-drop'
 import electron from 'electron'
-import fs from 'fs'
 import React from 'react'
 import ReactDOM from 'react-dom'
 
@@ -13,6 +12,7 @@ import * as sound from './lib/sound'
 import * as TorrentPlayer from './lib/torrent-player'
 import { setDispatch } from './lib/dispatcher'
 import * as clipboard from './lib/platform/clipboard'
+import * as platformFs from './lib/platform/fs'
 import * as platformWindow from './lib/platform/window'
 
 // Perf optimization: Needed immediately, so do not lazy load it below
@@ -590,12 +590,14 @@ function onWindowBoundsChanged (e, newBounds) {
 }
 
 function checkDownloadPath () {
-  fs.stat(state.saved.prefs.downloadPath, (err, stat) => {
-    if (err) {
+  // The shim's stat resolves a plain object, so `isDirectory` is a
+  // boolean rather than a method.
+  platformFs.stat(state.saved.prefs.downloadPath)
+    .then(stat => {
+      state.downloadPathStatus = stat.isDirectory ? 'ok' : 'missing'
+    })
+    .catch(err => {
       state.downloadPathStatus = 'missing'
-      return console.error(err)
-    }
-    if (stat.isDirectory()) state.downloadPathStatus = 'ok'
-    else state.downloadPathStatus = 'missing'
-  })
+      console.error(err)
+    })
 }

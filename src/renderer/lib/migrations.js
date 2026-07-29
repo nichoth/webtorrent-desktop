@@ -1,17 +1,17 @@
 /* eslint-disable camelcase */
 
-import fs, { copyFileSync } from 'fs'
 import path from 'path'
 import semver from 'semver'
 import { ipcRenderer } from 'electron'
 import { sync as rimrafSync } from 'rimraf'
 
 import config from '../../config'
+import * as fs from './platform/fs'
 import * as TorrentSummary from './torrent-summary'
 
 // Change `state.saved` (which will be saved back to config.json on exit) as
 // needed, for example to deal with config.json format changes across versions
-export function run (state) {
+export async function run (state) {
   // Replace '{ version: 1 }' with app version (semver)
   if (!semver.valid(state.saved.version)) {
     state.saved.version = '0.0.0' // Pre-0.7.0 version, so run all migrations
@@ -20,13 +20,17 @@ export function run (state) {
   const version = state.saved.version
   const saved = state.saved
 
-  if (semver.lt(version, '0.7.0')) migrate_0_7_0(saved)
+  // The shim is promise-based (FR-10), so the migrations that touch
+  // the filesystem are async now. They are awaited one at a time: each
+  // one reads the state the previous one left behind, so running them
+  // concurrently would corrupt the config.
+  if (semver.lt(version, '0.7.0')) await migrate_0_7_0(saved)
   if (semver.lt(version, '0.7.2')) migrate_0_7_2(saved)
   if (semver.lt(version, '0.11.0')) migrate_0_11_0(saved)
-  if (semver.lt(version, '0.12.0')) migrate_0_12_0(saved)
+  if (semver.lt(version, '0.12.0')) await migrate_0_12_0(saved)
   if (semver.lt(version, '0.14.0')) migrate_0_14_0(saved)
   if (semver.lt(version, '0.17.0')) migrate_0_17_0(saved)
-  if (semver.lt(version, '0.17.2')) migrate_0_17_2(saved)
+  if (semver.lt(version, '0.17.2')) await migrate_0_17_2(saved)
   if (semver.lt(version, '0.21.0')) migrate_0_21_0(saved)
   if (semver.lt(version, '0.22.0')) migrate_0_22_0(saved)
 
@@ -46,8 +50,8 @@ function installHandlers (saved) {
   }
 }
 
-function migrate_0_7_0 (saved) {
-  saved.torrents.forEach(ts => {
+async function migrate_0_7_0 (saved) {
+  for (const ts of saved.torrents) {
     const infoHash = ts.infoHash
 
     // Replace torrentPath with torrentFileName
@@ -64,9 +68,7 @@ function migrate_0_7_0 (saved) {
         src = path.join(config.STATIC_PATH, ts.torrentPath)
       }
       dst = path.join(config.TORRENT_PATH, infoHash + '.torrent')
-      // Synchronous FS calls aren't ideal, but probably OK in a migration
-      // that only runs once
-      if (src !== dst) copyFileSync(src, dst)
+      if (src !== dst) await fs.copyFile(src, dst)
 
       delete ts.torrentPath
       ts.torrentFileName = infoHash + '.torrent'
@@ -79,9 +81,7 @@ function migrate_0_7_0 (saved) {
         ? ts.posterURL
         : path.join(config.STATIC_PATH, ts.posterURL)
       dst = path.join(config.POSTER_PATH, infoHash + extension)
-      // Synchronous FS calls aren't ideal, but probably OK in a migration
-      // that only runs once
-      if (src !== dst) copyFileSync(src, dst)
+      if (src !== dst) await fs.copyFile(src, dst)
 
       delete ts.posterURL
       ts.posterFileName = infoHash + extension
@@ -93,7 +93,7 @@ function migrate_0_7_0 (saved) {
     delete ts.files
     delete ts.selections
     delete ts.fileModtimes
-  })
+  }
 }
 
 function migrate_0_7_2 (saved) {
@@ -111,7 +111,7 @@ function migrate_0_11_0 (saved) {
   }
 }
 
-function migrate_0_12_0 (saved) {
+async function migrate_0_12_0 (saved) {
   if (saved.prefs.openExternalPlayer == null && saved.prefs.playInVlc != null) {
     saved.prefs.openExternalPlayer = saved.prefs.playInVlc
   }
@@ -127,17 +127,15 @@ function migrate_0_12_0 (saved) {
     '02767050e0be2fd4db9a2ad6c12416ac806ed6ed.torrent',
     '3ba219a8634bf7bae3d848192b2da75ae995589d.torrent'
   ]
-  saved.torrents.forEach(torrentSummary => {
-    if (!defaultTorrentFiles.includes(torrentSummary.torrentFileName)) return
+  for (const torrentSummary of saved.torrents) {
+    if (!defaultTorrentFiles.includes(torrentSummary.torrentFileName)) continue
     const fileOrFolder = TorrentSummary.getFileOrFolder(torrentSummary)
-    if (!fileOrFolder) return
-    try {
-      fs.statSync(fileOrFolder)
-    } catch (err) {
+    if (!fileOrFolder) continue
+    if (!await fs.exists(fileOrFolder)) {
       // Default torrent with "missing path" error. Clear path.
       delete torrentSummary.path
     }
-  })
+  }
 }
 
 function migrate_0_14_0 (saved) {
@@ -158,7 +156,7 @@ function migrate_0_17_0 (saved) {
   })
 }
 
-function migrate_0_17_2 (saved) {
+async function migrate_0_17_2 (saved) {
   // Remove the trailing dot (.) from the Wired CD torrent name, since
   // folders/files that end in a trailing dot (.) or space are not deletable from
   // Windows Explorer. See: https://github.com/webtorrent/webtorrent-desktop/issues/905
@@ -185,7 +183,7 @@ function migrate_0_17_2 (saved) {
   ts.magnetURI = ts.magnetURI.replace(OLD_HASH, NEW_HASH)
 
   try {
-    fs.renameSync(
+    await fs.rename(
       path.join(config.POSTER_PATH, ts.posterFileName),
       path.join(config.POSTER_PATH, NEW_HASH + '.jpg')
     )
@@ -193,7 +191,7 @@ function migrate_0_17_2 (saved) {
   ts.posterFileName = NEW_HASH + '.jpg'
 
   rimrafSync(path.join(config.TORRENT_PATH, ts.torrentFileName))
-  copyFileSync(
+  await fs.copyFile(
     path.join(config.STATIC_PATH, 'wiredCd.torrent'),
     path.join(config.TORRENT_PATH, NEW_HASH + '.torrent')
   )
@@ -202,7 +200,7 @@ function migrate_0_17_2 (saved) {
   if (ts.path) {
     // If torrent folder already exists on disk, try to rename it
     try {
-      fs.renameSync(
+      await fs.rename(
         path.join(ts.path, OLD_NAME),
         path.join(ts.path, NEW_NAME)
       )

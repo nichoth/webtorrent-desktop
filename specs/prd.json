@@ -493,7 +493,7 @@
         "Smoke test passes, with explicit verification that state persists across quit and relaunch and that a fresh-profile launch runs migrations"
       ],
       "priority": 28,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

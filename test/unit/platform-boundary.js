@@ -16,6 +16,10 @@ const path = require('path')
 const RENDERER = path.join(__dirname, '..', '..', 'src', 'renderer')
 const SHIM = path.join(RENDERER, 'lib', 'platform')
 
+// FR-4 exempts the hidden WebTorrent window from the shim: it is a
+// Node process by design and keeps its own `require('fs')`.
+const EXEMPT = new Set([path.join(RENDERER, 'webtorrent.js')])
+
 function rendererSources () {
   const out = []
   ;(function walk (dir) {
@@ -94,3 +98,26 @@ for (const { concern, patterns } of REMOTE_CHECKS) {
     t.end()
   })
 }
+
+// US-028: the filesystem concern. Unlike the Electron checks above the
+// offending API is a Node builtin, so the pattern names the module
+// specifier -- there is only one way to reach `fs` and no second
+// concern sharing it. `src/renderer/webtorrent.js` is exempt by FR-4,
+// and `lib/platform/` is already skipped by the walk.
+test('no renderer code outside the shim imports fs', function (t) {
+  const files = rendererSources().filter((f) => !EXEMPT.has(f))
+  t.ok(files.length > 20, 'walked the renderer sources')
+  const patterns = [
+    /from\s*['"](fs|fs\/promises|original-fs)['"]/,
+    /require\s*\(\s*['"](fs|fs\/promises|original-fs)['"]\s*\)/
+  ]
+  for (const file of files) {
+    const rel = path.relative(RENDERER, file)
+    const hits = fs.readFileSync(file, 'utf8').split('\n')
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line }) => patterns.some((re) => re.test(line)))
+      .map(({ line, n }) => n + ': ' + line.trim())
+    t.deepEqual(hits, [], rel + ' does not import fs directly')
+  }
+  t.end()
+})
