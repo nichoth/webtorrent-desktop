@@ -6,6 +6,7 @@ the design agreed in US-018: it maps every exported function onto the
 call sites it will replace, so the migration stories (US-026 through
 US-032) are mechanical rather than exploratory.
 
+
 `ipc-os.js` is implemented as of US-020, `ipc-engine.js` as of
 US-021, `shell.js` and `clipboard.js` as of US-022, `fs.js` as of
 US-023, `dialog.js` and `window.js` as of US-024, and `menu.js` as of

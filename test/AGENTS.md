@@ -160,10 +160,10 @@ The `fs` check is the one exception to the rule below: `fs` is a Node
 builtin with a single concern behind it, so it bans the specifier
 outright, with `src/renderer/webtorrent.js` exempted by FR-4.
 
-The checks name **concerns, not module specifiers**. Add a pattern for what your story
-actually migrated, not for the import it happens to sit next to. (Up
-to US-029 that mattered because `remote.Menu` and `remote.dialog`
-lived in the same file and left in different stories.)
+The checks name **concerns, not module specifiers**. Add a pattern for
+what your story actually migrated, not for the import it happens to sit
+next to. (Up to US-029 that mattered because `remote.Menu` and
+`remote.dialog` lived in the same file and left in different stories.)
 
 ## Unit testing a controller
 

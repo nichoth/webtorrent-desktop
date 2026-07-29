@@ -38,9 +38,10 @@ torrent client so that it uses Tauri instead of Electron.
    it `passes: false` and record what blocked you in `progress.log`.
 7. DOCUMENT: Update `progress.log` with what changed and any new patterns
    discovered (see format below).
-8. **MARK DONE**: In `specs/prd.json`, set `passes: true` for the completed task.
-   This is how the loop advances — a task is not finished until this flag is
-   flipped — so include this change in the commit.
+8. **MARK DONE**: In `specs/prd.json`, set `passes: true` for the
+   completed task. This is how the loop advances — a task is not
+   finished until this flag is flipped — so include this change in the
+   commit.
 9. **COMMIT**: Once the full suite and lint pass, commit with a descriptive
    message like `FEATURE: [TaskID] - [Description]` (or `FIX:`, `TEST:`,
    `CHORE:` as appropriate).
