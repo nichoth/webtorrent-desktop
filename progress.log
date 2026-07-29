@@ -314,6 +314,27 @@ it tight.
   way to assert controller behaviour instead of asserting on its
   source text -- see `test/unit/torrent-context-menu.js` and
   `test/AGENTS.md`.
+- **`src/config.js` has a plain-`node` consumer now.** Since US-040 the
+  engine sidecar requires it under `node`, so `electron` and
+  `@electron/remote` are both required *lazily*, inside the branch of
+  `getPath()` that needs them. Never hoist a host import to module
+  scope in that file: `node_modules/electron` does not exist in a
+  packaged sidecar, and `require('electron')` throws at load rather
+  than returning `undefined`. The Vite renderer bundle is unaffected --
+  a bare `require()` inside a function is still externalized, and the
+  build keeps 0 externalization warnings.
+- **`ws` is a direct dependency, pinned at 7.5.9** (it was already in
+  the tree under `webtorrent`, so adding it deduped rather than
+  installing a second copy). In 7.x the server export is
+  `Server`, **not** `WebSocketServer` -- that alias is ws 8+. Also
+  `new Server({ port })` starts listening immediately; there is no
+  `listen()` call, so "wait for the port" means waiting on the
+  `listening` event.
+- **A source-scan test must drop comment lines first.** Scans for
+  `window.`, `electron` or `.send(` match prose just as happily as
+  code, and a file that *explains* what it no longer uses will fail its
+  own check. Filter `/^\s*(\/\/|\*|\/\*)/` before matching -- see
+  `test/unit/engine-entry.js`.
 
 ---
 
@@ -3482,4 +3503,108 @@ leftover processes.
     keeps `selectFiles(torrentOrInfoHash, selections)`'s two-argument
     overload honest. Do not "simplify" these when the engine moves in
     US-040.
+---
+
+## 2026-07-29 - US-040
+- Added `src/engine/bus-websocket.js`: the second bus implementation
+  (ADR-012). `createWebSocketBus({ port, token, onError })` binds a `ws`
+  server to `127.0.0.1` on port 0, encodes and decodes every frame with
+  `src/shared/wire.js`, and exposes the same `send(channel, ...args)` /
+  `on(channel, handler)` surface as `bus-electron.js`, plus `listen()`
+  (resolves to the bound port, idempotent), `address()` and `close()`.
+  A malformed frame and a throwing handler both go to `onError` and
+  neither closes the socket. A send with nobody connected is dropped:
+  the pre-connect queue ADR-012 requires belongs on the UI side
+  (US-044). When a token is configured, `verifyClient` refuses any
+  upgrade without it with a 401.
+- Added `src/engine/index.js`: the sidecar entry point. Imports no
+  Electron module, no DOM. Prints exactly one
+  `WEBTORRENT_ENGINE_PORT=<port>` line on stdout once listening (the
+  line US-041 will parse), reads its token from
+  `WEBTORRENT_ENGINE_TOKEN`, reports uncaught errors on
+  `wt-uncaught-error` from `process.on('uncaughtException')` and
+  `process.on('unhandledRejection')`, and shuts the client and server
+  down on `SIGTERM`/`SIGINT`. Dropped from the hidden-window engine:
+  `ipcReadyWebTorrent`, `wt-generate-torrent-poster`/`wt-poster` (no
+  DOM; ADR-013 and US-043 own the replacement), `window.client`,
+  `window.testOfflineMode`. `getTorrent()` throws a plain `Error` with
+  `TorrentKeyNotFoundError`'s exact message rather than importing the
+  class out of `src/renderer/lib/errors.js` -- only the message ever
+  crossed the wire.
+- Made `src/config.js` require `electron` lazily, inside the
+  main-process branch of `getPath()`, matching the `@electron/remote`
+  require already there. That is what makes the config paths resolve for
+  a process started outside Electron in a packaged app, rather than only
+  in a dev tree that happens to have `node_modules/electron`.
+- Added `ws` 7.5.9 to `dependencies` (deduped against the copy
+  `webtorrent` already pulled in).
+- Tests, written first and confirmed failing (module not found):
+  - `test/unit/engine-bus-websocket.js` (25 assertions) drives the bus
+    with a real `ws` client against a real server: port and loopback
+    bind, idempotent `listen()`, frames verbatim in both directions,
+    `null`/`undefined`/`Uint8Array` preserved through the codec, handler
+    sees the payload only, two handlers on one channel, unsubscribe,
+    malformed frame, throwing handler, send with no client, and the
+    token gate (401 for wrong and missing).
+  - `test/unit/engine-entry.js` (19 assertions) is the acceptance
+    criterion itself: spawn `build/engine/index.js` with plain `node`,
+    parse the one port line, connect, send `wt-start-torrenting` for
+    `static/sintel.torrent`, and assert `wt-parsed`, `wt-ready` (name
+    and file count from the fixture) and `wt-progress`. Plus a source
+    scan (no Electron, no browser global, one bus construction site,
+    every send through the bus) and a `spawnSync` probe that loads
+    `build/config.js` with `electron` made unresolvable.
+- Files changed: `src/engine/bus-websocket.js` (new),
+  `src/engine/index.js` (new), `test/unit/engine-bus-websocket.js`
+  (new), `test/unit/engine-entry.js` (new), `src/config.js`,
+  `src/engine/AGENTS.md`, `src/AGENTS.md`, `test/AGENTS.md`,
+  `package.json`, `package-lock.json`, `progress.log`,
+  `specs/prd.json`.
+- **Interpretation, worth knowing before US-041..US-045:** the story
+  says "the hidden window remains the live engine; nothing is cut over",
+  so `src/renderer/webtorrent.js` is untouched and the engine now exists
+  **twice**. I copied rather than extracting a shared core deliberately:
+  a shared core would have had to inject poster generation (the one
+  thing the sidecar cannot do) and would have restructured the live
+  engine in a session that cannot run the smoke test, to build an
+  abstraction US-045 deletes anyway. The cost is real -- until US-045,
+  an engine behaviour change has to land in both files -- and it is
+  written down in `src/engine/AGENTS.md` where the next session will see
+  it.
+- Verification: full suite green, 1535 assertions (up from 1491),
+  `npm run lint` clean, `npm run build` clean with 0 externalization
+  warnings. One launch check (`npx electron --no-sandbox .`, killed
+  afterwards, `pgrep` clean): `init: 876ms`, 16 relay lines from the
+  hidden window, no new error -- so the `config.js` change did not
+  disturb the live app. **The six-step manual smoke test was not run**
+  (non-interactive session); nothing was cut over, so the residual risk
+  is confined to `config.js`, and the launch check covers the path that
+  file is load-bearing on.
+- **Learnings for future iterations:**
+  - **The sidecar can be driven end to end from a unit test, and
+    should be.** `spawn(process.execPath, ['build/engine/index.js'])`,
+    read the port off stdout, connect `ws`, speak `wire.js`. With a
+    `static/*.torrent` fixture and every file deselected, `wt-parsed`,
+    `wt-ready` and `wt-progress` all arrive from the torrent file with
+    no peer and no download, in about a second. This is the first part
+    of this app whose real behaviour a unit test can assert -- US-041
+    and US-044 should lean on it rather than on source scans.
+  - **`NODE_ENV=test` is the isolation knob for anything that spawns a
+    process that loads `config`.** It makes `IS_PORTABLE` true, so
+    `CONFIG_PATH` becomes `/tmp/WebTorrentTest` and the run cannot
+    write into the real profile.
+  - **Do not patch `Module._resolveFilename` inside the tape process.**
+    Every unit file shares one process, so a resolution patch (or a
+    `delete require.cache` + re-require of `build/config`) outlives the
+    test that installed it. Run that kind of probe in a `spawnSync`
+    child and assert on its stdout.
+  - **`config.APP_VERSION` is the way to get the package version in
+    new code.** `require('../../package.json').version` works only in a
+    CommonJS file; the ESM spelling needs an import attribute, and
+    config already exports the value.
+  - **The hidden-window engine's `let client = window.client = ...` was
+    load-bearing for `window.testOfflineMode` only.** In the sidecar
+    the client is a `const`, which is worth remembering if anyone tries
+    to port the offline-mode helper: it reassigned `client`, and
+    nothing else ever did.
 ---

@@ -226,3 +226,28 @@ dropped.
 The behaviour of the shim functions themselves stays in
 `platform-ipc-os.js` / `platform-ipc-engine.js`; do not duplicate it
 here.
+
+## Testing the engine sidecar
+
+`test/unit/engine-entry.js` runs the real thing: it spawns
+`build/engine/index.js` with `process.execPath`, waits for the
+`WEBTORRENT_ENGINE_PORT=` line on stdout, connects a real `ws` client
+and speaks `wt-*` through `build/shared/wire.js`. Four things keep that
+honest and cheap:
+
+- **`NODE_ENV=test` in the child's env** makes `config` portable, so the
+  run cannot touch the real profile directory.
+- **A `static/*.torrent` fixture with every file deselected.** Metadata,
+  `wt-parsed`, `wt-ready` and `wt-progress` all arrive from the torrent
+  file itself, so the assertions do not need a peer -- and nothing
+  downloads.
+- **Kill the child in a `finally`, then await its `exit`.** A leaked
+  sidecar keeps a port and a download directory.
+- **Never patch module resolution in the tape process.** All unit files
+  share one process, so the "config loads with no electron module" check
+  runs the patch in a `spawnSync` child instead.
+
+`createWebSocketBus` is tested against a real server and a real client
+in `engine-bus-websocket.js` rather than a fake socket: the story is
+that the engine is reachable by a plain socket, so a stub would only
+test the stub. Wait on a condition (`waitFor`), never on a delay.

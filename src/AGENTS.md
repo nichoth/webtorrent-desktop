@@ -62,6 +62,14 @@ than through Babel. That is why `__dirname` is read through the
 Anything new added here that depends on a CommonJS-only global will
 break those three npm scripts, and nothing else will notice.
 
+A fourth consumer arrived with US-040: the engine sidecar, under plain
+`node`. That is why `electron` and `@electron/remote` are both required
+lazily, inside the branch of `getPath()` that needs them, rather than
+imported at the top. A top-level `import electron from 'electron'` makes
+this module unloadable wherever `node_modules/electron` is absent --
+which is every packaged sidecar. Keep new host imports out of module
+scope here for the same reason.
+
 ## `src/renderer/lib/`
 
 The utility modules that used to do `module.exports = { fnA, fnB }` now

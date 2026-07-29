@@ -25,7 +25,6 @@
 import path from 'path'
 import fs from 'fs'
 import arch from 'arch'
-import electron from 'electron'
 import applicationConfig from 'application-config'
 import pkg from '../package.json' with { type: 'json' }
 
@@ -198,6 +197,12 @@ function getDefaultDownloadPath () {
   }
 }
 
+// Both Electron modules are required lazily, inside the branch that
+// needs them. A top-level `import electron from 'electron'` would make
+// this module unloadable in the engine sidecar (US-040), which runs
+// under plain `node` and, once packaged, has no `node_modules/electron`
+// to resolve at all -- even though the branch that uses it can never be
+// reached there.
 function getPath (key) {
   if (!process.versions.electron) {
     // Node.js process
@@ -207,7 +212,7 @@ function getPath (key) {
     return require('@electron/remote').app.getPath(key)
   } else {
     // Electron main process
-    return electron.app.getPath(key)
+    return require('electron').app.getPath(key)
   }
 }
 
