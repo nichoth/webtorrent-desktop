@@ -12,6 +12,7 @@ import State from './lib/state'
 import * as sound from './lib/sound'
 import * as TorrentPlayer from './lib/torrent-player'
 import { setDispatch } from './lib/dispatcher'
+import * as clipboard from './lib/platform/clipboard'
 
 // Perf optimization: Needed immediately, so do not lazy load it below
 import TorrentListController from './controllers/torrent-list-controller'
@@ -494,9 +495,10 @@ const editableHtmlTags = new Set(['input', 'textarea'])
 
 function onPaste (e) {
   if (e && editableHtmlTags.has(e.target.tagName.toLowerCase())) return
-  controllers.torrentList().addTorrent(electron.clipboard.readText())
-
-  update()
+  clipboard.readText().then((text) => {
+    controllers.torrentList().addTorrent(text)
+    update()
+  }).catch((err) => dispatch('error', err))
 }
 
 function onKeydown (e) {

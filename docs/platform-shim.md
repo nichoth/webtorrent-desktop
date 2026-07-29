@@ -9,8 +9,9 @@ US-032) are mechanical rather than exploratory.
 `ipc-os.js` is implemented as of US-020, `ipc-engine.js` as of
 US-021, `shell.js` and `clipboard.js` as of US-022, `fs.js` as of
 US-023, `dialog.js` and `window.js` as of US-024, and `menu.js` as of
-US-025. The whole surface is implemented. Nothing imports the shim
-yet -- the call sites move in US-026 onwards.
+US-025. The whole surface is implemented. The call sites move from
+US-026 onwards; the `shell.openExternal` and `clipboard` ones are
+migrated as of US-026.
 
 ## Rules the surface follows
 

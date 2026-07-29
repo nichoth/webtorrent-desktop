@@ -1,12 +1,13 @@
 import fs from 'fs'
 import path from 'path'
-import { ipcRenderer, clipboard } from 'electron'
+import { ipcRenderer } from 'electron'
 import remote from '@electron/remote'
 
 import { dispatch } from '../lib/dispatcher'
 import { TorrentKeyNotFoundError } from '../lib/errors'
 import * as sound from '../lib/sound'
 import * as TorrentSummary from '../lib/torrent-summary'
+import * as clipboard from '../lib/platform/clipboard'
 
 const instantIoRegex = /^(https:\/\/)?instant\.io\/#/
 
@@ -283,12 +284,12 @@ export default class TorrentListController {
 
     menu.append(new remote.MenuItem({
       label: 'Copy Magnet Link to Clipboard',
-      click: () => clipboard.writeText(torrentSummary.magnetURI)
+      click: () => copyToClipboard(torrentSummary.magnetURI)
     }))
 
     menu.append(new remote.MenuItem({
       label: 'Copy Instant.io Link to Clipboard',
-      click: () => clipboard.writeText(`https://instant.io/#${torrentSummary.infoHash}`)
+      click: () => copyToClipboard(`https://instant.io/#${torrentSummary.infoHash}`)
     }))
 
     menu.append(new remote.MenuItem({
@@ -389,6 +390,12 @@ function deleteFile (path) {
   fs.unlink(path, err => {
     if (err) dispatch('error', err)
   })
+}
+
+// Context-menu click handlers cannot await, so the shim's promise
+// (FR-10) is terminated here rather than left floating.
+function copyToClipboard (text) {
+  clipboard.writeText(text).catch((err) => dispatch('error', err))
 }
 
 // Delete all files in a torrent

@@ -14,7 +14,8 @@
  * the main process, because `moveItemToTrash` is main-only and the
  * three main-side handlers already exist (`src/main/ipc.js`).
  *
- * Implemented in US-022; call sites are migrated in US-026. See
+ * Implemented in US-022; the `openExternal` call sites were
+ * migrated in US-026. See
  * docs/platform-shim.md.
  */
 

@@ -239,6 +239,20 @@ it tight.
   an optional `{ once: true }`. `shell.js` -- not `ipc-os.js` -- owns
   the `showItemInFolder`, `openPath` and `moveItemToTrash` channels,
   because they are one concern.
+- **Migrating a call site to the async shim:** tail every promise with
+  `.catch((err) => dispatch('error', err))`, the renderer's existing
+  error sink, rather than making the caller `async` (that just moves
+  the floating promise into React's or Electron's callback). Where the
+  boundary cannot await at all -- a menu `click` -- extract a named
+  helper. And cross-check `docs/platform-shim.md`'s call-site tables
+  against the story's acceptance criteria first: the doc lists sites
+  the criteria omit, and the story's own grep criterion covers them.
+- **`test/unit/platform-boundary.js` is the migration regression
+  gate.** It walks `src/renderer/**` (source, not `build/`, which has
+  no `components/` or `controllers/`) and fails on any direct Electron
+  use outside `lib/platform/`. Add each newly-migrated concern to its
+  name list as US-027..US-032 land; US-034 replaces it with a lint
+  rule.
 
 ---
 
@@ -2304,4 +2318,108 @@ the module still has no importers.
     per-call-site property read, same as everything else here.
   - The remaining Phase 2 stories are all call-site migrations now;
     the shim itself is complete as of this commit.
+---
+
+## 2026-07-28 - US-026
+
+Migrate the shell and clipboard call sites to the platform shim.
+
+**What was implemented**
+
+- `components/update-available-modal.js` and
+  `components/unsupported-media-modal.js` now
+  `import * as shell from '../lib/platform/shell'` and call
+  `shell.openExternal(...)` as a promise.
+- `components/open-torrent-address-modal.js` imports
+  `../lib/platform/clipboard`. `componentDidMount` prefills the field
+  from `clipboard.readText().then(...)` instead of synchronously, and
+  bails if `this.torrentURL` is gone by the time it resolves.
+- `controllers/torrent-list-controller.js` drops `clipboard` from its
+  `electron` import and gets a module-level `copyToClipboard(text)`
+  helper, which the two "Copy ... Link to Clipboard" context-menu
+  items call. Menu `click` handlers cannot await, so the helper is
+  where the promise is terminated.
+- `main.js` `onPaste` was also on `electron.clipboard.readText()` --
+  `docs/platform-shim.md` lists `main.js:497` as a `readText` call
+  site, so it is in scope for this story even though the acceptance
+  criteria name only the four component/controller files. It now
+  imports `./lib/platform/clipboard` and moves `addTorrent(text)` and
+  `update()` inside the `.then`, so the re-render still happens after
+  the torrent is added.
+- Every one of the five promises ends in
+  `.catch((err) => dispatch('error', err))` -- the repo's established
+  renderer error path -- so nothing floats and nothing is swallowed.
+- New `test/unit/platform-boundary.js` walks `src/renderer/**/*.js`
+  excluding `lib/platform/` and asserts no file imports `shell` or
+  `clipboard` from `electron`, or reads `electron.shell` /
+  `electron.clipboard`. Written first: 5 failures before the
+  migration, exactly the 5 call sites; 0 after.
+- Docblock/`docs/platform-shim.md` status lines updated from "call
+  sites are migrated in US-026" to past tense.
+
+**Files changed**
+
+- `src/renderer/components/update-available-modal.js`
+- `src/renderer/components/unsupported-media-modal.js`
+- `src/renderer/components/open-torrent-address-modal.js`
+- `src/renderer/controllers/torrent-list-controller.js`
+- `src/renderer/main.js`
+- `src/renderer/lib/platform/shell.js`,
+  `src/renderer/lib/platform/clipboard.js` (comments only)
+- `test/unit/platform-boundary.js` (new)
+- `docs/platform-shim.md`, `specs/prd.json`, `progress.log`
+
+**Verification**
+
+- `npm test` passes, 207 assertions, exit 0 (`standard` + `depcheck` +
+  `test-unit`).
+- `npm run build` exit 0, both halves; `grep -c 'has been
+  externalized'` on the Vite stderr is 0.
+- Real launch probe (build artifact patched, then rebuilt): wrote a
+  magnet URI to the OS clipboard from the main process, dispatched
+  `openTorrentAddress`, and read `#torrent-address-field` back --
+  `PROBE readText prefill:
+  "magnet:?xt=urn:btih:probe00000..."`. That is the migrated
+  `clipboard.readText` path running in the real renderer. `init:
+  872ms`, both windows up, no new severity-3 console errors (the
+  `getCurrentWindow` one is the known pre-existing `electron.remote`
+  failure).
+- **Not verified empirically:** `shell.openExternal` and
+  `clipboard.writeText` at their new call sites. Both are reachable
+  only through a native context menu or a modal button that would
+  open a real browser window on the user's machine; the shim
+  functions themselves have unit tests from US-022. The six-step
+  manual smoke test was not run -- this is a non-interactive session.
+  The risk sits on the two context-menu copy items and the two
+  "open in browser" buttons.
+
+**Learnings for future iterations:**
+
+- **`dispatch('error', err)` is the renderer's error sink** and the
+  right tail for every shim promise a migrated call site cannot
+  await. `main.js` defines it and `lib/dispatcher` re-exports it;
+  components already import `dispatch` alongside `dispatcher`. Use
+  `.then(...).catch((err) => dispatch('error', err))` rather than
+  making the handler `async`, which would just relocate the floating
+  promise into React's callback.
+- **A menu `click` handler is a hard await boundary.** Extract a small
+  named helper (`copyToClipboard`) instead of inlining `.catch()` in
+  the descriptor -- US-029 rewrites these same descriptors and the
+  helper survives that rewrite unchanged.
+- **`docs/platform-shim.md` lists call sites the acceptance criteria
+  omit.** US-026's criteria name four files; the doc's `readText` row
+  also names `main.js:497`. Cross-check the doc's tables against the
+  criteria at the start of every remaining migration story, or the
+  grep criterion in the same story will fail.
+- **The boundary grep belongs in a test, not just in the session.**
+  `test/unit/platform-boundary.js` reads `src/` (not `build/`, which
+  contains no `components/` or `controllers/`) and is the one place a
+  migration regression gets caught. Extend its concern list --
+  `['shell', 'clipboard']` today -- as each of US-027..US-032 lands,
+  until US-034 replaces it with a lint rule.
+- **Probing a modal non-interactively:** `wc.executeJavaScript(
+  "window.dispatch('openTorrentAddress')")` opens it and the DOM is
+  readable ~1.5s later. Seed OS state (clipboard, etc.) from the main
+  process with a plain `require('electron')` in the appended probe
+  block -- it does not have to come from the renderer.
 ---

@@ -1,8 +1,8 @@
 import React from 'react'
-import { shell } from 'electron'
 
 import ModalOKCancel from './modal-ok-cancel'
-import { dispatcher } from '../lib/dispatcher'
+import { dispatch, dispatcher } from '../lib/dispatcher'
+import * as shell from '../lib/platform/shell'
 
 export default class UnsupportedMediaModal extends React.Component {
   render () {
@@ -37,6 +37,7 @@ export default class UnsupportedMediaModal extends React.Component {
 
   onInstall () {
     shell.openExternal('https://www.videolan.org/vlc/')
+      .catch((err) => dispatch('error', err))
 
     // TODO: dcposch send a dispatch rather than modifying state directly
     const state = this.props.state

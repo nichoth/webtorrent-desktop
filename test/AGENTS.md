@@ -98,3 +98,15 @@ Only `src/renderer/lib/**` and `src/main/**` are reachable this way.
 `build:main` deliberately ignores `src/renderer/main.js`,
 `components/`, `controllers/` and `pages/` (Vite owns those), so those
 modules cannot be unit tested through `build/`. See `src/AGENTS.md`.
+
+## Static boundary tests
+
+Because `components/`, `controllers/` and `main.js` are unreachable
+through `build/`, the only automated check on their imports is a
+static one. `test/unit/platform-boundary.js` walks the **sources**
+under `src/renderer/`, skipping `lib/platform/`, and fails on any
+direct use of an Electron API that has already been migrated behind
+the shim (`shell` and `clipboard` today). Each of US-027..US-032 adds
+its concern to that list as it lands; US-034 supersedes the whole file
+with a lint rule. Reading source rather than build output is the
+point -- do not repoint it at `build/`.

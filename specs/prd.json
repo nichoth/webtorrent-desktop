@@ -461,8 +461,8 @@
         "Smoke test passes, with explicit checks on external link opening and copy magnet link"
       ],
       "priority": 26,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Five call sites moved onto the shim: openExternal in update-available-modal and unsupported-media-modal, clipboard.readText in open-torrent-address-modal and main.js onPaste, clipboard.writeText behind a copyToClipboard helper in torrent-list-controller. Every promise is terminated with .catch(err => dispatch('error', err)); none float. New test/unit/platform-boundary.js greps the renderer sources and fails on any electron shell/clipboard use outside lib/platform (5 failures before, 0 after). readText verified end to end in a real launch: the address field prefilled from the clipboard. Full six-step smoke test not run (non-interactive session)."
     },
     {
       "id": "US-027",

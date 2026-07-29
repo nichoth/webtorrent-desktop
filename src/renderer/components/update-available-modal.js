@@ -1,8 +1,8 @@
 import React from 'react'
-import { shell } from 'electron'
 
 import ModalOKCancel from './modal-ok-cancel'
 import { dispatch } from '../lib/dispatcher'
+import * as shell from '../lib/platform/shell'
 
 export default class UpdateAvailableModal extends React.Component {
   render () {
@@ -26,6 +26,7 @@ export default class UpdateAvailableModal extends React.Component {
     function handleShow () {
       // TODO: use the GitHub urls from config.js
       shell.openExternal('https://github.com/webtorrent/webtorrent-desktop/releases')
+        .catch((err) => dispatch('error', err))
       dispatch('exitModal')
     }
 

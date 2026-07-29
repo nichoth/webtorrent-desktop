@@ -6,7 +6,7 @@
  * a process boundary can fill them in without a caller changing
  * (FR-10).
  *
- * Implemented in US-022; call sites are migrated in US-026. See
+ * Implemented in US-022; call sites migrated in US-026. See
  * docs/platform-shim.md.
  */
 
