@@ -524,7 +524,7 @@
         "Smoke test passes, with attention to preferences changes taking effect and folder-watcher pickup"
       ],
       "priority": 30,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

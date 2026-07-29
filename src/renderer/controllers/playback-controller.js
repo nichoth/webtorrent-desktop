@@ -2,11 +2,13 @@ import { ipcRenderer } from 'electron'
 import path from 'path'
 
 import * as Cast from '../lib/cast'
-import { dispatch } from '../lib/dispatcher'
+import { dispatch, reportErrors } from '../lib/dispatcher'
 import { UnplayableFileError, UnplayableTorrentError } from '../lib/errors'
 import * as sound from '../lib/sound'
 import * as TorrentPlayer from '../lib/torrent-player'
 import * as TorrentSummary from '../lib/torrent-summary'
+import * as ipcOs from '../lib/platform/ipc-os'
+import * as shell from '../lib/platform/shell'
 import * as Playlist from '../lib/playlist'
 import State from '../lib/state'
 
@@ -63,7 +65,7 @@ export default class PlaybackController {
     const filePath = path.join(
       torrentSummary.path,
       torrentSummary.files[index].path)
-    ipcRenderer.send('openPath', filePath)
+    reportErrors(shell.openPath(filePath))
   }
 
   // Toggle (play or pause) the currently playing media
@@ -126,7 +128,7 @@ export default class PlaybackController {
     if (isCasting(state)) {
       Cast.play()
     }
-    ipcRenderer.send('onPlayerPlay')
+    reportErrors(ipcOs.notifyPlayerPlay())
   }
 
   // Pause the currently playing media
@@ -137,7 +139,7 @@ export default class PlaybackController {
     if (isCasting(state)) {
       Cast.pause()
     }
-    ipcRenderer.send('onPlayerPause')
+    reportErrors(ipcOs.notifyPlayerPause())
   }
 
   // Skip specified number of seconds (backwards if negative)
@@ -241,7 +243,7 @@ export default class PlaybackController {
     sound.play('PLAY')
 
     this.startServer(torrentSummary)
-    ipcRenderer.send('onPlayerOpen')
+    reportErrors(ipcOs.notifyPlayerOpen())
     this.updatePlayer(infoHash, index, true, cb)
   }
 
@@ -332,7 +334,8 @@ export default class PlaybackController {
     // otherwise, play the video
     this.update()
 
-    ipcRenderer.send('onPlayerUpdate', Playlist.hasNext(state), Playlist.hasPrevious(state))
+    reportErrors(ipcOs.notifyPlayerUpdate(
+      Playlist.hasNext(state), Playlist.hasPrevious(state)))
     cb()
   }
 
@@ -345,7 +348,7 @@ export default class PlaybackController {
       Cast.stop()
     }
     if (state.playing.location === 'external') {
-      ipcRenderer.send('quitExternalPlayer')
+      reportErrors(ipcOs.quitExternalPlayer())
     }
 
     // Save volume (this session only, not in state.saved)
@@ -364,7 +367,7 @@ export default class PlaybackController {
     // Tell the WebTorrent process to kill the torrent-to-HTTP server
     ipcRenderer.send('wt-stop-server')
 
-    ipcRenderer.send('onPlayerClose')
+    reportErrors(ipcOs.notifyPlayerClose())
 
     // Playback Priority: resume previously paused downloads.
     if (this.state.saved.prefs.highestPlaybackPriority) {
@@ -385,8 +388,8 @@ function isCasting (state) {
 }
 
 function restoreBounds (state) {
-  ipcRenderer.send('setAspectRatio', 0)
+  reportErrors(ipcOs.setAspectRatio(0))
   if (state.window.bounds) {
-    ipcRenderer.send('setBounds', state.window.bounds, false)
+    reportErrors(ipcOs.setBounds(state.window.bounds, false))
   }
 }

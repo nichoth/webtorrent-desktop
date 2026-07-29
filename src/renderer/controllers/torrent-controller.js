@@ -3,7 +3,8 @@ import { ipcRenderer } from 'electron'
 
 import * as TorrentSummary from '../lib/torrent-summary'
 import * as sound from '../lib/sound'
-import { dispatch } from '../lib/dispatcher'
+import * as ipcOs from '../lib/platform/ipc-os'
+import { dispatch, reportErrors } from '../lib/dispatcher'
 
 export default class TorrentController {
   constructor (state) {
@@ -93,7 +94,7 @@ export default class TorrentController {
         this.state.dock.badge += 1
       }
       showDoneNotification(torrentSummary)
-      ipcRenderer.send('downloadFinished', getTorrentPath(torrentSummary))
+      reportErrors(ipcOs.notifyDownloadFinished(getTorrentPath(torrentSummary)))
     }
 
     dispatch('update')
@@ -178,7 +179,7 @@ function showDoneNotification (torrent) {
   })
 
   notif.onclick = () => {
-    ipcRenderer.send('show')
+    reportErrors(ipcOs.show())
   }
 
   // Only play notification sound if player is inactive

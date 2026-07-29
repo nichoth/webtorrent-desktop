@@ -1,6 +1,5 @@
-import { ipcRenderer } from 'electron'
-
-import { dispatch } from '../lib/dispatcher'
+import { dispatch, reportErrors } from '../lib/dispatcher'
+import * as ipcOs from '../lib/platform/ipc-os'
 
 // Controls the Preferences screen
 export default class PrefsController {
@@ -17,11 +16,11 @@ export default class PrefsController {
       setup (cb) {
         // initialize preferences
         state.window.title = 'Preferences'
-        ipcRenderer.send('setAllowNav', false)
+        reportErrors(ipcOs.setAllowNav(false))
         cb()
       },
       destroy: () => {
-        ipcRenderer.send('setAllowNav', true)
+        reportErrors(ipcOs.setAllowNav(true))
       }
     })
   }
@@ -29,8 +28,11 @@ export default class PrefsController {
   // Updates a single property in the saved prefs
   // For example: updatePreferences('isFileHandler', true)
   update (property, value) {
-    if (property === 'isFileHandler') ipcRenderer.send('setDefaultFileHandler', value)
-    else if (property === 'startup') ipcRenderer.send('setStartup', value)
+    if (property === 'isFileHandler') {
+      reportErrors(ipcOs.setDefaultFileHandler(value))
+    } else if (property === 'startup') {
+      reportErrors(ipcOs.setStartup(value))
+    }
 
     this.state.saved.prefs[property] = value
     dispatch('stateSaveImmediate')

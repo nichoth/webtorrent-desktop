@@ -146,3 +146,20 @@ controller's own `../lib/...` imports resolve against the real built
 Stub the shim modules it imports by `require.cache`-seeding their
 built paths, and record dispatches through the real
 `lib/dispatcher`'s `setDispatch()` rather than stubbing it.
+
+`test/unit/os-ipc-call-sites.js` follows the same recipe for the
+US-030 controllers. Two cross-file hazards it had to solve, both
+because `tape test/unit/*.js` is a **single process** that requires
+every file before running any test:
+
+- **`setDispatch()` is process-wide.** Registering it once at require
+  time means the last file loaded wins for the entire run. Call
+  `setDispatch()` inside each file's per-test `reset()` instead.
+- **A `require.cache` stub of a *built shim module* leaks into later
+  files.** `platform-ipc-os.js` tests the real `ipc-os`, so a stub left
+  at its path breaks it. Withdraw the stub (restore the previous cache
+  entry, or `delete` it) right after requiring the module under test --
+  Babel binds the imported module object at that first require, so the
+  module under test keeps the stub afterwards. Stubs of `electron` and
+  `@electron/remote` do not need this; every file that cares seeds its
+  own.

@@ -9,6 +9,7 @@ import * as clipboard from '../lib/platform/clipboard'
 import * as platformDialog from '../lib/platform/dialog'
 import * as fs from '../lib/platform/fs'
 import * as menu from '../lib/platform/menu'
+import * as shell from '../lib/platform/shell'
 
 const instantIoRegex = /^(https:\/\/)?instant\.io\/#/
 
@@ -388,11 +389,13 @@ function copyToClipboard (text) {
 // Delete all files in a torrent
 function moveItemToTrash (torrentSummary) {
   const filePath = TorrentSummary.getFileOrFolder(torrentSummary)
-  if (filePath) ipcRenderer.send('moveItemToTrash', filePath)
+  if (!filePath) return
+  shell.moveItemToTrash(filePath).catch((err) => dispatch('error', err))
 }
 
 function showItemInFolder (torrentSummary) {
-  ipcRenderer.send('showItemInFolder', TorrentSummary.getFileOrFolder(torrentSummary))
+  shell.showItemInFolder(TorrentSummary.getFileOrFolder(torrentSummary))
+    .catch((err) => dispatch('error', err))
 }
 
 function deleteTorrentFile (torrentSummary, deleteData) {

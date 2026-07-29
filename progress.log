@@ -26,6 +26,16 @@ it tight.
   `require()` the result -- the app dies at startup. `unambiguous`
   keeps the still-CommonJS files compiling as scripts instead of
   gaining `"use strict"`.
+- **`tape test/unit/*.js` is one process that requires every file
+  before running any test.** Anything process-wide leaks between test
+  files in alphabetical glob order. Two known cases: `setDispatch()`
+  from `lib/dispatcher` (register it inside each file's per-test
+  `reset()`, not once at require time, or the last file loaded wins for
+  the whole run) and `require.cache` stubs of **built shim modules**
+  (`platform-ipc-os.js` tests the real `ipc-os`, so a stub left at its
+  path fails it -- withdraw the stub right after requiring the module
+  under test; Babel has already bound the module object). Symptom:
+  "my new test file broke a file I never touched".
 - **`src/config.js` exports every value twice** -- as a named export
   (for CommonJS `src/main/`) and inside `export default {...}` (for ESM
   renderer code). Add to both or the value is silently missing for half
@@ -2743,4 +2753,95 @@ API.
 - **Counting menu items is a trap.** The story calls it "nine-item";
   the menu is 7 normal items plus 3 separators (10 entries) with
   `files`, 8 without. Assert the label array, not a count.
+---
+
+## 2026-07-28 - US-030
+Migrated the controller layer's non-`wt-*` `ipcRenderer` call sites, plus
+the one in `lib/migrations.js`, onto the platform shim. Every `wt-*` call
+in those files is untouched and still goes out over `ipcRenderer`;
+US-032 moves those.
+
+- `lib/dispatcher.js` gains `reportErrors(promise)` --
+  `.catch(err => dispatch('error', err))` in one call. Five controllers
+  needed the same three lines, so it lives with `dispatch` rather than
+  being copy-pasted per file.
+- `folder-watcher-controller.js`, `prefs-controller.js`: fully migrated,
+  no `electron` import left.
+- `media-controller.js`: the `checkForExternalPlayer` send+`once` pair
+  collapses into the shim's single promise; `openExternalPlayer` moves
+  too. Keeps `ipcRenderer.once('wt-server-running')`.
+- `torrent-controller.js`: `downloadFinished` -> `notifyDownloadFinished`,
+  `show` -> `show`.
+- `playback-controller.js`: the five player-state notifications,
+  `quitExternalPlayer`, `setAspectRatio` and `setBounds` -> `ipc-os.js`;
+  `openPath` -> `shell.js`.
+- `torrent-list-controller.js`: `moveItemToTrash` and `showItemInFolder`
+  -> `shell.js`.
+- `lib/migrations.js`: `installHandlers()` becomes async and is awaited;
+  it was the last `electron` import in that file.
+
+**Interpretation note.** The acceptance criteria say these files' non-`wt-*`
+calls should "use `lib/platform/ipc-os.js`", but three channels --
+`openPath`, `showItemInFolder`, `moveItemToTrash` -- are owned by
+`shell.js` per `lib/platform/AGENTS.md` and the shim doc. They went to
+`shell.js`. US-026 was supposed to catch them and did not, because it
+grepped for `electron.shell`, not for the channel names.
+
+**No `removeListener` existed** at any of these call sites (the AC
+anticipates some), so nothing needed the unsubscribe function. The only
+listener registrations left in these files are `wt-*` `.once` calls.
+
+### Files changed
+- `src/renderer/lib/dispatcher.js`, `src/renderer/lib/migrations.js`
+- `src/renderer/controllers/{media,torrent,folder-watcher,prefs,
+  torrent-list,playback}-controller.js`
+- `test/unit/platform-boundary.js` (US-030 concern + a wt-* counter-check)
+- `test/unit/os-ipc-call-sites.js` (new, behavioural)
+- `test/unit/migrations.js`, `test/unit/torrent-context-menu.js` (retargeted)
+- `docs/platform-shim.md`, `test/AGENTS.md`,
+  `src/renderer/controllers/AGENTS.md`, `specs/prd.json`
+
+### Verification
+`npm test` 459/459, `npm run lint` clean, `npm run build` (both halves)
+clean, and a background launch check reached `'Main Window'` and
+`init: 705.85ms` with no new errors. **The six-step manual smoke test was
+not run** -- it needs an interactive session. The AC calls out
+preferences changes and folder-watcher pickup as the risk; both are
+covered by real unit tests in `test/unit/os-ipc-call-sites.js`
+(setup/destroy toggling `setAllowNav`, `update()` routing to
+`setDefaultFileHandler`/`setStartup`, `start`/`stop` reaching the
+watcher exports), which is the closest honest substitute. The
+uncovered risk is the playback-controller and torrent-controller
+notification sites, which are fire-and-forget and only observable by
+watching the dock.
+
+- **Learnings for future iterations:**
+  - **`tape test/unit/*.js` is ONE process and requires every file
+    before running any test.** Two things leak across files as a
+    result, and both bit this story:
+    `setDispatch()` (last file loaded wins for the whole run -- call it
+    inside the per-test `reset()`), and `require.cache` stubs of built
+    shim modules (`platform-ipc-os.js` tests the real `ipc-os`, so a
+    stub left at its path fails it). Withdraw a shim stub immediately
+    after requiring the module under test; Babel has already bound the
+    module object by then, so the test keeps its stub. Glob order is
+    alphabetical, which is why this only shows up as "my new file
+    broke a file I never touched".
+  - **Migrating a call site can break another story's test.** US-029's
+    `torrent-context-menu.js` asserted on `record.sent` for
+    `showItemInFolder`; moving that channel to `shell.js` moved the
+    assertion too. Grep the tests for the channel name before
+    migrating, not after.
+  - **`controllers/AGENTS.md` already had the rule that matters here:**
+    state written inside a `.then()` lands after the render, so end the
+    continuation with `dispatch('update')`. `media-controller.mediaError`
+    needed it (the unsupported-media modal). The pre-shim code had the
+    same latency through `ipcRenderer.once` and never fixed it -- a
+    migration is a good moment to apply the rule, but say so, because it
+    is a behaviour change, not a pure refactor.
+  - **A boundary test can assert what did *not* move.** The story
+    explicitly defers `wt-*`, so `platform-boundary.js` now asserts both
+    that no non-`wt-` channel survives *and* that the four
+    engine-facing controllers still speak `wt-*`. That catches
+    over-migration, which lint and a launch check never would.
 ---

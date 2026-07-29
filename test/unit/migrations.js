@@ -26,20 +26,30 @@ require.cache[configPath] = {
   exports: { __esModule: true, default: CONFIG }
 }
 
+// Since US-030 the file-handler reinstall goes through the OS IPC shim
+// rather than `ipcRenderer` directly, so the stub sits on the shim.
 const sent = []
-const electronPath = require.resolve('electron')
-require.cache[electronPath] = {
-  id: electronPath,
-  filename: electronPath,
+const ipcOsPath = require.resolve(
+  '../../build/renderer/lib/platform/ipc-os'
+)
+require.cache[ipcOsPath] = {
+  id: ipcOsPath,
+  filename: ipcOsPath,
   loaded: true,
   exports: {
-    get ipcRenderer () {
-      return { send: (...args) => sent.push(args) }
+    __esModule: true,
+    async setDefaultFileHandler (...args) {
+      sent.push(['setDefaultFileHandler', ...args])
     }
   }
 }
 
 const migrations = require('../../build/renderer/lib/migrations')
+
+// `require.cache` is process-wide, so the shim stub is withdrawn now
+// that `migrations` has bound it -- `platform-ipc-os.js` later in the
+// same run tests the real module.
+delete require.cache[ipcOsPath]
 
 const PLAIN_HASH = 'aaaabbbbccccddddeeeeffff0000111122223333'
 const OLD_HASH = '3ba219a8634bf7bae3d848192b2da75ae995589d'

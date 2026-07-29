@@ -31,7 +31,12 @@ fs.writeFileSync(
 let record = null
 
 function reset () {
-  record = { menus: [], dispatches: [], sent: [], copied: [] }
+  record = { menus: [], dispatches: [], sent: [], copied: [], shell: [] }
+  // `lib/dispatcher` holds one process-wide dispatch and every unit
+  // test file that requires it registers its own. Re-register per test
+  // rather than once at require time, or whichever file loads last
+  // wins for the whole run.
+  setDispatch((...args) => record.dispatches.push(args))
 }
 
 function stub (modulePath, exports) {
@@ -60,6 +65,8 @@ stub('@electron/remote', {
 })
 
 const BUILT = path.join(ROOT, 'build', 'renderer')
+const { setDispatch } = require(path.join(BUILT, 'lib', 'dispatcher'))
+
 stub(path.join(BUILT, 'lib', 'platform', 'menu'), {
   __esModule: true,
   async showContextMenu (items) { record.menus.push(items) }
@@ -68,9 +75,12 @@ stub(path.join(BUILT, 'lib', 'platform', 'clipboard'), {
   __esModule: true,
   async writeText (text) { record.copied.push(text) }
 })
-
-const { setDispatch } = require(path.join(BUILT, 'lib', 'dispatcher'))
-setDispatch((...args) => record.dispatches.push(args))
+// US-030 moved the reveal and trash channels onto the shell shim.
+stub(path.join(BUILT, 'lib', 'platform', 'shell'), {
+  __esModule: true,
+  async showItemInFolder (p) { record.shell.push(['showItemInFolder', p]) },
+  async moveItemToTrash (p) { record.shell.push(['moveItemToTrash', p]) }
+})
 
 const TorrentListController = require(OUT).default
 
@@ -220,7 +230,7 @@ test('the reveal item asks the main process to show the file', function (t) {
     : 'Show in Folder'
   reset()
   itemNamed(items, label).click()
-  t.deepEqual(record.sent, [
+  t.deepEqual(record.shell, [
     ['showItemInFolder', path.join('/tmp/downloads', 'Test Torrent')]
   ], 'sends the torrent folder')
   t.end()

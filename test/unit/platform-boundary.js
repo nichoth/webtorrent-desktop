@@ -130,3 +130,54 @@ test('no renderer code outside the shim imports fs', function (t) {
   }
   t.end()
 })
+
+// US-030: the OS-facing IPC concern. `ipc-os.js` owns every renderer
+// <-> main channel except the `wt-*` engine protocol (FR-9), so the
+// pattern bans `ipcRenderer.<method>('<channel>'` for any channel that
+// is not `wt-`-prefixed. The `wt-*` sites in these same files are
+// migrated in US-032 and must keep passing until then.
+//
+// The scope is the files US-030 actually migrated. `main.js` is the
+// larger job and lands in US-031, which widens this list to the whole
+// renderer minus `webtorrent.js` (exempt by FR-4).
+const OS_IPC_MIGRATED = [
+  'controllers/media-controller.js',
+  'controllers/torrent-controller.js',
+  'controllers/folder-watcher-controller.js',
+  'controllers/prefs-controller.js',
+  'controllers/torrent-list-controller.js',
+  'controllers/playback-controller.js',
+  'lib/migrations.js'
+]
+
+const OS_IPC = /ipcRenderer\s*\.\s*\w+\s*\(\s*'(?!wt-)/
+
+test('migrated files use no non-wt-* ipcRenderer channel', function (t) {
+  for (const rel of OS_IPC_MIGRATED) {
+    const full = path.join(RENDERER, ...rel.split('/'))
+    const hits = fs.readFileSync(full, 'utf8').split('\n')
+      .map((line, i) => ({ line, n: i + 1 }))
+      .filter(({ line }) => OS_IPC.test(line))
+      .map(({ line, n }) => n + ': ' + line.trim())
+    t.deepEqual(hits, [], rel + ' routes OS channels through the shim')
+  }
+  t.end()
+})
+
+// The counterpart: the `wt-*` sites are explicitly out of scope for
+// US-030, so assert they survived rather than leaving "did we migrate
+// too much?" to a later smoke test.
+test('the wt-* call sites are left alone for US-032', function (t) {
+  const wt = /ipcRenderer\s*\.\s*\w+\s*\(\s*'wt-/
+  const withEngineCalls = OS_IPC_MIGRATED.filter((rel) => {
+    const full = path.join(RENDERER, ...rel.split('/'))
+    return wt.test(fs.readFileSync(full, 'utf8'))
+  })
+  t.deepEqual(withEngineCalls, [
+    'controllers/media-controller.js',
+    'controllers/torrent-controller.js',
+    'controllers/torrent-list-controller.js',
+    'controllers/playback-controller.js'
+  ], 'the four engine-facing controllers still talk wt-* directly')
+  t.end()
+})

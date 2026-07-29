@@ -12,7 +12,16 @@ US-023, `dialog.js` and `window.js` as of US-024, and `menu.js` as of
 US-025. The whole surface is implemented. The call sites move from
 US-026 onwards; the `shell.openExternal` and `clipboard` ones are
 migrated as of US-026, the `dialog` and `window` ones as of US-027,
-the `fs` ones as of US-028, and the context menu as of US-029.
+the `fs` ones as of US-028, and the context menu as of US-029. US-030
+moves the controller layer's non-`wt-*` `ipcRenderer` calls (plus the
+one in `lib/migrations.js`) onto `ipc-os.js`; `src/renderer/main.js`
+follows in US-031 and the `wt-*` channels in US-032.
+
+Three of those call sites landed on `shell.js` rather than `ipc-os.js`:
+`openPath`, `showItemInFolder` and `moveItemToTrash` are IPC channels
+but belong to the shell concern (see the `shell.js` section below).
+US-026 migrated the `shell.openExternal` callers and missed these,
+because they were spelled `ipcRenderer.send`, not `electron.shell`.
 
 ## Rules the surface follows
 

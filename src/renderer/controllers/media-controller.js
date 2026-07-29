@@ -1,5 +1,7 @@
 import { ipcRenderer } from 'electron'
 
+import { dispatch, reportErrors } from '../lib/dispatcher'
+import * as ipcOs from '../lib/platform/ipc-os'
 import * as Playlist from '../lib/playlist'
 
 // Controls local play back: the <video>/<audio> tag and VLC
@@ -21,14 +23,19 @@ export default class MediaController {
     const state = this.state
     if (state.location.url() === 'player') {
       state.playing.location = 'error'
-      ipcRenderer.send('checkForExternalPlayer', state.saved.prefs.externalPlayerPath)
-      ipcRenderer.once('checkForExternalPlayer', (e, isInstalled) => {
-        state.modal = {
-          id: 'unsupported-media-modal',
-          error,
-          externalPlayerInstalled: isInstalled
-        }
-      })
+      ipcOs.checkForExternalPlayer(state.saved.prefs.externalPlayerPath)
+        .then((isInstalled) => {
+          state.modal = {
+            id: 'unsupported-media-modal',
+            error,
+            externalPlayerInstalled: isInstalled
+          }
+          // The shim answers a turn later than the render that opened
+          // the error screen, so the modal needs its own render (see
+          // controllers/AGENTS.md).
+          dispatch('update')
+        })
+        .catch((err) => dispatch('error', err))
     }
   }
 
@@ -59,10 +66,10 @@ export default class MediaController {
       state.playing.isReady = true
 
       const mediaURL = Playlist.getCurrentLocalURL(state)
-      ipcRenderer.send('openExternalPlayer',
+      reportErrors(ipcOs.openExternalPlayer(
         state.saved.prefs.externalPlayerPath,
         mediaURL,
-        state.window.title)
+        state.window.title))
     }
 
     if (state.server != null) onServerRunning()

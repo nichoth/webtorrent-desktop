@@ -2,11 +2,11 @@
 
 import path from 'path'
 import semver from 'semver'
-import { ipcRenderer } from 'electron'
 import { sync as rimrafSync } from 'rimraf'
 
 import config from '../../config'
 import * as fs from './platform/fs'
+import * as ipcOs from './platform/ipc-os'
 import * as TorrentSummary from './torrent-summary'
 
 // Change `state.saved` (which will be saved back to config.json on exit) as
@@ -35,7 +35,7 @@ export async function run (state) {
   if (semver.lt(version, '0.22.0')) migrate_0_22_0(saved)
 
   if (semver.lt(version, config.APP_VERSION)) {
-    installHandlers(state.saved)
+    await installHandlers(state.saved)
   }
 
   // Config is now on the new version
@@ -44,9 +44,9 @@ export async function run (state) {
 
 // Whenever the app is updated,  re-install default handlers if the user has
 // enabled them.
-function installHandlers (saved) {
+async function installHandlers (saved) {
   if (saved.prefs.isFileHandler) {
-    ipcRenderer.send('setDefaultFileHandler', true)
+    await ipcOs.setDefaultFileHandler(true)
   }
 }
 
