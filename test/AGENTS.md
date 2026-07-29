@@ -60,6 +60,13 @@ wrapping it in a `default` (see `test/unit/platform-dialog.js`).
 `require.resolve` never executes the module, so the real one's
 "cannot be required in the browser process" throw is not reached.
 
+The stub's `exports` **object** is bound once, at the first require of
+the module under test -- Babel keeps the result of its single
+`require()` call. So a helper that rebuilds the whole stub between
+tests silently leaves the module talking to the first one. Swap the
+recording state behind stable stub functions/classes instead, or use
+getters on one `exports` object (see `test/unit/platform-menu.js`).
+
 `require.resolve('electron')` gives the same path the built module
 resolves (the npm CLI helper, which is never the real runtime API
 outside Electron anyway). Babel emits `_electron.ipcRenderer` as a

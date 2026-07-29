@@ -68,6 +68,12 @@ share code, so the engine seam can be reimplemented without touching
   survives only because Rolldown's CJS-external interop supplies a
   default; do not copy it into this directory.
 
+- **`menu.js` validates descriptors before it builds anything**
+  (US-025). Map the whole array to options first, then construct the
+  `Menu` -- a throw halfway through would leave a partly built menu
+  on screen. And every caller `click` is wrapped so Electron's
+  `(menuItem, browserWindow, event)` arguments stop at the shim.
+
 ## Gotchas
 
 - `index.js` uses `import * as x` plus `export { x }`, not

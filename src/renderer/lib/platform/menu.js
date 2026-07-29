@@ -7,12 +7,17 @@
  * the renderer; the shim is responsible for invoking the one the user
  * chose.
  *
- * Design-only stubs (US-018). Implemented in US-025, the torrent
- * context menu is rewritten against it in US-029. See
- * docs/platform-shim.md.
+ * The descriptor vocabulary is exactly what the renderer's one
+ * context menu needs (`controllers/torrent-list-controller.js`):
+ * labels, `click` handlers, an `enabled` flag and separators. There is
+ * no submenu type because no menu here has a submenu; add one when a
+ * menu needs it rather than in advance.
+ *
+ * Implemented in US-025; the torrent context menu is rewritten
+ * against it in US-029. See docs/platform-shim.md.
  */
 
-const NOT_IMPLEMENTED = 'platform/menu: not implemented yet (US-025)'
+import { Menu, MenuItem, getCurrentWindow } from '@electron/remote'
 
 /**
  * @typedef {object} MenuItemDescriptor
@@ -24,6 +29,33 @@ const NOT_IMPLEMENTED = 'platform/menu: not implemented yet (US-025)'
  */
 
 /**
+ * Translate one descriptor into `MenuItem` options.
+ *
+ * The caller's `click` is wrapped so Electron's
+ * `(menuItem, browserWindow, event)` arguments stop here: handing a
+ * `MenuItem` or a `BrowserWindow` back to the renderer would put the
+ * object this shim exists to hide in front of the caller again.
+ *
+ * @param {MenuItemDescriptor} descriptor
+ * @returns {object} Options for `MenuItem`.
+ */
+function toMenuItemOptions (descriptor) {
+  const { type = 'normal', label, click, enabled } = descriptor
+
+  if (type === 'separator') return { type: 'separator' }
+  if (type !== 'normal') {
+    throw new Error(`platform/menu: unsupported item type '${type}'`)
+  }
+  if (typeof label !== 'string') {
+    throw new Error('platform/menu: an item needs a label')
+  }
+
+  const options = { label, enabled: enabled !== false }
+  if (click) options.click = () => click()
+  return options
+}
+
+/**
  * Pop up a context menu at the pointer, parented to the current
  * window.
  *
@@ -33,5 +65,8 @@ const NOT_IMPLEMENTED = 'platform/menu: not implemented yet (US-025)'
  *   `click` fires independently, as it does today.
  */
 export async function showContextMenu (items) {
-  throw new Error(NOT_IMPLEMENTED)
+  const options = items.map(toMenuItemOptions)
+  const menu = new Menu()
+  for (const item of options) menu.append(new MenuItem(item))
+  menu.popup({ window: getCurrentWindow() })
 }

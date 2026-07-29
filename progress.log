@@ -2222,3 +2222,86 @@ timed `npm run watch` observation.
     the DOM reads before the first `await` and collapse the two
     `isMaximized()` calls into one.
 ---
+
+## 2026-07-28 - US-025
+
+Implement the data-driven `menu.js` API.
+
+**What was implemented**
+
+- `src/renderer/lib/platform/menu.js` is now real. `showContextMenu`
+  maps an array of `{ type, label, click, enabled }` descriptors to
+  `MenuItem` options, builds a `remote.Menu`, and pops it up parented
+  to `getCurrentWindow()`. Named import from `@electron/remote`
+  (`Menu`, `MenuItem`, `getCurrentWindow`), per the directory's
+  convention, which is also what makes it unit-testable.
+- Validation happens for the whole array *before* the `Menu` is
+  constructed: an unknown `type` or a missing `label` on a normal item
+  rejects, and nothing half-built ever reaches the screen.
+- Each caller `click` is wrapped in a zero-arg closure, so Electron's
+  `(menuItem, browserWindow, event)` arguments stop at the shim. FR-12
+  is about objects not crossing the boundary in either direction.
+- `enabled` defaults to `true`; only an explicit `false` disables.
+- `test/unit/platform-menu.js`: 15 assertions with `@electron/remote`
+  stubbed -- item count and label order for the real torrent context
+  menu, popup parenting, separator shape, `enabled` defaulting, the
+  click-arity guarantee, both rejection paths, and the export surface.
+- `docs/platform-shim.md`: the descriptor table, the click-arity and
+  validation-order rules, and the explicit no-submenu decision.
+- `src/renderer/lib/platform/AGENTS.md` and `test/AGENTS.md` updated.
+
+**Interpretation of the acceptance criteria**
+
+- "Separators and submenus are representable if the existing menus use
+  them." Verified by grepping `src/renderer/` for `MenuItem` /
+  `new remote.Menu`: `torrent-list-controller.js:258-310` is the only
+  menu in the renderer, and it has separators but **no submenus**. So
+  separators are implemented and submenus are deliberately not, on the
+  same "no more than the renderer does today" rule `fs.js` follows.
+  Documented in `docs/platform-shim.md` rather than left implicit.
+- "the nine-item torrent context menu ... produces nine menu items."
+  The real menu is not nine items. Counting the `menu.append` calls at
+  `:258-310` gives **ten** when `torrentSummary.files` is set (seven
+  items plus three separators) and **eight** when it is not. "Nine" in
+  the story text is a miscount carried over from US-018. The test
+  asserts the stronger, true property -- one `MenuItem` per descriptor
+  for the full ten-descriptor menu, with labels in order -- rather
+  than a number that does not match the code. Flagging it here rather
+  than editing the criterion.
+- No call site was migrated (US-029 does that), so
+  `torrent-list-controller.js` is untouched.
+
+**Files changed**
+
+- `src/renderer/lib/platform/menu.js`
+- `test/unit/platform-menu.js` (new)
+- `docs/platform-shim.md`
+- `src/renderer/lib/platform/AGENTS.md`, `test/AGENTS.md`
+- `specs/prd.json` (US-025 `passes: true`)
+
+**Verification**
+
+`npm test` green: standard, depcheck, 127 unit assertions. `npm run
+build` (Babel + Vite) clean -- no new externalization warnings. The
+implementation was confirmed to be doing the work: stashing only
+`menu.js` and rebuilding drops the new file to 2 passing / 7 failing.
+No app launch this session; nothing renderer-visible changed, since
+the module still has no importers.
+
+- **Learnings for future iterations:**
+  - **A `require.cache` stub's `exports` object is bound once**, at
+    the first require of the module under test. Babel keeps the result
+    of its single `require()` call, so a `reset()` that rebuilds the
+    entire stub leaves the module holding the *first* one -- the
+    symptom is a recorder that stays empty while the code under test
+    is demonstrably running. `platform-window.js` gets away with it
+    because it swaps state *behind* a stable `getCurrentWindow`
+    function. Do the same: stable functions/classes (or getters) on
+    one `exports` object, mutable state behind them. Even an
+    `exports` *getter* on the cache entry is too late.
+  - A class-valued Electron export (`Menu`, `MenuItem`) stubs exactly
+    like a function one -- Babel emits `new _remote.Menu()`, a
+    per-call-site property read, same as everything else here.
+  - The remaining Phase 2 stories are all call-site migrations now;
+    the shim itself is complete as of this commit.
+---

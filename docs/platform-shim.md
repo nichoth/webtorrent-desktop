@@ -8,9 +8,9 @@ US-032) are mechanical rather than exploratory.
 
 `ipc-os.js` is implemented as of US-020, `ipc-engine.js` as of
 US-021, `shell.js` and `clipboard.js` as of US-022, `fs.js` as of
-US-023, and `dialog.js` and `window.js` as of US-024. Only `menu.js`
-is still a stub that throws. Nothing imports the shim yet -- the call
-sites move in US-026 onwards.
+US-023, `dialog.js` and `window.js` as of US-024, and `menu.js` as of
+US-025. The whole surface is implemented. Nothing imports the shim
+yet -- the call sites move in US-026 onwards.
 
 ## Rules the surface follows
 
@@ -165,12 +165,33 @@ dragging or maximizing. Three things follow for US-027:
 | --- | --- |
 | `showContextMenu(items)` | `controllers/torrent-list-controller.js:258-310`, the nine-item torrent context menu |
 
-A descriptor is `{ type, label, click, enabled }`, where `type` is
-`'normal'` (the default) or `'separator'`. The existing menu is
-expressible as-is: it uses only labels, `click` handlers, one
-`enabled` flag on "Save Torrent File As...", three separators, and a
-manual `'checkmark '` label prefix for "Sort by Name" (which stays a
-label, not a checkbox type). US-029 does the rewrite.
+A descriptor is a plain object:
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| `type` | `'normal'` \| `'separator'` | Defaults to `'normal'`. Any other value throws. |
+| `label` | `string` | Required unless `type` is `'separator'`; a missing label throws. |
+| `click` | `() => void` | Optional. Called with **no arguments** when the user picks the item. |
+| `enabled` | `boolean` | Defaults to `true`. Only `false` disables. |
+
+A separator ignores every other field. `click` is wrapped inside the
+shim, so Electron's `(menuItem, browserWindow, event)` arguments never
+reach the caller -- a handler that wants the window asks `window.js`.
+Descriptors are validated before the menu is built, so a bad one
+rejects without a half-built menu appearing.
+
+There is **no submenu type**, because the renderer has no submenu.
+Verified at US-025: `controllers/torrent-list-controller.js:258-310`
+is the only `remote.Menu` in `src/renderer/`, and it uses labels,
+`click` handlers, one `enabled` flag on "Save Torrent File As...",
+three separators, and a manual `'checkmark '` label prefix for "Sort
+by Name" (which stays a label, not a checkbox type). Add a submenu
+type when a menu needs one, on the same "no more than today" rule the
+rest of the shim follows.
+
+The existing menu is therefore expressible as-is. US-029 does the
+rewrite; it builds ten descriptors when `torrentSummary.files` is set
+(seven items and three separators) and eight when it is not.
 
 ## `fs.js`
 
