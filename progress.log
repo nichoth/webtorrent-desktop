@@ -3262,3 +3262,58 @@ leftover processes.
     relay override and queue are `src/main/ipc.js:220-247`;
     `src/renderer/webtorrent.js` is 434 lines.
 ---
+
+## 2026-07-29 - US-037
+- Wrote `docs/adr/ADR-013-poster-generation-without-a-dom.md`, deciding
+  that poster generation moves into the UI renderer rather than staying
+  in the engine. Rejected the two alternatives explicitly: image/audio
+  only (video wins the scorer for most real torrents, so most torrents
+  would lose their poster) and bundled ffmpeg (40-80 MB per platform,
+  three more signing surfaces, an LGPL/GPL decision, and a new spawn
+  surface, all to duplicate a decoder the webview already ships).
+- Recorded that `wt-generate-torrent-poster` and `wt-poster` are both
+  **deleted from the wire**, not kept and not moved: the engine is
+  never asked for a poster, and the file name is known in the process
+  that wrote it. `wt-start-server`/`wt-stop-server` become per-torrent
+  in exchange, which is the one channel change the decision adds.
+- Files changed: `docs/adr/ADR-013-poster-generation-without-a-dom.md`
+  (new), `docs/adr/INDEX.md`, `specs/prd.json`, `progress.log`.
+- No test written: this is a decision-only story, `No code changed in
+  this story` is one of its acceptance criteria, and the global rule is
+  do not write tests for docs. Gate was `npm test`.
+- **Learnings for future iterations:**
+  - **The UI renderer already has everything the poster scorer needs.**
+    `getTorrentInfo()` (`src/renderer/webtorrent.js:177-195`) sends
+    `{ name, length, path }` per file on `wt-metadata`, and
+    `torrent-poster.js` reads nothing else off `torrent.files`. Only
+    the bytes have to come over HTTP. The UI also already decides
+    *when* a poster is wanted (`torrent-controller.js:85`) and already
+    writes into `config.POSTER_PATH` through the fs shim
+    (`lib/state.js:145`), so US-043 adds no new capability to the
+    renderer -- it moves one module.
+  - **Every video poster on disk today is a mislabelled PNG.**
+    `captureFrame(video)` is called with no format argument and
+    `capture-frame` defaults to `'png'`
+    (`node_modules/capture-frame/index.js:16`), but
+    `webtorrent.js:230` writes the bytes as `.jpg`. Keep the `.jpg`
+    name (saved state resolves through it,
+    `lib/torrent-summary.js:16`) and ask the canvas for `image/jpeg`.
+  - **`capture-frame` cannot survive the shim boundary as-is.** It
+    returns a Node `Buffer` from `canvas.toDataURL()`, which ADR-007
+    forbids crossing into shim-facing code, and the UI window loses
+    `nodeIntegration` in Phase 4. `canvas.toBlob('image/jpeg')` is
+    the replacement; dropping the dependency also means removing it
+    from `package.json` or depcheck fails.
+  - **The engine's streaming server is a module-level singleton with a
+    latent hang.** `startServerFromReadyTorrent()` early-returns on
+    `if (server) return` (`webtorrent.js:302`), so a second
+    `wt-start-server` for a *different* info hash never sends
+    `wt-server-running` and the UI's one-shot listener waits forever.
+    It has not bitten because the player stops the server before
+    starting another. Anything that wants a stream concurrently with
+    playback has to make that map per-info-hash first.
+  - **ADR line references need checking against the tree, not against
+    `docs/platform-shim.md`.** The shim doc cites `main.js:359` for the
+    `onPosterSaved` subscription; it is actually `main.js:376`. Grep
+    for the symbol before quoting a line number in a new doc.
+---
