@@ -3204,3 +3204,61 @@ leftover processes.
   tool-only devDependency means editing that list in the same commit
   or `npm test` fails on the next line.
 ---
+
+## 2026-07-29 - US-036
+- Wrote `docs/adr/ADR-012-engine-runs-as-a-node-sidecar.md` and listed
+  it in `docs/adr/INDEX.md`. Documentation only; no code touched, per
+  the story's own "No code changed in this story" criterion.
+- **No test written, deliberately.** This is a pure decision-record
+  story. There is no behaviour to assert, and the only mechanical
+  checks that apply (80-column lines, no em dash, no arrow glyph) were
+  run as one-off `awk`/`grep` passes rather than encoded as a test --
+  the repo has no docs-lint harness and CLAUDE.md forbids writing
+  tests for docs.
+- Files changed: `docs/adr/ADR-012-...md` (new), `docs/adr/INDEX.md`,
+  `progress.log`, `specs/prd.json`.
+- Decision recorded, matching `conventions.engineTransport` in
+  `specs/prd.json`: the engine becomes a standalone Node child
+  process, the renderer opens a localhost WebSocket straight to it,
+  the host only spawns/supervises and reports `{ url, token }` through
+  `ipc-os.getEngineEndpoint()`. Host relaying of `wt-*` is the
+  rejected alternative, because the Rust host would inherit the whole
+  protocol in Phase 4 instead of just "spawn a child, read a port".
+  `wt-*` names and argument lists are unchanged from
+  `docs/platform-shim.md`. Access control is `127.0.0.1` bind plus a
+  per-launch in-memory token and an `Origin` check on upgrade.
+- **Learnings for future iterations:**
+  - `NOTES/architecture.md` and `NOTES/product.md`, named in the
+    session prompt's READ step, **do not exist in this repo** and
+    never have. The equivalent reading is `docs/init.md` (original
+    five-phase plan), `docs/README.md` (phase table), and
+    `docs/platform-shim.md` (shim surface plus the full `wt-*`
+    contract). Do not waste a turn hunting for `NOTES/`.
+  - `specs/prd.json` has a top-level `conventions` object, not just
+    `userStories`. It already carries the Phase 3, Phase 4 and
+    casting decisions (`engineTransport`, `dualHost`, `rustChecks`,
+    `manualStories`, `deferredCasualties`) in one or two sentences
+    each. An ADR story is therefore expanding a decision that is
+    already made and must not contradict it -- read the matching
+    `conventions` key before writing the ADR, and read the
+    downstream stories (US-038..US-046 here) because their acceptance
+    criteria are the ADR's implementation detail and the ADR should
+    agree with them exactly (`src/shared/wire.js`, port 0 on stdout,
+    capped restart backoff, pre-connect queue).
+  - The story list is `p.userStories`, keyed by `id` -- `require`ing
+    the JSON and filtering in `node -e` is faster than grepping.
+  - ADR house format (ADR-001..ADR-011): `# ADR-NNN: Title`, then
+    `**Date:** YYYY-MM-DD`, then `## Context` (ending with a bulleted
+    "Alternatives considered" list, each with its concession), then
+    `## Decision`, then `## Consequences` that names the cost rather
+    than only the benefit. Prose, not bullet soup, and it cites file
+    paths with line numbers. INDEX.md is a markdown table plus a
+    "Related documents" list; add the row, do not renumber anything.
+  - Docs facts worth not re-deriving: the hidden window's real
+    `title` is `'webtorrent-hidden-window'`, though
+    `docs/platform-shim.md` paraphrases it as
+    `'WebTorrent Hidden Window'` in the relay description. Its
+    webPreferences are at `src/main/windows/webtorrent.js:26-33`; the
+    relay override and queue are `src/main/ipc.js:220-247`;
+    `src/renderer/webtorrent.js` is 434 lines.
+---

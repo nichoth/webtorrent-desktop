@@ -631,8 +631,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck)"
       ],
       "priority": 36,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "ADR-012 written and indexed. Docs-only story, no code and no test: the checks that apply to a decision record (80 columns, no em dash, no arrow) were run as one-off awk/grep passes. Decision matches conventions.engineTransport and the US-038..US-046 criteria."
     },
     {
       "id": "US-037",
