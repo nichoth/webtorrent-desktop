@@ -1,7 +1,7 @@
 {
   "project": "WebTorrent Desktop",
   "branchName": "renderer-decoupling",
-  "description": "Renderer Decoupling (Vite Build + Platform Shim) -- get src/renderer/ building under Vite, then collapse every Electron and Node import in the renderer into a single replaceable platform shim implemented against Electron. Source PRD: tasks/prd-renderer-decoupling.md",
+  "description": "Port from Electron to Tauri, done in place so the app stays launchable at every commit. Phase 1 builds src/renderer/ with Vite and Phase 2 collapses host access into one platform shim (source PRD: tasks/prd-renderer-decoupling.md). Phase 3 runs the torrent engine as a Node sidecar, Phase 4 ports src/main/ to Rust under Tauri, and Phase 5 covers casting, external players, codecs, and signing (source: docs/init.md, docs/README.md).",
   "conventions": {
     "typecheck": "This repo has no TypeScript. 'Typecheck passes' means `npm test`, which runs `standard` and `depcheck`.",
     "smokeTest": "'Smoke test passes' means the six-step manual smoke test defined under 'Standard smoke test' in tasks/prd-renderer-decoupling.md. This is an Electron desktop app, so UI verification is that manual smoke test run via `npm start` -- NOT browser automation and NOT the dev-browser skill.",
@@ -10,7 +10,12 @@
     "invariant": "FR-2: the Electron app must launch and pass the smoke test at every commit. A commit that leaves the app broken is not a valid commit.",
     "cssFrozen": "FR-14: no CSS file may be modified. No change to visual design or user-facing behaviour beyond the telemetry removal in US-002. This is otherwise a pure refactor.",
     "webtorrentJsExempt": "FR-4: src/renderer/webtorrent.js is never converted to ESM, never passed through Vite, and never migrated to the shim. It keeps building through Babel and loading via static/webtorrent.html unchanged.",
-    "deferredCasualties": "After US-002 deletes telemetry, exactly two deferred-casualty files remain exempt from the shim and the lint rule: `src/renderer/webtorrent.js` and `src/renderer/lib/cast.js`. `controllers/audio-tracks-controller.js` is also a deferred casualty but imports nothing restricted, so it needs no exemption."
+    "deferredCasualties": "After US-002 deletes telemetry, exactly two deferred-casualty files remain exempt from the shim and the lint rule: `src/renderer/webtorrent.js` and `src/renderer/lib/cast.js`. `controllers/audio-tracks-controller.js` is also a deferred casualty but imports nothing restricted, so it needs no exemption.",
+    "phases": "US-001..US-017 are Phase 1 (Vite), US-018..US-035 Phase 2 (platform shim), US-036..US-049 Phase 3 (Node sidecar), US-050..US-073 Phase 4 (Rust host under Tauri), US-074..US-086 Phase 5 (casting, external players, codecs, signing). The phase table in docs/README.md is the summary; docs/init.md is the original plan.",
+    "engineTransport": "Phase 3 decision: the renderer connects to the Node sidecar directly over a localhost WebSocket. ipc-engine.js becomes a WebSocket client and stops using ipcRenderer; the host only spawns the sidecar and reports its port and token via ipc-os.getEngineEndpoint(). The wt-* channel names and payloads are unchanged -- see the protocol tables in docs/platform-shim.md.",
+    "dualHost": "Phase 4 decision: src-tauri/ grows alongside src/main/, both loading the same Vite bundle, with the shim implementation selected at build time. Electron stays launchable until the single cutover story (US-072). This is what keeps FR-2 true through the host swap.",
+    "rustChecks": "For stories that touch src-tauri/, the Rust equivalent of typecheck is `cargo fmt --check`, `cargo clippy -- -D warnings`, and `cargo test`, run from src-tauri/. The JS checks (`npm test`) still apply on top.",
+    "manualStories": "A story marked `\"manual\": true` needs an attended session -- a real app window, a packaged build, a signing certificate, or hardware on the local network -- and is excluded from the headless ralph loop."
   },
   "userStories": [
     {
@@ -606,8 +611,843 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 35,
-      "passes": false,
+      "passes": true,
       "notes": "Requires an attended session: the six-step manual smoke test, the `npm run package` bundle check on a real machine, and the startup-time re-measurement all need a human at a real app window. The grep-based criteria are covered headlessly by the lint rule in US-034. Excluded from the headless ralph loop by manual:true.",
+      "manual": true
+    },
+    {
+      "id": "US-036",
+      "title": "Record the sidecar architecture decision",
+      "description": "As a developer, I want the Phase 3 process topology and transport settled in writing before any code moves, so the engine extraction is mechanical rather than exploratory.",
+      "acceptanceCriteria": [
+        "`docs/adr/ADR-012-engine-runs-as-a-node-sidecar.md` written in the same MADR format as ADR-001 through ADR-011",
+        "Records that `src/renderer/webtorrent.js` becomes a standalone Node process, not a hidden Electron window",
+        "Records that the renderer connects to the sidecar directly over a localhost WebSocket, and that the host only spawns the process and reports its port",
+        "Records the rejected alternative -- relaying `wt-*` through the host process -- with the reason: the Rust host would inherit the relay in Phase 4",
+        "Records that the `wt-*` channel names and argument lists are unchanged from the contract in `docs/platform-shim.md`",
+        "Records the localhost-only bind and the origin/token check the sidecar applies, since any local process could otherwise connect",
+        "Listed in `docs/adr/INDEX.md`",
+        "No code changed in this story",
+        "Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 36,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-037",
+      "title": "Decide how poster generation survives a DOM-less engine",
+      "description": "As a developer, I want the poster problem decided before the engine moves to Node, because the current implementation cannot run there.",
+      "acceptanceCriteria": [
+        "`docs/adr/ADR-013-poster-generation-without-a-dom.md` written",
+        "Records the constraint: `lib/torrent-poster.js:138` calls `document.createElement('video')` and `capture-frame`, neither of which exists in a Node process",
+        "Chooses one option and gives the reason: generate posters in the renderer against the streaming-server URL, generate only image/audio posters in the engine, or shell out to ffmpeg",
+        "States exactly what happens to the `wt-generate-torrent-poster` command and the `wt-poster` event in the protocol -- kept, dropped, or moved off the wire",
+        "Listed in `docs/adr/INDEX.md`",
+        "No code changed in this story",
+        "Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 37,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-038",
+      "title": "Add a wt-* wire codec with round-trip tests",
+      "description": "As a developer, I want one tested encode/decode module for the `wt-*` envelope, so the engine and the UI cannot disagree about the wire format.",
+      "acceptanceCriteria": [
+        "`src/shared/wire.js` created as ESM, exporting `encode(channel, args)` and `decode(message)` over a `{ channel, args }` JSON envelope",
+        "`Uint8Array` and `Buffer` values nested in args survive a round trip -- `wt-progress` carries `torrent.bitfield`, which `pages/player-page.js:943` reads back through `BitField.prototype.get`",
+        "`null` argument positions are preserved, since `wt-warning` and `wt-error` send `torrentKey: null` for client-level faults",
+        "`decode` rejects malformed input by throwing, not by returning a partial object",
+        "`test/unit/wire.js` round-trips one sample payload for every channel in the command and event tables in `docs/platform-shim.md`",
+        "`npm run build:main` emits `build/shared/wire.js` -- the path is outside the four Vite-owned ignores",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 38,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-039",
+      "title": "Route webtorrent.js through a transport seam",
+      "description": "As a developer, I want the engine talking to an injected bus instead of `ipcRenderer` directly, so swapping the transport later is a one-file change.",
+      "acceptanceCriteria": [
+        "`src/renderer/webtorrent.js` contains no `ipcRenderer` reference outside a single bus construction site",
+        "All sends go through `bus.send(channel, ...args)` and all subscriptions through `bus.on(channel, handler)`, with the Electron event object stripped inside the bus",
+        "The Electron bus implementation is isolated so a second implementation can be substituted without touching engine logic",
+        "No channel name, payload shape, or engine behaviour changes",
+        "The hidden window still loads the file through `static/webtorrent.html` with no change to that file",
+        "Smoke test passes, with attention to step 3 (video playback) and to progress updates in the torrent list",
+        "Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 39,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-040",
+      "title": "Extract the engine as a standalone Node entry point",
+      "description": "As a developer, I want the engine runnable under plain `node`, so it can be supervised as a sidecar instead of hosted in a browser window.",
+      "acceptanceCriteria": [
+        "`src/engine/index.js` is the sidecar entry point and imports no Electron module",
+        "It starts a WebSocket server bound to `127.0.0.1` on port 0 and prints the assigned port on stdout as a single parseable line",
+        "It uses `src/shared/wire.js` for every frame in both directions",
+        "The Electron bus is replaced by a WebSocket bus implementing the same `send`/`on` surface added in the previous story",
+        "Browser-only globals are gone: no `window.addEventListener`, no `window.client`, no `window.testOfflineMode`; uncaught errors go out on `wt-uncaught-error` from a `process` handler",
+        "Config paths (`config.TORRENT_PATH`, `config.POSTER_PATH`) still resolve when the process is started outside Electron",
+        "`node build/engine/index.js` starts, prints a port, accepts a connection, and answers `wt-start-torrenting` for one of the `static/*.torrent` fixtures",
+        "The hidden window remains the live engine; nothing is cut over in this story",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 40,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-041",
+      "title": "Spawn and supervise the sidecar from the host",
+      "description": "As a user, I want the engine process started with the app and stopped with it, so torrenting works without an orphaned process.",
+      "acceptanceCriteria": [
+        "`src/main/engine-process.js` spawns the sidecar during startup and reads its port from stdout",
+        "The process is killed on `before-quit`, and no orphan survives a normal quit or a force quit of the app window",
+        "A sidecar crash is detected and restarted with backoff, capped at a fixed number of attempts, with the failure logged",
+        "Sidecar stdout and stderr are written to the app log through `src/main/log.js`",
+        "The port and a per-launch connection token are held in the main process, ready to be handed to the renderer",
+        "Killing the sidecar by hand while the app runs produces a logged restart rather than a hung UI",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 41,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-042",
+      "title": "Expose the engine endpoint through the shim",
+      "description": "As a UI developer, I want the sidecar URL from the platform shim, so the renderer never learns it from a host object.",
+      "acceptanceCriteria": [
+        "`ipc-os.js` gains `getEngineEndpoint()` returning `{ url, token }` as plain data, `async` like every other shim export (FR-10)",
+        "The main process answers it over a request/response channel; no Electron object crosses the boundary (ADR-007)",
+        "`test/unit/platform-ipc-os.js` covers the new export against the existing fake `ipcRenderer`",
+        "The endpoint is not read from `process.env` or a global by any renderer module",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 42,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-043",
+      "title": "Move poster generation off the hidden window",
+      "description": "As a user, I want torrent posters to keep working once the engine has no DOM, so the torrent list looks the same after the move.",
+      "acceptanceCriteria": [
+        "Implements exactly the option chosen in ADR-013, with no second mechanism left behind",
+        "Poster files still land in `config.POSTER_PATH` with the same `infoHash + extension` naming, so existing saved state resolves",
+        "`docs/platform-shim.md` updated where the change alters the `wt-generate-torrent-poster` or `wt-poster` entries",
+        "Video, audio, and image torrents each produce a poster, or the documented fallback, with no console error",
+        "Smoke test passes, with attention to poster thumbnails appearing in the torrent list for a newly added torrent",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 43,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-044",
+      "title": "Rewrite ipc-engine.js as a WebSocket client",
+      "description": "As a UI developer, I want the engine shim speaking to the sidecar directly, so the engine seam no longer depends on the host.",
+      "acceptanceCriteria": [
+        "`src/renderer/lib/platform/ipc-engine.js` imports no Electron module and connects using the endpoint from `ipc-os.getEngineEndpoint()`",
+        "Every exported function keeps its current name, arguments, and return type; no call site in `controllers/` or `main.js` changes",
+        "Sends issued before the socket is open are queued and flushed on open, preserving the pre-ready queue behaviour `main.js` relies on for `wt-set-global-trackers` and `wt-start-torrenting`",
+        "A dropped connection reconnects and re-registers every listener, and the returned unsubscribe functions still work afterwards",
+        "`test/unit/platform-ipc-engine.js` runs against a fake socket and covers the queue, reconnect, unsubscribe, and one-shot (`{ once: true }`) paths",
+        "The dynamic channels `wt-ready-${infoHash}` and `wt-server-${infoHash}` still work, with no caller building a channel string",
+        "Smoke test passes in full, all six steps",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 44,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-045",
+      "title": "Delete the hidden window and the wt-* relay",
+      "description": "As a developer, I want the old engine host removed once nothing uses it, so there is one engine and one transport.",
+      "acceptanceCriteria": [
+        "`static/webtorrent.html`, `src/main/windows/webtorrent.js`, and the `webtorrent` export in `src/main/windows/index.js` deleted",
+        "The `ipcMain.emit` override and the `messageQueueMainToWebTorrent` queue removed from `src/main/ipc.js:220-247`, along with the `ipcReadyWebTorrent` handshake",
+        "`windows.webtorrent.init()` removed from `src/main/index.js:88` and the hidden-window devtools item removed from `src/main/menu.js:189`",
+        "`src/renderer/webtorrent.js` deleted; the engine lives in `src/engine/`",
+        "The `--ignore` list in the `build:main` script no longer mentions a file that does not exist",
+        "Grep confirms no `nodeIntegration`, `enableRemoteModule`, or `AudioVideoTracks` webPreferences remain in `src/main/`",
+        "Smoke test passes in full, all six steps",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 45,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-046",
+      "title": "Extend the boundary rules to cover the sidecar",
+      "description": "As a developer, I want the lint rules to match the new topology, so the seam stays enforced rather than assumed.",
+      "acceptanceCriteria": [
+        "`eslint-boundary.config.js` fails on any `electron` or `@electron/remote` import in `src/renderer/`, with the `webtorrent.js` exemption removed now that the file is gone",
+        "`ipc-engine.js` is no longer exempt from the Electron-import rule and passes it",
+        "`src/engine/` is exempt from the renderer rules and may use Node builtins freely; the exemption is stated in the config comments",
+        "`src/engine/` is checked for the opposite mistake: no `electron` import, no DOM global",
+        "`test/unit/platform-boundary.js` updated to the same rules and still catches `require()` spellings",
+        "`test/unit/engine-ipc-call-sites.js` updated for the WebSocket shim, or deleted with a note if it no longer describes anything",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 46,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-047",
+      "title": "Ship the sidecar in the packaged app",
+      "description": "As a user, I want the packaged app to torrent, so the sidecar has to survive packaging.",
+      "acceptanceCriteria": [
+        "`bin/package.js` includes `build/engine/`, `build/shared/`, and the engine's runtime dependencies in the bundle",
+        "The sidecar runs from the packaged app on the current platform and is not blocked by asar packing",
+        "The spawn path resolves in both development and production; `config.IS_PRODUCTION` branching is covered",
+        "A packaged build downloads, plays, and seeds a torrent",
+        "No sidecar process is left running after quitting the packaged app",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 47,
+      "passes": false,
+      "notes": "Needs `npm run package` and a launch of the packaged bundle on a real machine. Excluded from the headless ralph loop.",
+      "manual": true
+    },
+    {
+      "id": "US-048",
+      "title": "Document the sidecar topology",
+      "description": "As a developer, I want the docs to describe the app that exists, so the Phase 4 work starts from an accurate map.",
+      "acceptanceCriteria": [
+        "`docs/platform-shim.md` \"Transport, and what the engine is today\" section rewritten for the WebSocket sidecar, replacing the `ipcMain.emit` relay description",
+        "The pre-connect queue is documented as protocol behaviour a replacement engine must provide",
+        "`docs/README.md` phase table marks Phase 3 done and the \"Where the code lives\" list describes `src/engine/` and `src/shared/`",
+        "The `docs/README.md` claim that `webtorrent.js` is exempt from the shim is replaced, since the file is gone",
+        "`src/AGENTS.md` and `src/renderer/lib/platform/AGENTS.md` updated for the new boundary",
+        "No line in an edited markdown file exceeds 80 columns",
+        "Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 48,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-049",
+      "title": "Phase 3 verification pass",
+      "description": "As a developer, I want proof the sidecar is complete and the app is unregressed, so Phase 4 starts from a working base.",
+      "acceptanceCriteria": [
+        "Grep confirms no renderer module imports `electron` outside `lib/platform/` and `lib/cast.js`",
+        "Grep confirms `src/engine/` imports no Electron module",
+        "Full six-step smoke test executed and the results recorded in `docs/platform-shim.md`",
+        "`npm run test-integration` passes",
+        "Startup time and idle memory re-measured against the Phase 2 numbers and recorded",
+        "A sidecar crash during active downloading is exercised by hand and the recovery behaviour recorded",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 49,
+      "passes": false,
+      "notes": "Attended session: manual smoke test, integration run, and the measurement comparison. Excluded from the headless ralph loop.",
+      "manual": true
+    },
+    {
+      "id": "US-050",
+      "title": "Record the dual-host decision and the shim selection mechanism",
+      "description": "As a developer, I want the Electron-to-Tauri overlap period defined before Rust lands, so the app stays launchable through Phase 4.",
+      "acceptanceCriteria": [
+        "`docs/adr/ADR-014-dual-host-during-the-tauri-port.md` written",
+        "Records that `src-tauri/` grows alongside `src/main/`, both loading the same Vite bundle, until a single cutover story",
+        "Records the mechanism that selects a shim implementation at build time -- a Vite alias or conditional entry -- and why it is build-time rather than runtime",
+        "Records the Tauri major version targeted and the minimum toolchain versions",
+        "Records which capabilities are known not to survive: `enableBlinkFeatures: 'AudioVideoTracks'` and the `audio-tracks-controller.js` behaviour that depends on it",
+        "Listed in `docs/adr/INDEX.md`",
+        "No code changed in this story",
+        "Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 50,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-051",
+      "title": "Scaffold the Tauri host",
+      "description": "As a developer, I want a Tauri window loading the existing UI bundle, so every later story has somewhere to put Rust.",
+      "acceptanceCriteria": [
+        "`src-tauri/` created with `Cargo.toml`, `tauri.conf.json`, and a `main.rs` that opens one window",
+        "The window loads the existing Vite output and `static/main.html`; the UI renders, even though host calls fail",
+        "`npm run start:tauri` builds the renderer and launches the Tauri app; `npm start` still launches Electron unchanged",
+        "`src-tauri/target/` and any Tauri build output are gitignored",
+        "`npm test` still passes, with `depcheck` and `standard` not tripping over the new directory",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`"
+      ],
+      "priority": 51,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-052",
+      "title": "Add the Tauri shim tree behind a build flag",
+      "description": "As a UI developer, I want a second shim implementation selectable at build time, so host work can land without breaking Electron.",
+      "acceptanceCriteria": [
+        "`src/renderer/lib/platform/tauri/` created with one stub module per existing shim module, exporting identical signatures",
+        "Every stub is `async` and throws a clear not-implemented error rather than returning undefined",
+        "The build flag from ADR-014 selects between the Electron and Tauri trees, and the default is still Electron",
+        "A unit test asserts the two trees export the same names, so they cannot drift",
+        "The boundary lint rule covers the Tauri tree: the UI imports `lib/platform/`, never `lib/platform/tauri/` directly",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 52,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-053",
+      "title": "Delete the modules that are not being ported",
+      "description": "As a developer, I want the dead Windows and telemetry-adjacent modules gone before the port, so nothing is rewritten in Rust for no reason.",
+      "acceptanceCriteria": [
+        "`src/main/squirrel-win32.js`, `src/main/thumbar.js`, `src/main/user-tasks.js`, `src/main/announcement.js`, and `src/crash-reporter.js` deleted",
+        "Their call sites in `src/main/index.js` and `src/main/ipc.js` removed, including the squirrel argv filtering",
+        "`ipc-os.notifyPlayerUpdate` keeps working -- `menu.onPlayerUpdate` still consumes it -- with only the thumbar half removed",
+        "Any dependency left unused by the deletions is removed from `package.json` and `depcheck` passes",
+        "The app still launches under Electron on the current platform",
+        "Smoke test passes, with attention to play/pause and the playback menu items",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 53,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-054",
+      "title": "Port config and user-data paths to Rust",
+      "description": "As a developer, I want the host resolving app paths, since every later Rust module depends on them.",
+      "acceptanceCriteria": [
+        "A Rust module resolves the same config, torrent, poster, and temp paths as `src/config.js` on the current platform",
+        "The portable-app case is handled: paths relocate under the config directory the way `src/main/index.js:63-69` does",
+        "A Tauri command returns the resolved paths to the renderer as plain data",
+        "A Rust test asserts the resolved paths match the documented layout for at least the current platform",
+        "The existing Electron path behaviour is unchanged",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 54,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-055",
+      "title": "Move app-state load and save behind the shim",
+      "description": "As a developer, I want the renderer to own its state file, so the host does not need a JavaScript state module.",
+      "acceptanceCriteria": [
+        "`State.load` and `State.save` run in the renderer through `lib/platform/fs.js`, not through the host process",
+        "`src/main/index.js` no longer requires `src/renderer/lib/state.js`, and the Babel build no longer needs to compile it for the main process",
+        "Migrations still run on a fresh profile and on an existing one",
+        "Saved state written by the current app version loads unchanged after the move -- no format change",
+        "Smoke test passes, with explicit verification of step 6 (quit and relaunch, torrent list state persisted)",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 55,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-056",
+      "title": "Create and restore the main window in Rust",
+      "description": "As a user, I want the Tauri window to open where I left it, so the host swap is invisible.",
+      "acceptanceCriteria": [
+        "The Tauri window applies saved bounds, minimum size, and the maximized flag the way `src/main/windows/main.js` does",
+        "Launching with `--hidden` starts without showing the window",
+        "Single-instance behaviour matches: a second launch signals the first and exits",
+        "Window bounds changes reach the renderer on the same shim event the Electron host emits (`onWindowBoundsChanged`)",
+        "The Electron host still behaves identically",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 56,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-057",
+      "title": "Implement window.js against Tauri",
+      "description": "As a UI developer, I want window control working under Tauri, so the player and the torrent list behave the same.",
+      "acceptanceCriteria": [
+        "`platform/tauri/window.js` implements `setTitle`, `setBounds`, `setAspectRatio`, `setProgress`, `toggleFullScreen`, `show`, and the fullscreen and bounds events",
+        "Each maps to a Tauri command or plugin call; no Electron reference remains in the module",
+        "The aspect-ratio behaviour used by the player is either implemented or documented as unsupported with the visible consequence stated",
+        "`test/unit/platform-window.js` runs against the Tauri tree with a fake invoke and asserts the same call contracts",
+        "Under `npm run start:tauri`, window title, progress bar, and fullscreen toggling all work",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 57,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-058",
+      "title": "Implement dialog.js against Tauri",
+      "description": "As a user, I want file and folder pickers under Tauri, so adding torrents and choosing a download folder still work.",
+      "acceptanceCriteria": [
+        "`platform/tauri/dialog.js` implements every export in `platform/dialog.js` with the same signatures",
+        "Open-file, open-folder, and save-file dialogs return plain paths, never a host object",
+        "Cancelling a dialog resolves the same way it does under Electron, and no caller has to change",
+        "`test/unit/platform-dialog.js` runs against the Tauri tree",
+        "Under `npm run start:tauri`, opening a `.torrent` file and choosing a download folder in preferences both work",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 58,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-059",
+      "title": "Implement shell.js and clipboard.js against Tauri",
+      "description": "As a user, I want external links, folder reveal, trash, and copy to work under Tauri.",
+      "acceptanceCriteria": [
+        "`platform/tauri/shell.js` implements `openPath`, `showItemInFolder`, `moveItemToTrash`, and external-URL opening",
+        "`platform/tauri/clipboard.js` implements the clipboard exports with identical signatures",
+        "Move-to-trash actually reaches the OS trash rather than unlinking the file",
+        "`test/unit/platform-shell.js` and `test/unit/platform-clipboard.js` run against the Tauri tree",
+        "Under `npm run start:tauri`, copy magnet link, open containing folder, and an external link from the UI all work",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 59,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-060",
+      "title": "Implement fs.js against Tauri",
+      "description": "As a UI developer, I want file access under Tauri, so state, subtitles, and torrent files keep working.",
+      "acceptanceCriteria": [
+        "`platform/tauri/fs.js` implements every export in `platform/fs.js` with the same signatures",
+        "The Tauri capability allowlist grants exactly the directories the shim needs, and the config records why each is required",
+        "Reads and writes outside those directories fail with a clear error rather than silently succeeding",
+        "`test/unit/platform-fs.js` runs against the Tauri tree",
+        "Under `npm run start:tauri`, state persists across a restart and a subtitle file loads",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 60,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-061",
+      "title": "Build the application menu in Rust from the descriptors",
+      "description": "As a user, I want the full menu under Tauri, since most keyboard shortcuts live there.",
+      "acceptanceCriteria": [
+        "The Rust host builds its menu from the same data-driven descriptors `platform/menu.js` already produces (ADR-007)",
+        "`platform/tauri/menu.js` sends descriptors and receives click events; no host object crosses the boundary",
+        "Every item in `src/main/menu.js` is present: roles, accelerators, checkboxes, and the playback items that toggle with `togglePlaybackControls`",
+        "`setAllowNav` still enables and disables the navigation items",
+        "`test/unit/platform-menu.js` runs against the Tauri tree",
+        "Under `npm run start:tauri`, the menu renders and at least one accelerator from each submenu fires the right action",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 61,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-062",
+      "title": "Port the tray icon to Rust",
+      "description": "As a user, I want the tray icon and its menu under Tauri.",
+      "acceptanceCriteria": [
+        "The Rust host creates the tray with the same icon assets and menu items as `src/main/tray.js`",
+        "Tray behaviour respects the same platform conditions the Electron version applies",
+        "Clicking the tray icon shows the window; the tray menu items dispatch the same actions",
+        "The tray is removed cleanly on quit, leaving no stale icon",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 62,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-063",
+      "title": "Port dock and taskbar progress to Rust",
+      "description": "As a user, I want the download badge and progress bar under Tauri.",
+      "acceptanceCriteria": [
+        "The Rust host implements the `setBadge`, `setProgress`, and `downloadFinished` behaviour from `src/main/dock.js`",
+        "`platform/tauri/ipc-os.js` routes the matching shim exports to those commands",
+        "Platform differences are handled explicitly: badge on macOS, taskbar progress on Windows, and a documented no-op elsewhere",
+        "`test/unit/platform-ipc-os.js` covers the routed exports against the Tauri tree",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 63,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-064",
+      "title": "Port magnet and .torrent handler registration to Rust",
+      "description": "As a user, I want WebTorrent Desktop to register as the handler for magnet links and .torrent files under Tauri.",
+      "acceptanceCriteria": [
+        "Install and uninstall are implemented for the current platform, matching the behaviour in `src/main/handlers.js`",
+        "The preferences toggle drives it through `ipc-os.setDefaultFileHandler`, unchanged on the UI side",
+        "Uninstall removes every registration install created, verified by inspecting the OS registration after each",
+        "Platforms not implemented yet fail loudly at build time or report unsupported, rather than silently doing nothing",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 64,
+      "passes": false,
+      "notes": "Registration touches the real OS -- registry keys, LaunchServices, or .desktop files -- and has to be verified per platform on a real machine.",
+      "manual": true
+    },
+    {
+      "id": "US-065",
+      "title": "Deliver file and magnet open events to the UI under Tauri",
+      "description": "As a user, I want double-clicking a .torrent file or a magnet link to add it to the running app.",
+      "acceptanceCriteria": [
+        "The Rust host handles the equivalents of Electron's `open-file` and `open-url` and the second-instance argv, covering the paths in `src/main/index.js:105-115`",
+        "Events arriving before the UI is ready are queued and delivered once it signals ready, matching the current `ipcReady` behaviour",
+        "The UI receives them on the existing shim event; no controller changes",
+        "A magnet link from the browser and a double-clicked `.torrent` both add a torrent to the running app",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 65,
+      "passes": false,
+      "notes": "Needs a real desktop session: a browser magnet link and a double-clicked file, with the app already running.",
+      "manual": true
+    },
+    {
+      "id": "US-066",
+      "title": "Port the power save blocker to Rust",
+      "description": "As a user, I want the display to stay awake during playback under Tauri.",
+      "acceptanceCriteria": [
+        "The Rust host implements enable and disable equivalent to `src/main/power-save-blocker.js`",
+        "It is enabled on player open and play, and disabled on pause and close, matching the current `src/main/ipc.js` wiring",
+        "The blocker is released on quit and on window close, with no leaked inhibitor",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 66,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-067",
+      "title": "Port media key shortcuts to Rust",
+      "description": "As a user, I want play, pause, and track keys to work during playback under Tauri.",
+      "acceptanceCriteria": [
+        "The Rust host registers and unregisters the same shortcuts as `src/main/shortcuts.js`",
+        "They are registered on player open and released on player close, so they do not capture keys outside playback",
+        "Each shortcut dispatches the same action to the UI as today",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 67,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-068",
+      "title": "Port the folder watcher to Rust",
+      "description": "As a user, I want the watched folder to keep auto-adding torrents under Tauri.",
+      "acceptanceCriteria": [
+        "The Rust host watches the configured folder and reports new `.torrent` files, matching `src/main/folder-watcher.js`",
+        "`ipc-os.startFolderWatcher` and `stopFolderWatcher` drive it unchanged from the UI side",
+        "Toggling the preference starts and stops the watcher without a restart",
+        "Dropping a `.torrent` file into the watched folder adds it to the app",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 68,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-069",
+      "title": "Port launch-on-login to Rust",
+      "description": "As a user, I want the start-on-login preference to work under Tauri.",
+      "acceptanceCriteria": [
+        "Install and uninstall are implemented for the current platform, matching `src/main/startup.js`",
+        "`ipc-os.setStartup` drives it unchanged from the UI side",
+        "Uninstall removes exactly what install created",
+        "The `--hidden` launch path still starts the app without showing the window",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 69,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-070",
+      "title": "Move sidecar supervision into the Rust host",
+      "description": "As a user, I want the engine started and stopped by the Tauri host, so torrenting works without Electron.",
+      "acceptanceCriteria": [
+        "The Rust host spawns the sidecar, reads its port, and answers `getEngineEndpoint` with the same `{ url, token }` shape",
+        "Crash restart with backoff and log capture match the Electron supervisor's behaviour",
+        "The sidecar is killed on app exit, including force quit; no orphan survives",
+        "Under `npm run start:tauri`, a torrent downloads, plays, and seeds",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 70,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-071",
+      "title": "Port the updater to Tauri",
+      "description": "As a user, I want update checks under Tauri, so the app can still tell me a new version exists.",
+      "acceptanceCriteria": [
+        "The Rust host performs the update check `src/main/updater.js` does today and reports the result to the UI",
+        "The existing update-available modal and `controllers/update-controller.js` are unchanged",
+        "A check against a stub feed produces both the update-available and up-to-date outcomes in the UI",
+        "Signing and the real release feed are explicitly out of scope here and left to Phase 5",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 71,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-072",
+      "title": "Cut the app over to Tauri",
+      "description": "As a developer, I want one host, so the dual-host scaffolding stops costing every future change twice.",
+      "acceptanceCriteria": [
+        "`npm start` launches Tauri; the Electron start path is gone",
+        "`src/main/`, `index.js`, and the Electron shim tree deleted, leaving `src/renderer/lib/platform/` as the single implementation -- promoted from `platform/tauri/`",
+        "The build-flag selection mechanism from ADR-014 removed, since there is nothing left to select",
+        "`electron`, `@electron/remote`, `electron-packager`, `electron-winstaller`, `electron-osx-sign`, `electron-notarize`, and `spectron` removed from `package.json`",
+        "The Babel main build is removed or reduced to what `src/engine/` and `src/shared/` still need, and `npm run build` reflects that",
+        "Integration tests are ported off Spectron or removed with a replacement plan recorded",
+        "`depcheck` passes with no orphaned Electron dependency",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 72,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-073",
+      "title": "Phase 4 verification pass",
+      "description": "As a developer, I want proof the Tauri host is complete, so Phase 5 starts from a shippable app.",
+      "acceptanceCriteria": [
+        "Grep confirms no `electron` reference remains outside documentation and ADR history",
+        "Full six-step smoke test executed under Tauri and the results recorded in `docs/platform-shim.md`",
+        "Every shim export is exercised at least once during the smoke test, or listed as unexercised with the reason",
+        "Startup time, idle memory, and bundle size recorded against the Phase 3 Electron numbers",
+        "`docs/README.md` rewritten for a Tauri app: build commands, directory layout, and the phase table",
+        "Known regressions listed explicitly, including multi-audio-track switching",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 73,
+      "passes": false,
+      "notes": "Attended session: manual smoke test, measurements, and the regression sweep. Excluded from the headless ralph loop.",
+      "manual": true
+    },
+    {
+      "id": "US-074",
+      "title": "Record the casting architecture decision",
+      "description": "As a developer, I want the cast rewrite scoped before it starts, because it is the largest single item left.",
+      "acceptanceCriteria": [
+        "`docs/adr/ADR-015-casting-without-node.md` written",
+        "Records what `src/renderer/lib/cast.js` does today across Chromecast, DLNA, and AirPlay, and which npm packages it depends on",
+        "Chooses the replacement per protocol -- a Rust crate, a reimplementation, or dropping the protocol -- with the reason",
+        "Defines the shim surface the UI will call, keeping `controllers/` and the cast UI unchanged",
+        "States which protocols ship first and what the UI shows for one that is not implemented yet",
+        "Listed in `docs/adr/INDEX.md`; the deferred-casualty note in ADR-008 updated to point at it",
+        "No code changed in this story",
+        "Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 74,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-075",
+      "title": "Add the cast shim surface with a stub host",
+      "description": "As a UI developer, I want the cast API defined and stubbed, so the protocol work can land behind a stable interface.",
+      "acceptanceCriteria": [
+        "`src/renderer/lib/platform/cast.js` created with the surface from ADR-015: discovery, connect, play, pause, seek, volume, stop, and device events",
+        "Every export is `async` and passes plain data only",
+        "The host side answers with an empty device list and clear not-implemented errors",
+        "`test/unit/platform-cast.js` covers the surface against a fake invoke",
+        "`lib/cast.js` is not yet deleted; nothing in the UI changes",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 75,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-076",
+      "title": "Implement Chromecast discovery and control in the host",
+      "description": "As a user, I want to cast to a Chromecast from the Tauri app.",
+      "acceptanceCriteria": [
+        "The host discovers Chromecast devices on the local network and reports them through the cast shim",
+        "Play, pause, seek, volume, and stop work against a real device",
+        "Devices appearing and disappearing update the UI list without a restart",
+        "Discovery failures surface as a UI error rather than an empty list that looks like no devices",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 76,
+      "passes": false,
+      "notes": "Needs a real Chromecast on the local network.",
+      "manual": true
+    },
+    {
+      "id": "US-077",
+      "title": "Implement DLNA discovery and control in the host",
+      "description": "As a user, I want to cast to a DLNA renderer from the Tauri app.",
+      "acceptanceCriteria": [
+        "The host discovers DLNA renderers and reports them through the same cast shim",
+        "Play, pause, seek, volume, and stop work against a real renderer",
+        "Devices are labelled by protocol in the UI so two protocols can coexist in one list",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 77,
+      "passes": false,
+      "notes": "Needs a real DLNA renderer on the local network.",
+      "manual": true
+    },
+    {
+      "id": "US-078",
+      "title": "Implement AirPlay discovery and control in the host",
+      "description": "As a user, I want to cast to an AirPlay receiver from the Tauri app.",
+      "acceptanceCriteria": [
+        "The host discovers AirPlay receivers and reports them through the cast shim",
+        "Playback control works against a real receiver, or the unsupported subset is documented in ADR-015",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 78,
+      "passes": false,
+      "notes": "Needs a real AirPlay receiver on the local network.",
+      "manual": true
+    },
+    {
+      "id": "US-079",
+      "title": "Retire lib/cast.js",
+      "description": "As a developer, I want the last deferred casualty gone, so nothing in the renderer bypasses the shim.",
+      "acceptanceCriteria": [
+        "`src/renderer/lib/cast.js` deleted and every call site moved to `lib/platform/cast.js`",
+        "`chromecasts`, `dlnacasts`, and `airplayer` removed from `package.json`; `depcheck` passes",
+        "The cast exemption removed from `eslint-boundary.config.js` and from `test/unit/platform-boundary.js`",
+        "ADR-008 updated: no deferred casualties remain",
+        "Casting to one real device still works end to end",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 79,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-080",
+      "title": "Port external player launching to the host",
+      "description": "As a user, I want \"play in VLC\" to work under Tauri.",
+      "acceptanceCriteria": [
+        "The host implements the check, spawn, and kill behaviour in `src/main/external-player.js`, including the `vlc-command` lookup it depends on",
+        "`ipc-os.checkForExternalPlayer`, `openExternalPlayer`, and `quitExternalPlayer` are unchanged on the UI side",
+        "Playback controls and media shortcuts are disabled while the external player owns playback, as they are today",
+        "`vlc-command` is removed from `package.json` if the lookup moved to Rust; `depcheck` passes",
+        "Launching VLC from the player menu plays the streaming URL",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 80,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-081",
+      "title": "Establish the codec fallback behaviour on the new webview",
+      "description": "As a user, I want a clear message instead of a black window when a file will not play.",
+      "acceptanceCriteria": [
+        "The codecs the target webview supports are tested per platform and recorded in a table in `docs/README.md` or a linked doc",
+        "Files the webview cannot play trigger the existing unsupported-media modal rather than failing silently",
+        "The modal offers the external player path where one is available",
+        "`lib/media-extensions.js` and the player's playability check reflect the measured support, not the Chromium assumption",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 81,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-082",
+      "title": "Resolve the multi-audio-track casualty",
+      "description": "As a user, I want predictable behaviour on files with several audio tracks, since the Chromium flag that powered track switching is gone.",
+      "acceptanceCriteria": [
+        "`controllers/audio-tracks-controller.js` either works against the new webview's real capability or is removed",
+        "If removed, the audio-track UI is removed with it -- no menu item that does nothing",
+        "The outcome is recorded in `docs/README.md`, replacing the `enableBlinkFeatures: 'AudioVideoTracks'` note",
+        "A multi-track file plays with its default track and no console error",
+        "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 82,
+      "passes": false,
+      "notes": ""
+    },
+    {
+      "id": "US-083",
+      "title": "Sign and notarize the macOS build",
+      "description": "As a user, I want the macOS app to open without a Gatekeeper warning.",
+      "acceptanceCriteria": [
+        "The Tauri bundler produces a signed `.app` and `.dmg` with the hardened runtime",
+        "Notarization and stapling run as part of the release build",
+        "`spctl --assess` passes on the stapled bundle",
+        "The signed build launches on a machine that has never run it before, with no Gatekeeper prompt",
+        "Signing credentials come from the environment, never from a committed file",
+        "The release steps are documented for someone who has not run them before",
+        "Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 83,
+      "passes": false,
+      "notes": "Needs an Apple Developer certificate, a real macOS machine, and a clean test machine for the Gatekeeper check.",
+      "manual": true
+    },
+    {
+      "id": "US-084",
+      "title": "Package and sign the Windows and Linux builds",
+      "description": "As a user, I want installers on every supported platform.",
+      "acceptanceCriteria": [
+        "The Tauri bundler produces the Windows installer and the Linux packages the project shipped under Electron",
+        "The Windows build is signed and installs without a SmartScreen block",
+        "File and magnet handler registration works from the installed build on each platform",
+        "Uninstall removes the handlers and leaves no orphaned sidecar process",
+        "The per-platform build prerequisites are documented",
+        "Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 84,
+      "passes": false,
+      "notes": "Needs real Windows and Linux machines or VMs plus a code signing certificate.",
+      "manual": true
+    },
+    {
+      "id": "US-085",
+      "title": "Ship signed auto-updates",
+      "description": "As a user, I want the app to update itself safely.",
+      "acceptanceCriteria": [
+        "The updater verifies signatures and refuses an unsigned or tampered payload",
+        "A staged release is downloaded, verified, and applied on the current platform",
+        "A user who declines an update is not prompted again until the next version",
+        "Update-server configuration and key handling are documented; no private key is committed",
+        "A deliberately corrupted payload is rejected with a visible error and no partial install",
+        "Typecheck passes (`npm test` -- standard + depcheck)"
+      ],
+      "priority": 85,
+      "passes": false,
+      "notes": "Needs a staged release on the real update endpoint and a real install to upgrade from.",
+      "manual": true
+    },
+    {
+      "id": "US-086",
+      "title": "Port completion verification pass",
+      "description": "As a developer, I want proof the port is finished, so the branch can ship.",
+      "acceptanceCriteria": [
+        "Full six-step smoke test executed on macOS, Windows, and Linux, with the results recorded",
+        "Casting exercised against one real device per implemented protocol",
+        "Startup time, idle memory, and installer size recorded against the original Electron baseline",
+        "Every ADR from ADR-001 onward reviewed for drift and updated or superseded where the shipped app disagrees",
+        "`docs/README.md`, `docs/platform-shim.md`, and the AGENTS.md files describe the shipped architecture",
+        "Remaining known gaps listed in one place with an owner or a decision to accept them",
+        "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
+      ],
+      "priority": 86,
+      "passes": false,
+      "notes": "Attended, multi-platform session. Excluded from the headless ralph loop.",
       "manual": true
     }
   ]
