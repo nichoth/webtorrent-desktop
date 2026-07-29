@@ -56,3 +56,41 @@ for (const name of ['shell', 'clipboard']) {
     t.end()
   })
 }
+
+// US-027 covers two of `@electron/remote`'s concerns: the dialog API and
+// the two window-state reads. `remote.Menu` / `remote.MenuItem` in
+// `controllers/torrent-list-controller.js` is a third, migrated in
+// US-029, so a blanket ban on the `@electron/remote` specifier would be
+// dishonest here. These patterns name the concerns instead. The
+// namespace forms cover both `remote.x` (`@electron/remote`) and
+// `electron.remote.x` (the long-broken Electron 13 spelling that
+// `main.js` still used).
+const REMOTE_CHECKS = [
+  {
+    concern: 'the @electron/remote dialog API',
+    patterns: [
+      /\bremote\.dialog\b/,
+      /import\s*\{[^}]*\bdialog\b[^}]*\}\s*from\s*['"]@electron\/remote['"]/
+    ]
+  },
+  {
+    concern: 'window-state reads via getCurrentWindow()',
+    patterns: [/getCurrentWindow\s*\(\s*\)\s*\.\s*(isVisible|isMaximized)\b/]
+  }
+]
+
+for (const { concern, patterns } of REMOTE_CHECKS) {
+  test('no renderer code outside the shim uses ' + concern, function (t) {
+    const files = rendererSources()
+    t.ok(files.length > 20, 'walked the renderer sources')
+    for (const file of files) {
+      const rel = path.relative(RENDERER, file)
+      const hits = fs.readFileSync(file, 'utf8').split('\n')
+        .map((line, i) => ({ line, n: i + 1 }))
+        .filter(({ line }) => patterns.some((re) => re.test(line)))
+        .map(({ line, n }) => n + ': ' + line.trim())
+      t.deepEqual(hits, [], rel + ' does not use ' + concern)
+    }
+    t.end()
+  })
+}

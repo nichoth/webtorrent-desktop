@@ -98,19 +98,29 @@ it tight.
   number, and `performance.now()` either side of the `require` in
   `build/renderer/main.js` to locate the cost. "The app still launches"
   is not a startup measurement.
-- **`delayedInit()` in `src/renderer/main.js` is dead code today.** The
+- **`delayedInit()` was dead code until US-027, and runs now.** The
   `electron.remote.getCurrentWindow()` call just above the
-  `window.setTimeout(delayedInit, ...)` throws (`electron.remote` was
-  removed in Electron 14), aborting the rest of `onState`. So
-  `checkDownloadPath()`, the visibility listener and `lazyLoadCast()`
-  never run, and cast discovery never starts on its own. Pre-existing
-  and unowned; bypass it in the build artifact if you need to verify
-  anything downstream of it.
-- **The renderer `init:` line in the launch log comes from
-  `webtorrent.js`** (the hidden window), not from `main.js`, whose
-  `console.timeEnd('init')` is unreachable for the reason above. Use
-  `a.slice(1, 5)` in the console-message hook so you capture
-  `sourceId`, or you will attribute renderer output to the wrong file.
+  `window.setTimeout(delayedInit, ...)` used to throw
+  (`electron.remote` was removed in Electron 14), aborting the rest of
+  `onState`. US-027 moved it onto `lib/platform/window.isVisible()`,
+  so `checkDownloadPath()`, the visibility listener and
+  `lazyLoadCast()` all run again. The visible consequence: the launch
+  log gains a severity-3 `no such type:
+  extensions.api.cast_channel.CastMessage` from `Cast.init()`. That is
+  dormant code being reached, not a regression -- do not chase it as
+  one, and do not treat it as a clean-launch failure.
+- **There are two renderer `init:` lines in the launch log.** One from
+  `webtorrent.js` (the hidden window) and, since US-027, one from
+  `build-vite/renderer/main.js` -- `console.timeEnd('init')` in
+  `main.js` was unreachable before. Use `a.slice(1, 5)` in the
+  console-message hook so you capture `sourceId`, or you will
+  attribute renderer output to the wrong file.
+- **Native modals block the whole main process.** `showOpenDialogSync`
+  / `showSaveDialogSync` freeze it, so in an appended probe block
+  nothing after the dispatch that opens one ever runs -- no further
+  `executeJavaScript`, no `setTimeout`, and `kill <pid>` does not
+  land (`pkill -f "$PWD/node_modules/"` does). That silence is itself
+  the evidence the dialog opened. Schedule a blocking probe LAST.
 - **Verifying the app launches non-interactively:** run
   `npx electron --no-sandbox .` in the background, sleep ~12s, check
   the process is alive and that the log shows `'Main Window'` and
@@ -2422,4 +2432,95 @@ Migrate the shell and clipboard call sites to the platform shim.
   readable ~1.5s later. Seed OS state (clipboard, etc.) from the main
   process with a plain `require('electron')` in the appended probe
   block -- it does not have to come from the renderer.
+---
+
+## 2026-07-28 - US-027
+- Migrated the `@electron/remote` dialog API and the two window-state
+  reads onto the platform shim. Four call sites:
+  - `components/path-selector.js`: `remote.dialog.showOpenDialogSync(
+    remote.getCurrentWindow(), opts)` -> `platformDialog.showOpenDialog(
+    opts)`. The `Array.isArray(filenames)` guard became a
+    `filenames.length` check, per docs/platform-shim.md.
+  - `controllers/subtitles-controller.js`: same conversion for
+    `openSubtitles()`, plus a `dispatch('update')` in the continuation.
+  - `controllers/torrent-list-controller.js`: `saveTorrentFileAs()`
+    now uses `platformDialog.showSaveDialog(opts)`; the local
+    `const win = remote.getCurrentWindow()` is gone.
+  - `src/renderer/main.js`: the startup-sound `isVisible()` check and
+    `setDimensions()`.
+- `setDimensions()` was split. It now takes the four
+  `window.screenX`/`outerWidth` geometry reads synchronously, *before*
+  the `isMaximized()` suspension point, and hands them plus the single
+  awaited boolean to a new `applyDimensions()` holding the rest of the
+  old body in its original order. That is the resolution the shim
+  design doc asked for. `applyDimensions()` ends with `update()`.
+- Every shim promise is terminated with
+  `.catch(err => dispatch('error', err))`; none float.
+- `test/unit/platform-boundary.js` grew a second block of checks
+  (dialog API, `getCurrentWindow().isVisible|isMaximized`). 4 failures
+  before the migration -- exactly the 4 call sites -- 0 after. Full
+  suite 287/287, `standard` clean.
+- Files changed: `src/renderer/components/path-selector.js`,
+  `src/renderer/controllers/subtitles-controller.js`,
+  `src/renderer/controllers/torrent-list-controller.js`,
+  `src/renderer/main.js`, `test/unit/platform-boundary.js`,
+  `docs/platform-shim.md`, `test/AGENTS.md`,
+  `src/renderer/controllers/AGENTS.md`, `specs/prd.json`.
+
+**Deviation from the acceptance criteria, stated plainly.** "Zero
+`@electron/remote` imports remain under `src/renderer/` outside
+`lib/platform/`" is NOT met, and cannot be met by this story:
+`controllers/torrent-list-controller.js` still imports `remote` for
+`remote.Menu` / `remote.MenuItem` and one `remote.getCurrentWindow()`
+inside `menu.popup()`. That is the context-menu concern, which is
+US-029's whole scope. Doing it here would be doing US-029's work. The
+boundary test therefore checks *concerns* (dialog, window-state reads)
+rather than the `@electron/remote` specifier, and the grep goes to
+zero when US-029 lands. Every other criterion is met except the manual
+smoke test (see below).
+
+- **Learnings for future iterations:**
+  - **Fixing `main.js:149` un-broke `delayedInit()`.** The
+    `electron.remote.getCurrentWindow().isVisible()` call there had
+    been throwing since Electron 14, aborting the rest of `onState()`.
+    Two things are observably different now, both previously recorded
+    in this file as known-dead: `console.timeEnd('init')` in `main.js`
+    finally prints (the launch log now has *two* `init:` lines --
+    `init: 25ms` from `build-vite/renderer/main.js` alongside the
+    `webtorrent.js` one), and `delayedInit()` runs, so
+    `checkDownloadPath()`, the visibility listener and `Cast.init()`
+    all execute. Delete the "delayedInit is dead code" and
+    "the init: line comes from webtorrent.js" entries from the
+    patterns section -- they are now false.
+  - **New pre-existing bug surfaced by that.** With `Cast.init()`
+    running for the first time, the launch log gains a severity-3
+    `Uncaught Error: no such type:
+    extensions.api.cast_channel.CastMessage` from the bundled
+    chromecast protobuf stack. It does not stop the app (init
+    completes, the UI renders, probes work). It is dormant code being
+    reached, not a regression from this story, and it is unowned by
+    any current story -- likely a Vite-bundling casualty in
+    `lib/cast.js`, whose deps were flagged as a deferred casualty in
+    the shim AGENTS.md.
+  - **Probing a *native* modal non-interactively.**
+    `showOpenDialogSync` blocks the whole main process. So
+    `wc.executeJavaScript("window.dispatch('openSubtitles')")` followed
+    by any further `executeJavaScript` or `setTimeout` in the appended
+    probe block produces *silence* -- and that silence is the
+    evidence the dialog opened. Even `kill <pid>` does not land while
+    the dialog is up; `pkill -f "$PWD/node_modules/"` is needed. Plan
+    the blocking probe LAST in a launch, because nothing after it
+    runs.
+  - **`dispatch()` re-renders synchronously, shim calls do not.**
+    `dispatch(action)` runs the handler then `update()` in the same
+    turn, so state written inside a `.then()` misses that render.
+    End the continuation with `dispatch('update')` (there is a no-op
+    `update` handler for exactly this) unless it already dispatches
+    something that re-renders. `path-selector.js` needs no such call:
+    its `onChange` is `dispatch('updatePreferences', ...)`.
+  - **Boundary tests should name concerns, not specifiers.** A file
+    can hold two shim concerns owned by two different stories
+    (`torrent-list-controller.js` holds dialog and menu). Banning the
+    import specifier makes the story unpassable; banning
+    `remote.dialog` and `getCurrentWindow().isMaximized` does not.
 ---

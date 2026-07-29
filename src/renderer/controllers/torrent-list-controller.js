@@ -8,6 +8,7 @@ import { TorrentKeyNotFoundError } from '../lib/errors'
 import * as sound from '../lib/sound'
 import * as TorrentSummary from '../lib/torrent-summary'
 import * as clipboard from '../lib/platform/clipboard'
+import * as platformDialog from '../lib/platform/dialog'
 
 const instantIoRegex = /^(https:\/\/)?instant\.io\/#/
 
@@ -318,7 +319,6 @@ export default class TorrentListController {
     if (!torrentSummary) throw new TorrentKeyNotFoundError(torrentKey)
     const downloadPath = this.state.saved.prefs.downloadPath
     const newFileName = path.parse(torrentSummary.name).name + '.torrent'
-    const win = remote.getCurrentWindow()
     const opts = {
       title: 'Save Torrent File',
       defaultPath: path.join(downloadPath, newFileName),
@@ -329,17 +329,20 @@ export default class TorrentListController {
       buttonLabel: 'Save'
     }
 
-    const savePath = remote.dialog.showSaveDialogSync(win, opts)
-
-    if (!savePath) return // They clicked Cancel
-    console.log('Saving torrent ' + torrentKey + ' to ' + savePath)
-    const torrentPath = TorrentSummary.getTorrentPath(torrentSummary)
-    fs.readFile(torrentPath, (err, torrentFile) => {
-      if (err) return dispatch('error', err)
-      fs.writeFile(savePath, torrentFile, err => {
-        if (err) return dispatch('error', err)
+    // The shim parents the dialog to the current window itself.
+    platformDialog.showSaveDialog(opts)
+      .then(savePath => {
+        if (!savePath) return // They clicked Cancel
+        console.log('Saving torrent ' + torrentKey + ' to ' + savePath)
+        const torrentPath = TorrentSummary.getTorrentPath(torrentSummary)
+        fs.readFile(torrentPath, (err, torrentFile) => {
+          if (err) return dispatch('error', err)
+          fs.writeFile(savePath, torrentFile, err => {
+            if (err) return dispatch('error', err)
+          })
+        })
       })
-    })
+      .catch(err => dispatch('error', err))
   }
 }
 

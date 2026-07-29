@@ -477,8 +477,8 @@
         "Smoke test passes, with explicit checks on the save-file dialog, the open-folder dialog in preferences, and window maximize state persistence"
       ],
       "priority": 27,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Four call sites moved onto the shim: showOpenDialog in path-selector and subtitles-controller, showSaveDialog in torrent-list-controller (dropping its remote.getCurrentWindow() dialog parent), and window.isVisible/isMaximized in main.js. setDimensions() takes the four geometry reads synchronously before the isMaximized() suspension point and hands them to a new applyDimensions(), so the save is neither dropped nor reordered. Every promise ends in .catch(err => dispatch('error', err)). test/unit/platform-boundary.js grew dialog and window-state checks: 4 failures before, 0 after; full suite 287/287. NOT met: the zero-@electron/remote grep -- torrent-list-controller still imports remote for remote.Menu/MenuItem, which is US-029 scope; the boundary test checks concerns rather than the specifier for that reason. Migrating main.js:149 also un-broke delayedInit(), which had been aborted by electron.remote since Electron 14; Cast.init() now runs and surfaces a pre-existing severity-3 chromecast protobuf error. Full six-step smoke test not run (non-interactive session); the save-file and open-folder dialogs were verified by the main-process-blocking signature of a real native modal, the three PathSelectors by rendering the preferences page, and window-bounds saving by reading state.window.bounds back after a live dispatch('setDimensions'). Maximize persistence across quit and relaunch was not verified."
     },
     {
       "id": "US-028",

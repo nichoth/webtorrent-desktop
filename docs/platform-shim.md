@@ -11,7 +11,8 @@ US-021, `shell.js` and `clipboard.js` as of US-022, `fs.js` as of
 US-023, `dialog.js` and `window.js` as of US-024, and `menu.js` as of
 US-025. The whole surface is implemented. The call sites move from
 US-026 onwards; the `shell.openExternal` and `clipboard` ones are
-migrated as of US-026.
+migrated as of US-026, and the `dialog` and `window` ones as of
+US-027.
 
 ## Rules the surface follows
 
@@ -99,6 +100,13 @@ Shape changes for the migration:
   `showSaveDialogSync` returns `undefined`. `if (!savePath) return`
   guards keep working unchanged.
 
+All three call sites are migrated as of US-027. `path-selector.js` and
+`torrent-list-controller.js` no longer call `remote.getCurrentWindow()`
+for a dialog parent -- but `torrent-list-controller.js` still imports
+`@electron/remote` for `remote.Menu` / `remote.MenuItem` and one more
+`remote.getCurrentWindow()` in `menu.popup()`. That is the third
+concern, and it leaves with US-029.
+
 ## `window.js`
 
 Only the reads `@electron/remote` supplies. Everything that *changes*
@@ -117,11 +125,18 @@ the callers this shim exists to keep clean (FR-12). `dialog.js`
 parents its dialogs the same way, through its own
 `getCurrentWindow()` call rather than through `window.js`.
 
-`main.js:422` currently assigns `.isMaximized` without calling it, so
-`state.window.wasMaximized` is set to a function. That is a
-pre-existing bug. US-027 should await the call and note the behaviour
-change, because it is a change in behaviour rather than a pure
-refactor.
+`main.js:422` used to assign `.isMaximized` without calling it, so
+`state.window.wasMaximized` was set to a function. US-027 replaced it
+with the awaited boolean, which -- because the write is only reached
+when the window is *not* maximized -- means the field went from
+always-truthy to always `false`. Nothing reads it, but it is a
+behaviour change rather than a pure refactor.
+
+Migrating `main.js:149` also fixed a larger latent bug: the
+`electron.remote` spelling there had been throwing since Electron 14,
+which aborted the rest of `onState()` and meant `delayedInit()` never
+ran. It runs now, so `checkDownloadPath()`, the visibility listener
+and `Cast.init()` all execute for the first time in a long while.
 
 `screen.getAllDisplays()` is **excluded**. Its only consumer was
 `lib/telemetry.js`, which US-002 deleted, so there is nothing left to
@@ -159,6 +174,17 @@ dragging or maximizing. Three things follow for US-027:
 - The two `isMaximized()` reads are one read. Await once and reuse
   the boolean rather than awaiting twice -- that also fixes the
   `wasMaximized`-is-a-function bug above.
+
+US-027 resolved it as: `setDimensions()` takes the four geometry
+reads synchronously into a local `bounds` object, then hands it plus
+the single awaited `maximized` boolean to a new `applyDimensions()`
+that holds the rest of the old body in its original order. The only
+caller is `dispatch('setDimensions')` from `pages/player-page.js`,
+which ignores the return value, so `setDimensions()` stays
+non-`async` and terminates the promise with
+`.catch(err => dispatch('error', err))` like every other migrated
+call site. `applyDimensions()` ends with its own `update()`, because
+`dispatch()`'s update already ran while the shim call was in flight.
 
 ## `menu.js`
 

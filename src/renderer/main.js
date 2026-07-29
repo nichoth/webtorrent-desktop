@@ -13,6 +13,7 @@ import * as sound from './lib/sound'
 import * as TorrentPlayer from './lib/torrent-player'
 import { setDispatch } from './lib/dispatcher'
 import * as clipboard from './lib/platform/clipboard'
+import * as platformWindow from './lib/platform/window'
 
 // Perf optimization: Needed immediately, so do not lazy load it below
 import TorrentListController from './controllers/torrent-list-controller'
@@ -147,9 +148,13 @@ function onState (err, _state) {
   window.addEventListener('focus', onFocus)
   window.addEventListener('blur', onBlur)
 
-  if (electron.remote.getCurrentWindow().isVisible()) {
-    sound.play('STARTUP')
-  }
+  // Async now, so the startup sound trails the rest of onState by a
+  // tick. Nothing below depends on it. (This line used to throw --
+  // `electron.remote` was removed in Electron 14 -- which silently
+  // aborted the rest of onState, including delayedInit.)
+  platformWindow.isVisible()
+    .then(visible => { if (visible) sound.play('STARTUP') })
+    .catch(err => dispatch('error', err))
 
   // To keep app startup fast, some code is delayed.
   window.setTimeout(delayedInit, config.DELAYED_INIT)
@@ -405,22 +410,40 @@ function resumeTorrents () {
     .forEach((s) => controllers.torrentList().startTorrentingSummary(s.torrentKey))
 }
 
-// Set window dimensions to match video dimensions or fill the screen
+// Set window dimensions to match video dimensions or fill the screen.
+//
+// The maximize check is async through the shim, so the geometry reads
+// are taken here, synchronously, before the suspension point: the saved
+// bounds and the maximize check that guards them then still describe
+// one instant, even though the save itself lands a tick later (see
+// docs/platform-shim.md). Nothing reads state.window.bounds
+// synchronously after a dispatch('setDimensions') -- restoreBounds()
+// runs when the player is closed.
 function setDimensions (dimensions) {
-  // Don't modify the window size if it's already maximized
-  if (electron.remote.getCurrentWindow().isMaximized()) {
-    state.window.bounds = null
-    return
-  }
-
-  // Save the bounds of the window for later. See restoreBounds()
-  state.window.bounds = {
+  const bounds = {
     x: window.screenX,
     y: window.screenY,
     width: window.outerWidth,
     height: window.outerHeight
   }
-  state.window.wasMaximized = electron.remote.getCurrentWindow().isMaximized
+  platformWindow.isMaximized()
+    .then(maximized => applyDimensions(dimensions, bounds, maximized))
+    .catch(err => dispatch('error', err))
+}
+
+function applyDimensions (dimensions, bounds, maximized) {
+  // Don't modify the window size if it's already maximized
+  if (maximized) {
+    state.window.bounds = null
+    return
+  }
+
+  // Save the bounds of the window for later. See restoreBounds()
+  state.window.bounds = bounds
+  // Reached only when the window is not maximized, so this is always
+  // false now. It used to be assigned `.isMaximized` (the function
+  // itself, uncalled) and so was always truthy. Nothing reads it.
+  state.window.wasMaximized = maximized
 
   // Limit window size to screen size
   const screenWidth = window.screen.width
@@ -442,6 +465,8 @@ function setDimensions (dimensions) {
   ipcRenderer.send('setAspectRatio', aspectRatio)
   ipcRenderer.send('setBounds', { contentBounds: true, x: null, y: null, width, height })
   state.playing.aspectRatio = aspectRatio
+  // dispatch()'s own update() already ran before this resolved.
+  update()
 }
 
 // Called when the user adds files (.torrent, files to seed, subtitles) to the app

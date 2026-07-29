@@ -106,7 +106,15 @@ through `build/`, the only automated check on their imports is a
 static one. `test/unit/platform-boundary.js` walks the **sources**
 under `src/renderer/`, skipping `lib/platform/`, and fails on any
 direct use of an Electron API that has already been migrated behind
-the shim (`shell` and `clipboard` today). Each of US-027..US-032 adds
-its concern to that list as it lands; US-034 supersedes the whole file
-with a lint rule. Reading source rather than build output is the
-point -- do not repoint it at `build/`.
+the shim (`shell` and `clipboard`; plus, since US-027, the
+`@electron/remote` dialog API and the `getCurrentWindow().isVisible` /
+`.isMaximized` reads). Each of US-027..US-032 adds its concern to that
+list as it lands; US-034 supersedes the whole file with a lint rule.
+Reading source rather than build output is the point -- do not
+repoint it at `build/`.
+
+The checks name **concerns, not module specifiers**. A blanket ban on
+`@electron/remote` would fail today, because `remote.Menu` in
+`controllers/torrent-list-controller.js` is a separate concern that
+does not leave until US-029. Add a pattern for what your story
+actually migrated, not for the import it happens to sit next to.

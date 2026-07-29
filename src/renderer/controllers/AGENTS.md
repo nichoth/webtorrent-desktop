@@ -41,3 +41,13 @@ Controllers reach the main process through `ipcRenderer` today. Phase 2
 of the renderer-decoupling work replaces those calls with the platform
 shim -- check `specs/prd.json` before adding a new direct `electron`
 import here.
+
+**Every shim call is async, and `dispatch()` re-renders synchronously.**
+`dispatch(action)` calls the handler and then `update()` in the same
+turn, so any state a controller writes inside a `.then()` lands *after*
+the render that was meant to show it. End such a continuation with
+`dispatch('update')` (there is a no-op `update` handler in `main.js`
+for exactly this) -- unless the continuation already dispatches
+something else, which re-renders on its own. And always terminate the
+promise with `.catch(err => dispatch('error', err))`; a floating
+rejection is invisible.

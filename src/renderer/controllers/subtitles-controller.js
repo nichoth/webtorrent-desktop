@@ -1,4 +1,3 @@
-import remote from '@electron/remote'
 import fs from 'fs'
 import path from 'path'
 import parallel from 'run-parallel'
@@ -8,6 +7,7 @@ import srtToVtt from 'srt-to-vtt'
 import iso639 from 'iso-639-1'
 
 import { dispatch } from '../lib/dispatcher'
+import * as platformDialog from '../lib/platform/dialog'
 
 export default class SubtitlesController {
   constructor (state) {
@@ -15,13 +15,19 @@ export default class SubtitlesController {
   }
 
   openSubtitles () {
-    const filenames = remote.dialog.showOpenDialogSync({
+    platformDialog.showOpenDialog({
       title: 'Select a subtitles file.',
       filters: [{ name: 'Subtitles', extensions: ['vtt', 'srt'] }],
       properties: ['openFile']
     })
-    if (!Array.isArray(filenames)) return
-    this.addSubtitles(filenames, true)
+      .then(filenames => {
+        if (filenames.length === 0) return // They clicked Cancel
+        this.addSubtitles(filenames, true)
+        // dispatch()'s own update() already ran while the dialog was
+        // open, so the new subtitles need one of their own.
+        dispatch('update')
+      })
+      .catch(err => dispatch('error', err))
   }
 
   selectSubtitle (ix) {
