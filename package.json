@@ -17,7 +17,7 @@
     "open-config": "node ./bin/open-config.js",
     "package": "node ./bin/package.js",
     "start": "npm run build && electron --no-sandbox .",
-    "test": "npm run lint && depcheck --ignores=standard,eslint,@babel/eslint-parser --ignore-dirs=build,build-vite,dist && npm run test-unit",
+    "test": "npm run lint && depcheck --ignores=standard,eslint,@babel/eslint-parser,madr --ignore-dirs=build,build-vite,dist && npm run test-unit",
     "test-unit": "npm run build:main && tape test/unit/*.js",
     "lint": "standard && npm run lint:boundary",
     "lint:boundary": "eslint --no-eslintrc -c eslint-boundary.config.js src/renderer",
