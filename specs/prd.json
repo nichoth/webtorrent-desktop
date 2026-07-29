@@ -588,8 +588,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 34,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "`standard` has no `rules` escape hatch, so the rule lives in a standalone `eslint-boundary.config.js` run with `--no-eslintrc` by a new `lint:boundary` script; `lint` is now `standard && lint:boundary` and `test` calls `lint`. `eslint` 8.15.0 became an explicit devDependency (already resolved transitively; one-line lock diff) and joined depcheck's --ignores. Exemptions: a directory glob for lib/platform/** plus exactly two per-file overrides (webtorrent.js, lib/cast.js), each commented as a deferred casualty. AC-5 verified literally -- `import os from 'os'` at line 1 of lib/dispatcher.js stopped `npm test` at lint:boundary before depcheck ran, then reverted. Deviation: US-026 predicted this story would supersede test/unit/platform-boundary.js. It does not. `no-restricted-imports` cannot see `require()`, `ipcRenderer.` member reads, `wt-` channel strings or `new remote.Menu`, so deleting the source scan would have lost coverage; it stayed, gained a `require()` check over the same specifier list, and both stale comments were corrected. New test/unit/lint-boundary.js drives the config through ESLint's Node API (46 assertions). No file under src/ changed."
     },
     {
       "id": "US-035",

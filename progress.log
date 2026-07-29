@@ -3,12 +3,41 @@
 Consolidated, reusable knowledge. Re-read in full every session -- keep
 it tight.
 
-- **Test scripts.** `npm run lint` is `standard`. `npm test` is
-  `standard && depcheck && npm run test-unit`. Since US-019
+- **Test scripts.** Since US-034 `npm run lint` is
+  `standard && npm run lint:boundary`, and `npm test` is
+  `npm run lint && depcheck && npm run test-unit`. Since US-019
   `npm run test-unit` = `npm run build:main && tape test/unit/*.js`:
   unit tests are CommonJS and require the Babel output under `build/`,
   never the ESM sources under `src/`. New files in `test/unit/` are
   globbed, no registration needed. Details in `test/AGENTS.md`.
+- **`standard` cannot take custom rules.** Its `standard` key in
+  `package.json` accepts only `ignore`, `globals`, `env`, `parser`,
+  `plugins` and `settings` -- there is no `rules` escape hatch. Any
+  project-specific rule therefore needs a second, standalone ESLint
+  run. US-034's is `eslint-boundary.config.js` at the repo root, run
+  by `npm run lint:boundary` with `--no-eslintrc` so the two configs
+  never see each other. `eslint` (8.15.0) is now an explicit
+  devDependency rather than a hoisted transitive of `standard`, and is
+  in depcheck's `--ignores` list because it is only ever reached from
+  an npm script. `standard-engine` sets `useEslintrc: false`, so a
+  root ESLint config never leaks into a `standard` run -- but name the
+  file something other than `.eslintrc.*` anyway.
+- **`no-restricted-imports` sees `import` declarations only.** It does
+  not see `require()`, which is the one deferral mechanism that
+  actually works in this renderer (see the dynamic-`import()` entry
+  below). So an import-specifier lint rule alone cannot close the
+  boundary: the `require()` spellings, and every usage-level concern
+  (`ipcRenderer.` member reads, `wt-` channel strings,
+  `new remote.Menu`), stay in the source scan in
+  `test/unit/platform-boundary.js`. The two are complementary --
+  do not delete either believing the other covers it.
+- **Test an ESLint config through the Node API, not by shelling out.**
+  `new ESLint({ cwd, useEslintrc: false, overrideConfigFile })` plus
+  `lintText(source, { filePath })` lints synthetic code at a path that
+  need not exist, which is the only way to prove an `overrides`
+  exemption actually exempts without dropping probe files into
+  `src/`. `lintFiles()` on the real tree is the companion assertion.
+  See `test/unit/lint-boundary.js`.
 - **`npm run test-integration` is broken and was broken before this
   branch.** Spectron 19 cannot drive Electron 27 under the installed
   Node (v25): every run dies with `Error: Application not running` on
@@ -3086,4 +3115,92 @@ session can re-run the same grep and compare.
   sort -u`. Note the trailing `[a-z]` -- without it the family prefixes
   `'wt-ready-'` and `'wt-server-'` are counted as static channels and
   the total reads 26.
+---
+
+## 2026-07-28 - US-034
+
+Enforced the shim boundary with a real lint rule.
+
+- `eslint-boundary.config.js` (new, repo root): a standalone ESLint
+  config setting exactly one rule, `no-restricted-imports`, over
+  `src/renderer/**/*.js`. Banned specifiers: `electron`,
+  `@electron/remote`, `fs`, `os`, `crypto`, `http`, plus the
+  `fs/promises`, `node:` and `original-fs` spellings of the same
+  modules so the ban cannot be sidestepped by renaming the import.
+  Parser is `@babel/eslint-parser`, the same one `standard` uses, so
+  the rule parses exactly what `standard` parses -- JSX in `.js`
+  included. Exemptions in override order: a directory glob for
+  `src/renderer/lib/platform/**/*.js`, then exactly two per-file
+  overrides for the deferred casualties `src/renderer/webtorrent.js`
+  and `src/renderer/lib/cast.js`, each commented as such.
+- `package.json`: new `lint:boundary` script
+  (`eslint --no-eslintrc -c eslint-boundary.config.js src/renderer`);
+  `lint` is now `standard && npm run lint:boundary`; `test` calls
+  `npm run lint` instead of `standard` directly, so there is one
+  source of truth. `eslint` 8.15.0 added as an explicit devDependency
+  (it was already resolved at 8.15.0 as a transitive of `standard`;
+  the lock diff is one line) and added to depcheck's `--ignores`.
+- `test/unit/lint-boundary.js` (new, 46 assertions): drives the config
+  through ESLint's Node API. Asserts every banned specifier is
+  rejected with a message pointing at the shim, that the side-effect
+  (`import 'fs'`) and re-export (`export {x} from 'fs'`) forms are
+  caught too, that `path` / `react` / relative shim imports are still
+  allowed, that all four exempt paths (including a not-yet-existing
+  new shim module) may import freely, that files outside
+  `src/renderer/` are untouched by the config, that exactly two
+  per-file overrides exist, and that the real renderer tree lints
+  clean.
+- `test/unit/platform-boundary.js`: added a `require()` counterpart
+  check over the same specifier list, and rewrote the header comment.
+- Docs: new "Enforcing the boundary" section in
+  `docs/platform-shim.md`; `test/AGENTS.md` and
+  `src/renderer/lib/platform/AGENTS.md` updated.
+
+### Acceptance criteria
+
+All seven met. AC-5 verified literally: added `import os from 'os'` as
+line 1 of `src/renderer/lib/dispatcher.js`, ran `npm test`, and the run
+stopped at `lint:boundary` with `'os' import is restricted from being
+used. The renderer must not reach Node builtins directly. Import it
+from src/renderer/lib/platform/ instead (FR-11)` -- before `depcheck`
+or the unit tests executed. Reverted; boundary lint back to exit 0.
+AC-6 ("no other eslint or standard setting is changed") holds: the
+`standard` key in `package.json` is untouched and the new config is
+run with `--no-eslintrc`.
+
+`npm test` exits 0: standard, lint:boundary, depcheck, 654/654 unit
+assertions. No file under `src/` changed, so FR-2 is unaffected; the
+launch check was run anyway and reports `init: 922.1ms` with no
+leftover processes.
+
+**Learnings for future iterations:**
+- **`standard` has no `rules` escape hatch.** Its config key accepts
+  only `ignore`, `globals`, `env`, `parser`, `plugins`, `settings`.
+  Every project-specific rule needs a second standalone ESLint run.
+  Consolidated at the top.
+- **US-034 does NOT supersede `test/unit/platform-boundary.js`,**
+  despite what `test/AGENTS.md` and that file's own header comment
+  predicted before this session. `no-restricted-imports` sees `import`
+  declarations only -- it cannot see `require('fs')`, `ipcRenderer.`
+  member reads, `wt-` channel strings, or `new remote.Menu`. Deleting
+  the source scan would have been a straight loss of coverage, so it
+  stayed and grew a `require()` check instead. Both stale comments
+  were corrected. The story's acceptance criteria never asked for the
+  deletion; that was a forward guess made in US-026.
+- **Order matters when probing a lint failure.** The first attempt at
+  the AC-5 verification appended `import os from 'os'` to the *end* of
+  `dispatcher.js`, and `standard` failed first on `import/first` --
+  which proves nothing about the new rule. Put the probe import on
+  line 1 so `standard` passes and the boundary rule is unambiguously
+  the thing that failed.
+- **ESLint's Node API is the right way to test a config.**
+  `lintText(source, { filePath })` lints a path that need not exist,
+  so exemption coverage can be asserted for a hypothetical future shim
+  module without creating a file under `src/` that a crashed run would
+  leave behind. Consolidated at the top.
+- **`depcheck` does not credit a devDependency used only from an npm
+  script.** `standard` and `@babel/eslint-parser` were already in
+  `--ignores` for that reason; `eslint` joins them. Adding a
+  tool-only devDependency means editing that list in the same commit
+  or `npm test` fails on the next line.
 ---

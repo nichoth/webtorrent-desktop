@@ -87,7 +87,12 @@ share code, so the engine seam can be reimplemented without touching
 - This directory is compiled by **both** Babel (`build/`, because
   `src/main/index.js` requires `../renderer/lib/state`) and Vite
   (`build-vite/`). Both must keep building.
-- The lint rule from US-034 exempts this directory. It is the only
-  place a direct `electron`, `@electron/remote`, `fs`, `os`, `crypto`
-  or `http` import is allowed, alongside the two deferred casualties
-  `webtorrent.js` and `lib/cast.js`.
+- The lint rule from US-034 (`eslint-boundary.config.js`, run by
+  `npm run lint:boundary` inside `npm run lint`) exempts this
+  directory. It is the only place a direct `electron`,
+  `@electron/remote`, `fs`, `os`, `crypto` or `http` import is
+  allowed, alongside the two deferred casualties `webtorrent.js` and
+  `lib/cast.js`. The exemption is a directory glob, so a new module
+  here needs no config change -- but adding a **new** host module to
+  the shim means adding its specifier to the ban list, or the next
+  file to reach for it directly will pass lint.

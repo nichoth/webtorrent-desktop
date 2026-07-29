@@ -121,10 +121,31 @@ the shim (`shell` and `clipboard`; plus, since US-027, the
 `.isMaximized` reads; plus, since US-028, any import of `fs`; plus,
 since US-029, `new remote.Menu` / `new remote.MenuItem`; plus, since
 US-030..US-032, any use of `ipcRenderer` at all and any `wt-` channel
-string). Each of US-027..US-032 added its concern to that list as it
-landed; US-034 supersedes the whole file with a lint rule.
+string; plus, since US-034, any `require()` of a banned host module).
+Each of US-027..US-032 added its concern to that list as it landed.
 Reading source rather than build output is the point -- do not
 repoint it at `build/`.
+
+**US-034 did not supersede this file.** The lint rule added there
+(`eslint-boundary.config.js`, run by `npm run lint:boundary` and
+covered by `test/unit/lint-boundary.js`) bans the import
+**specifiers** -- `electron`, `@electron/remote`, `fs`, `os`,
+`crypto`, `http` -- under `src/renderer/`, with
+`src/renderer/lib/platform/` exempt by directory glob and exactly two
+per-file overrides for the deferred casualties `webtorrent.js` and
+`lib/cast.js`. It catches a brand new file reaching for a host module,
+which the concern-based checks here would miss. It cannot see
+`ipcRenderer.` member reads, `wt-` channel strings, `new remote.Menu`,
+or any `require()` call, which is what this file is for. Add a new
+banned **specifier** to the lint config; add a new banned **usage** to
+this file.
+
+`lint-boundary.js` drives the config through ESLint's Node API
+(`new ESLint({ useEslintrc: false, overrideConfigFile })`) rather than
+shelling out, so it can `lintText()` synthetic sources at a chosen
+`filePath` and prove an exemption actually exempts without creating a
+throwaway file under `src/`. Do not rewrite it to write probe files:
+a crashed run would leave them behind for `standard` to trip over.
 
 The OS-IPC check walked a hand-maintained file list while the
 migration was partial. Since US-031 it walks the whole renderer minus

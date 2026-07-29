@@ -4,9 +4,17 @@ const path = require('path')
 
 // Static boundary check (FR-8): once a shim module's call sites are
 // migrated, nothing outside `src/renderer/lib/platform/` may reach the
-// corresponding Electron API directly again. This grows one concern at
-// a time as the US-026..US-032 migrations land; US-034 replaces it with
-// a lint rule covering the whole surface.
+// corresponding Electron API directly again. This grew one concern at
+// a time as the US-026..US-032 migrations landed.
+//
+// US-034 added a lint rule (`eslint-boundary.config.js`, driven by
+// `test/unit/lint-boundary.js`) but did NOT replace this file. The two
+// cover different things and both are needed: the lint rule bans the
+// import *specifiers*, which catches a brand new file reaching for a
+// host module; this file bans the *concerns* -- `ipcRenderer.` member
+// reads, `wt-` channel strings, `new remote.Menu`, `remote.dialog` --
+// which no import-level rule can express, plus the `require()`
+// spellings that `no-restricted-imports` does not see.
 //
 // It reads the ESM sources under `src/` rather than the Babel output,
 // because the boundary is a property of the source we hand to the
@@ -19,6 +27,13 @@ const SHIM = path.join(RENDERER, 'lib', 'platform')
 // FR-4 exempts the hidden WebTorrent window from the shim: it is a
 // Node process by design and keeps its own `require('fs')`.
 const EXEMPT = new Set([path.join(RENDERER, 'webtorrent.js')])
+
+// The two deferred casualties, matching the per-file overrides in
+// `eslint-boundary.config.js`.
+const DEFERRED = new Set([
+  path.join(RENDERER, 'webtorrent.js'),
+  path.join(RENDERER, 'lib', 'cast.js')
+])
 
 function rendererSources () {
   const out = []
@@ -167,6 +182,37 @@ test('no renderer file outside the shim builds a wt-* channel string',
         .filter(({ line }) => /['"`]wt-/.test(line))
         .map(({ line, n }) => n + ': ' + line.trim())
       t.deepEqual(hits, [], rel + ' names no wt-* channel')
+    }
+    t.end()
+  })
+
+// US-034: `no-restricted-imports` only sees `import` declarations, so
+// the lint rule cannot stop a renderer file from reaching a host
+// module through a call-scoped `require()` -- which is exactly the
+// escape hatch `lib/cast.js` uses for the casting libraries, and the
+// only deferral mechanism that works in this renderer at all. This
+// covers the same specifier list for the `require()` spelling.
+test('no renderer file outside the shim requires a banned host module',
+  function (t) {
+    const files = rendererSources().filter((f) => !DEFERRED.has(f))
+    t.ok(files.length > 20, 'walked the renderer sources')
+    const banned = [
+      'electron', '@electron/remote',
+      'fs', 'fs/promises', 'original-fs',
+      'os', 'crypto', 'http'
+    ]
+    const pattern = new RegExp(
+      'require\\s*\\(\\s*[\'"](node:)?(' +
+      banned.map((s) => s.replace('/', '\\/')).join('|') +
+      ')[\'"]\\s*\\)'
+    )
+    for (const file of files) {
+      const rel = path.relative(RENDERER, file)
+      const hits = fs.readFileSync(file, 'utf8').split('\n')
+        .map((line, i) => ({ line, n: i + 1 }))
+        .filter(({ line }) => pattern.test(line))
+        .map(({ line, n }) => n + ': ' + line.trim())
+      t.deepEqual(hits, [], rel + ' requires no host module directly')
     }
     t.end()
   })

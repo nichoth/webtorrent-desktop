@@ -684,4 +684,42 @@ exactly two renderer files keep direct Electron and Node imports:
 - `src/renderer/lib/cast.js`, which runs an `http` server in the
   renderer and needs a full reimplementation.
 
-US-034 adds the lint rule and the two per-file overrides.
+## Enforcing the boundary
+
+US-034 makes the boundary a build failure rather than a convention.
+
+`eslint-boundary.config.js` at the repo root is a standalone ESLint
+config -- it does not extend, override, or read `standard`'s settings,
+and `standard` does not read it. It sets exactly one rule,
+`no-restricted-imports`, over `src/renderer/**/*.js`, banning
+`electron`, `@electron/remote`, `fs`, `os`, `crypto` and `http`, plus
+the `fs/promises`, `node:` and `original-fs` spellings of the same
+modules. `os` and `crypto` are preventive: no renderer file has used
+either since the US-002 telemetry deletion and neither has a shim
+module, so the ban means the next use has to add one.
+
+Exemptions, in override order:
+
+1. `src/renderer/lib/platform/**/*.js` -- the shim is the boundary,
+   and is the one place these imports belong. This is a directory
+   glob, so a new shim module is exempt without editing the config.
+2. `src/renderer/webtorrent.js` -- deferred casualty (FR-4).
+3. `src/renderer/lib/cast.js` -- deferred casualty (US-013).
+
+Those two files are the only per-file overrides, and
+`test/unit/lint-boundary.js` asserts that stays true.
+
+Wiring: `npm run lint:boundary` runs the config with `--no-eslintrc`;
+`npm run lint` is `standard && npm run lint:boundary`; `npm test` runs
+`npm run lint` first, so a direct host import fails the build. Adding
+`import os from 'os'` to `lib/dispatcher.js` and running `npm test`
+stops the run at `lint:boundary` with `'os' import is restricted from
+being used`, before `depcheck` or the unit tests execute.
+
+`no-restricted-imports` sees `import` declarations only. The
+`require()` spellings of the same specifiers, and the usage-level
+concerns no import rule can express (`ipcRenderer.` member reads,
+`wt-` channel strings, `new remote.Menu`, `remote.dialog`), stay in
+the source scan in `test/unit/platform-boundary.js`. The two checks
+are complementary; neither replaces the other. Add a new banned
+specifier to the lint config, a new banned usage to the scan.
