@@ -2935,3 +2935,76 @@ watching the dock.
     only for the inverse assertion (what has *not* moved yet), where
     the list failing on change is the feature.
 ---
+
+## 2026-07-28 - US-032
+Migrated the `wt-*` engine call sites in the four engine-facing
+controllers onto `lib/platform/ipc-engine.js`. `src/renderer/` now has
+no `ipcRenderer` and no `electron` import outside `lib/platform/` and
+`webtorrent.js` (FR-4's counterparty), which is the whole point of the
+story: the engine is now a swappable unit behind one module.
+
+Files changed:
+- `src/renderer/controllers/torrent-controller.js` -- `stopTorrenting`,
+  `saveTorrentFile`, `generateTorrentPoster`
+- `src/renderer/controllers/torrent-list-controller.js` --
+  `startTorrenting` (x2), `createTorrent`, `setGlobalTrackers`,
+  `stopTorrenting` (x3), `selectFiles`; gained `reportErrors` from
+  `lib/dispatcher`
+- `src/renderer/controllers/playback-controller.js` --
+  `onTorrentReadyFor` (x2), `startServer`, `onServerRunning`,
+  `getAudioMetadata`, `stopServer`
+- `src/renderer/controllers/media-controller.js` -- `onServerRunning`
+- `src/renderer/lib/platform/ipc-engine.js` -- docblock only
+- `test/unit/engine-ipc-call-sites.js` -- new
+- `test/unit/platform-boundary.js`, `test/unit/os-ipc-call-sites.js`,
+  `test/AGENTS.md`, `src/renderer/controllers/AGENTS.md`
+
+Every migrated command is wrapped in `reportErrors(...)` -- the shim
+returns promises and a floating rejection is invisible. The two
+one-shot listeners became `{ once: true }` options rather than a
+separate export, and the dynamic `wt-ready-${infoHash}` subscriptions
+became `ipcEngine.onTorrentReadyFor(infoHash, fn, { once: true })`, so
+no caller builds a channel string.
+
+Verification: `npm test` green (570 assertions), `npm run lint` clean,
+`npm run build` clean with 0 externalization warnings, and a launch
+check showing `'Main Window'` and `init: 811ms` with no new severity-3
+console errors. The six-step manual smoke test was **not** run --
+non-interactive session. AC-6 names torrent add, progress updates,
+file selection and streaming start/stop; the unit tests cover the
+call sites and arguments for all four, but nothing here proves the
+engine end actually reacts, so that is the residual risk.
+
+- **Learnings for future iterations:**
+  - **`wt-server-${infoHash}` has no subscriber in the renderer UI.**
+    `webtorrent.js` sends it, but only `wt-server-running` is listened
+    for. `ipcEngine.onServerRunningFor` therefore has zero call sites
+    after this story -- that is not an omission, and US-033 should
+    document the channel as part of the protocol regardless.
+  - **Two unit files compiling the same controller collide.** The
+    compiled copy is keyed in `require.cache` by its emitted path, so
+    whichever test file loads first (glob order) hands its stubs to
+    the other. `os-ipc-call-sites.js` and `torrent-context-menu.js`
+    already compile `media-controller.js` / `torrent-list-controller.js`
+    into `build/renderer/controllers/`; the fix is to emit under a
+    suffixed file name in the same directory (the *directory* is what
+    resolves `../lib/...`, not the name).
+  - **Stub every built module the controller graph reaches, not just
+    the shim under test.** Letting a real shim module load in your
+    file binds *your* `electron` stub into it for the whole run, and
+    the failure surfaces in an unrelated later file. Two real cases
+    here: `torrent-list-controller` -> `lib/platform/clipboard` broke
+    `platform-clipboard.js`, and `playback-controller` -> `lib/state`
+    -> `lib/migrations` broke `migrations.js`. Symptom is always "a
+    test I never touched now fails"; the cause is always the first
+    require winning.
+  - **Migrating a file can break another story's test through a new
+    import.** `media-controller` gaining `ipc-engine` made
+    `os-ipc-call-sites.js` load the real `ipc-engine`, which then
+    failed `platform-ipc-engine.js`. Whenever you add a shim import to
+    a file some other unit test compiles, that test needs the new
+    module stubbed too.
+  - **A `\bipcRenderer\b` ban catches prose.** `lib/state.js` mentions
+    the word in a comment. Match `ipcRenderer\s*\.` for the usage ban
+    and let the import check cover the rest.
+---

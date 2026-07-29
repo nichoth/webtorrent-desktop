@@ -14,9 +14,15 @@
  * `wt-server-${infoHash}`) are addressed by passing the info hash as
  * an argument; no caller builds a channel string.
  *
- * Implemented in US-021. `main.js` moved onto it in US-031; the four
- * engine-facing controllers follow in US-032, and the protocol is
- * documented in US-033. See docs/platform-shim.md.
+ * Implemented in US-021. `main.js` moved onto it in US-031 and the
+ * four engine-facing controllers in US-032, so every renderer call
+ * site now goes through here. The protocol itself is documented in
+ * US-033. See docs/platform-shim.md.
+ *
+ * `onServerRunningFor` has no caller in the renderer UI: the engine
+ * sends `wt-server-${infoHash}` but nothing subscribes to it. It is
+ * kept because the channel is part of the protocol a librqbit
+ * implementation has to satisfy.
  */
 
 import { ipcRenderer } from 'electron'

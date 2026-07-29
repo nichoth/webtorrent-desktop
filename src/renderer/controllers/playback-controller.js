@@ -1,4 +1,3 @@
-import { ipcRenderer } from 'electron'
 import path from 'path'
 
 import * as Cast from '../lib/cast'
@@ -7,6 +6,7 @@ import { UnplayableFileError, UnplayableTorrentError } from '../lib/errors'
 import * as sound from '../lib/sound'
 import * as TorrentPlayer from '../lib/torrent-player'
 import * as TorrentSummary from '../lib/torrent-summary'
+import * as ipcEngine from '../lib/platform/ipc-engine'
 import * as ipcOs from '../lib/platform/ipc-os'
 import * as shell from '../lib/platform/shell'
 import * as Playlist from '../lib/playlist'
@@ -253,15 +253,16 @@ export default class PlaybackController {
 
     if (torrentSummary.status === 'paused') {
       dispatch('startTorrentingSummary', torrentSummary.torrentKey)
-      ipcRenderer.once('wt-ready-' + torrentSummary.infoHash,
-        () => onTorrentReady())
+      reportErrors(ipcEngine.onTorrentReadyFor(
+        torrentSummary.infoHash, () => onTorrentReady(), { once: true }))
     } else {
       onTorrentReady()
     }
 
     function onTorrentReady () {
-      ipcRenderer.send('wt-start-server', torrentSummary.infoHash)
-      ipcRenderer.once('wt-server-running', () => { state.playing.isReady = true })
+      reportErrors(ipcEngine.startServer(torrentSummary.infoHash))
+      reportErrors(ipcEngine.onServerRunning(
+        () => { state.playing.isReady = true }, { once: true }))
     }
   }
 
@@ -302,14 +303,16 @@ export default class PlaybackController {
 
     // if it's audio, parse out the metadata (artist, title, etc)
     if (torrentSummary.status === 'paused') {
-      ipcRenderer.once('wt-ready-' + torrentSummary.infoHash, getAudioMetadata)
+      reportErrors(ipcEngine.onTorrentReadyFor(
+        torrentSummary.infoHash, getAudioMetadata, { once: true }))
     } else {
       getAudioMetadata()
     }
 
     function getAudioMetadata () {
       if (state.playing.type === 'audio') {
-        ipcRenderer.send('wt-get-audio-metadata', torrentSummary.infoHash, index)
+        reportErrors(
+          ipcEngine.getAudioMetadata(torrentSummary.infoHash, index))
       }
     }
 
@@ -365,7 +368,7 @@ export default class PlaybackController {
     restoreBounds(state)
 
     // Tell the WebTorrent process to kill the torrent-to-HTTP server
-    ipcRenderer.send('wt-stop-server')
+    reportErrors(ipcEngine.stopServer())
 
     reportErrors(ipcOs.notifyPlayerClose())
 

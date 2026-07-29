@@ -37,10 +37,16 @@ Avoid `addTorrent` / `deleteTorrent` / `openTorrentContextMenu` -- the
 first two write the real saved-state file and the third opens a
 blocking native menu.
 
-Since US-030 the only `ipcRenderer` left in this directory is the
-`wt-*` engine protocol, which moves to `lib/platform/ipc-engine.js` in
-US-032. Everything else goes through `lib/platform/`. Do not add a new
-direct `electron` import here.
+Since US-032 there is no `ipcRenderer` and no `electron` import left in
+this directory at all: OS channels go through
+`lib/platform/ipc-os.js`, the `wt-*` engine protocol through
+`lib/platform/ipc-engine.js`. Do not add one back --
+`test/unit/platform-boundary.js` fails on any channel string here.
+
+The two dynamic engine channels are addressed by info hash, not by
+name: call `ipcEngine.onTorrentReadyFor(infoHash, listener, { once:
+true })` rather than building `'wt-ready-' + infoHash`. A one-shot
+listener is `{ once: true }`, not a separate export.
 
 **Every shim call is async, and `dispatch()` re-renders synchronously.**
 `dispatch(action)` calls the handler and then `update()` in the same

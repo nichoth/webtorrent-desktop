@@ -120,18 +120,20 @@ the shim (`shell` and `clipboard`; plus, since US-027, the
 `@electron/remote` dialog API and the `getCurrentWindow().isVisible` /
 `.isMaximized` reads; plus, since US-028, any import of `fs`; plus,
 since US-029, `new remote.Menu` / `new remote.MenuItem`; plus, since
-US-030/US-031, any `ipcRenderer` channel that is not `wt-`-prefixed).
-Each of US-027..US-032 adds its concern to that list as it lands;
-US-034 supersedes the whole file with a lint rule.
+US-030..US-032, any use of `ipcRenderer` at all and any `wt-` channel
+string). Each of US-027..US-032 added its concern to that list as it
+landed; US-034 supersedes the whole file with a lint rule.
 Reading source rather than build output is the point -- do not
 repoint it at `build/`.
 
 The OS-IPC check walked a hand-maintained file list while the
 migration was partial. Since US-031 it walks the whole renderer minus
-`webtorrent.js`, so there is no list to keep in step any more. Its
-counterpart test -- "the `wt-*` call sites are left alone" -- still
-names files, on purpose: it asserts what has *not* been migrated yet,
-so it has to fail when the set changes.
+`webtorrent.js`, and since US-032 -- with both IPC concerns migrated --
+the OS and `wt-*` checks collapsed into one: no `ipcRenderer` and no
+`wt-` string literal anywhere outside `lib/platform/`, plus an exact
+assertion on which renderer files still import `electron` at all (only
+`webtorrent.js`). There is no "left alone for a later story"
+counterpart any more, because there is nothing left.
 
 The `fs` check is the one exception to the rule below: `fs` is a Node
 builtin with a single concern behind it, so it bans the specifier
@@ -156,9 +158,10 @@ built paths, and record dispatches through the real
 `lib/dispatcher`'s `setDispatch()` rather than stubbing it.
 
 `test/unit/os-ipc-call-sites.js` follows the same recipe for the
-US-030 controllers. Two cross-file hazards it had to solve, both
-because `tape test/unit/*.js` is a **single process** that requires
-every file before running any test:
+US-030 controllers and `test/unit/engine-ipc-call-sites.js` for the
+US-032 ones. Cross-file hazards these had to solve, all because
+`tape test/unit/*.js` is a **single process** that requires every file
+before running any test:
 
 - **`setDispatch()` is process-wide.** Registering it once at require
   time means the last file loaded wins for the entire run. Call
@@ -171,6 +174,18 @@ every file before running any test:
   module under test keeps the stub afterwards. Stubs of `electron` and
   `@electron/remote` do not need this; every file that cares seeds its
   own.
+- **Two files compiling the same controller collide.** The compiled
+  copy is keyed in `require.cache` by its emitted path, so whichever
+  file loads first hands its stubs to the other.
+  `engine-ipc-call-sites.js` emits under a `.engine-test.js` suffix
+  into the same directory (the directory is what resolves
+  `../lib/...`, not the file name).
+- **Stub every built module the controller graph reaches, not just the
+  one under test.** Letting a real shim module load here binds *this*
+  file's `electron` stub into it for the whole run, which breaks
+  `platform-clipboard.js` / `platform-ipc-engine.js` later in the
+  glob. `playback-controller` reaches `lib/state` -> `lib/migrations`
+  that way, which is exactly what `migrations.js` tests against.
 
 ## Testing `src/renderer/main.js`
 

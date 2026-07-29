@@ -1,6 +1,5 @@
-import { ipcRenderer } from 'electron'
-
 import { dispatch, reportErrors } from '../lib/dispatcher'
+import * as ipcEngine from '../lib/platform/ipc-engine'
 import * as ipcOs from '../lib/platform/ipc-os'
 import * as Playlist from '../lib/playlist'
 
@@ -73,7 +72,9 @@ export default class MediaController {
     }
 
     if (state.server != null) onServerRunning()
-    else ipcRenderer.once('wt-server-running', onServerRunning)
+    else {
+      reportErrors(ipcEngine.onServerRunning(onServerRunning, { once: true }))
+    }
   }
 
   externalPlayerNotFound () {

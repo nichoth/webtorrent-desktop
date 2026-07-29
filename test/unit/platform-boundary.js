@@ -131,58 +131,64 @@ test('no renderer code outside the shim imports fs', function (t) {
   t.end()
 })
 
-// US-030: the OS-facing IPC concern. `ipc-os.js` owns every renderer
-// <-> main channel except the `wt-*` engine protocol (FR-9), so the
-// pattern bans `ipcRenderer.<method>('<channel>'` for any channel that
-// is not `wt-`-prefixed. The `wt-*` sites in these same files are
-// migrated in US-032 and must keep passing until then.
-//
-// US-031 finished the job in `main.js`, so the scope is now the whole
-// renderer minus `webtorrent.js` (exempt by FR-4) -- no file list to
-// keep in step with the migrations any more.
-const OS_IPC = /ipcRenderer\s*\.\s*\w+\s*\(\s*'(?!wt-)/
-
-test('no renderer file uses a non-wt-* ipcRenderer channel', function (t) {
-  const files = rendererSources().filter((f) => !EXEMPT.has(f))
-  t.ok(files.length > 20, 'walked the renderer sources')
-  for (const file of files) {
-    const rel = path.relative(RENDERER, file)
-    const hits = fs.readFileSync(file, 'utf8').split('\n')
-      .map((line, i) => ({ line, n: i + 1 }))
-      .filter(({ line }) => OS_IPC.test(line))
-      .map(({ line, n }) => n + ': ' + line.trim())
-    t.deepEqual(hits, [], rel + ' routes OS channels through the shim')
-  }
-  t.end()
-})
-
-// The counterpart: the `wt-*` sites in the controllers are explicitly
-// out of scope until US-032, so assert they survived rather than
-// leaving "did we migrate too much?" to a later smoke test. `main.js`
-// is no longer among them -- US-031's acceptance criteria required its
-// electron import to go, which meant taking its `wt-*` listeners with
-// it.
-test('the controllers\' wt-* call sites are left alone for US-032',
+// US-030/US-031 covered the OS-facing IPC concern (`ipc-os.js`) and
+// US-032 the engine protocol (`ipc-engine.js`). Between them the two
+// shims own every renderer <-> main channel (FR-9), so there is no
+// longer a channel prefix to carve out: nothing outside
+// `lib/platform/` may name a channel at all. `webtorrent.js` is the
+// counterparty, exempt by FR-4.
+test('no renderer file outside the shim touches ipcRenderer',
   function (t) {
-    const wt = /ipcRenderer\s*\.\s*\w+\s*\(\s*'wt-/
-    const withEngineCalls = [
-      'controllers/media-controller.js',
-      'controllers/torrent-controller.js',
-      'controllers/folder-watcher-controller.js',
-      'controllers/prefs-controller.js',
-      'controllers/torrent-list-controller.js',
-      'controllers/playback-controller.js',
-      'lib/migrations.js',
-      'main.js'
-    ].filter((rel) => {
-      const full = path.join(RENDERER, ...rel.split('/'))
-      return wt.test(fs.readFileSync(full, 'utf8'))
-    })
-    t.deepEqual(withEngineCalls, [
-      'controllers/media-controller.js',
-      'controllers/torrent-controller.js',
-      'controllers/torrent-list-controller.js',
-      'controllers/playback-controller.js'
-    ], 'the four engine-facing controllers still talk wt-* directly')
+    const files = rendererSources().filter((f) => !EXEMPT.has(f))
+    t.ok(files.length > 20, 'walked the renderer sources')
+    for (const file of files) {
+      const rel = path.relative(RENDERER, file)
+      const hits = fs.readFileSync(file, 'utf8').split('\n')
+        .map((line, i) => ({ line, n: i + 1 }))
+        .filter(({ line }) => /\bipcRenderer\s*\./.test(line))
+        .map(({ line, n }) => n + ': ' + line.trim())
+      t.deepEqual(hits, [], rel + ' routes every channel through a shim')
+    }
+    t.end()
+  })
+
+// The dynamic channel families are the one place a caller could route
+// through the shim and still know the protocol: building
+// `'wt-ready-' + infoHash` and handing it over defeats the point. The
+// shim takes the info hash instead (`onTorrentReadyFor`), so no
+// `wt-`-prefixed string literal belongs outside it.
+test('no renderer file outside the shim builds a wt-* channel string',
+  function (t) {
+    const files = rendererSources().filter((f) => !EXEMPT.has(f))
+    for (const file of files) {
+      const rel = path.relative(RENDERER, file)
+      const hits = fs.readFileSync(file, 'utf8').split('\n')
+        .map((line, i) => ({ line, n: i + 1 }))
+        .filter(({ line }) => /['"`]wt-/.test(line))
+        .map(({ line, n }) => n + ': ' + line.trim())
+      t.deepEqual(hits, [], rel + ' names no wt-* channel')
+    }
+    t.end()
+  })
+
+// US-032 AC-4: with both IPC concerns migrated, the only renderer
+// modules left importing Electron are the shim itself (skipped by the
+// walk) and the hidden WebTorrent window (FR-4). AC-4 also exempts
+// `lib/cast.js`, but it reaches Chromecast through `chromecasts` /
+// `airplay-js`, not Electron, so the assertion below is exact rather
+// than allowing it.
+test('only the shim and webtorrent.js import electron',
+  function (t) {
+    const patterns = [
+      /from\s*['"](electron|@electron\/remote)['"]/,
+      /require\s*\(\s*['"](electron|@electron\/remote)['"]\s*\)/
+    ]
+    const importers = rendererSources()
+      .filter((file) => patterns.some((re) =>
+        re.test(fs.readFileSync(file, 'utf8'))))
+      .map((file) => path.relative(RENDERER, file).split(path.sep).join('/'))
+      .sort()
+    t.deepEqual(importers, ['webtorrent.js'],
+      'no renderer module outside the exempt set imports electron')
     t.end()
   })

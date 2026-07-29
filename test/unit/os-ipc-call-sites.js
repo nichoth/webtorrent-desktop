@@ -44,7 +44,7 @@ let record = null
 const { setDispatch } = require(path.join(BUILT, 'lib', 'dispatcher'))
 
 function reset () {
-  record = { os: [], dispatches: [], sent: [], once: [] }
+  record = { os: [], dispatches: [], engine: [], once: [] }
   rejectWith = null
   // `lib/dispatcher` holds one process-wide dispatch and every unit
   // test file that requires it registers its own. Re-register per test
@@ -106,14 +106,16 @@ ipcOsStub.checkForExternalPlayer = async (...args) => {
 
 stub(path.join(BUILT, 'lib', 'platform', 'ipc-os'), ipcOsStub)
 
-// media-controller keeps one `wt-*` listener until US-032.
-stub('electron', {
+// Since US-032 media-controller's one engine listener goes through
+// `ipc-engine.js`. Stub it here rather than letting the real one load:
+// it would bind whatever `electron` stub is current for the whole run,
+// and `platform-ipc-engine.js` tests the real module further down the
+// glob (test/AGENTS.md).
+stub(path.join(BUILT, 'lib', 'platform', 'ipc-engine'), {
   __esModule: true,
-  ipcRenderer: {
-    send (...args) { record.sent.push(args) },
-    on () {},
-    once (...args) { record.once.push(args) },
-    removeListener () {}
+  async onServerRunning (listener, options) {
+    record.once.push(['onServerRunning', listener, options])
+    return () => {}
   }
 })
 
@@ -139,7 +141,7 @@ test('the folder watcher starts and stops through the shim',
     controller.stop()
     await flush()
     t.deepEqual(record.os, [['stopFolderWatcher']], 'stop goes to the shim')
-    t.deepEqual(record.sent, [], 'nothing went out over ipcRenderer')
+    t.deepEqual(record.engine, [], 'nothing went out to the engine')
     t.end()
   })
 
@@ -261,8 +263,8 @@ test('launching the external player goes through the shim',
     t.end()
   })
 
-// The `wt-server-running` wait is engine protocol and stays on
-// ipcRenderer until US-032; it must still gate the shim call.
+// The server-running wait is engine protocol, so it belongs to the
+// other shim -- but it must still gate the OS-facing launch call.
 test('with no server yet, the player waits for the engine',
   async function (t) {
     reset()
@@ -277,6 +279,7 @@ test('with no server yet, the player waits for the engine',
     await flush()
     t.deepEqual(record.os, [], 'nothing launched yet')
     t.equal(record.once.length, 1, 'one listener was registered')
-    t.equal(record.once[0][0], 'wt-server-running', 'on the engine channel')
+    t.equal(record.once[0][0], 'onServerRunning', 'on the engine shim')
+    t.deepEqual(record.once[0][2], { once: true }, 'as a one-shot')
     t.end()
   })

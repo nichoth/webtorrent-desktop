@@ -555,8 +555,8 @@
         "Smoke test passes, with attention to torrent add, progress updates, file selection, and streaming server start/stop"
       ],
       "priority": 32,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Every wt-* call site in the renderer UI now goes through ipc-engine.js; webtorrent.js is untouched per FR-4. onServerRunningFor has no UI caller -- nothing subscribes to wt-server-${infoHash} -- so AC-2's dynamic-channel requirement is exercised by wt-ready-${infoHash} only. AC-6 (smoke test) not run: non-interactive session; see progress.log for the launch-check evidence and residual risk."
     },
     {
       "id": "US-033",

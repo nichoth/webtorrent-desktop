@@ -1,13 +1,13 @@
 import path from 'path'
-import { ipcRenderer } from 'electron'
 
-import { dispatch } from '../lib/dispatcher'
+import { dispatch, reportErrors } from '../lib/dispatcher'
 import { TorrentKeyNotFoundError } from '../lib/errors'
 import * as sound from '../lib/sound'
 import * as TorrentSummary from '../lib/torrent-summary'
 import * as clipboard from '../lib/platform/clipboard'
 import * as platformDialog from '../lib/platform/dialog'
 import * as fs from '../lib/platform/fs'
+import * as ipcEngine from '../lib/platform/ipc-engine'
 import * as menu from '../lib/platform/menu'
 import * as shell from '../lib/platform/shell'
 
@@ -40,7 +40,7 @@ export default class TorrentListController {
     const torrentKey = this.state.nextTorrentKey++
     const path = this.state.saved.prefs.downloadPath
 
-    ipcRenderer.send('wt-start-torrenting', torrentKey, torrentId, path)
+    reportErrors(ipcEngine.startTorrenting(torrentKey, torrentId, path))
 
     dispatch('backToList')
   }
@@ -75,7 +75,7 @@ export default class TorrentListController {
   createTorrent (options) {
     const state = this.state
     const torrentKey = state.nextTorrentKey++
-    ipcRenderer.send('wt-create-torrent', torrentKey, options)
+    reportErrors(ipcEngine.createTorrent(torrentKey, options))
     state.location.cancel()
   }
 
@@ -103,17 +103,17 @@ export default class TorrentListController {
     })
 
     function start () {
-      ipcRenderer.send('wt-start-torrenting',
+      reportErrors(ipcEngine.startTorrenting(
         s.torrentKey,
         TorrentSummary.getTorrentId(s),
         s.path,
         s.fileModtimes,
-        s.selections)
+        s.selections))
     }
   }
 
   setGlobalTrackers (globalTrackers) {
-    ipcRenderer.send('wt-set-global-trackers', globalTrackers)
+    reportErrors(ipcEngine.setGlobalTrackers(globalTrackers))
   }
 
   // TODO: use torrentKey, not infoHash
@@ -134,7 +134,7 @@ export default class TorrentListController {
       if (torrentSummary.status === 'downloading' ||
           torrentSummary.status === 'seeding') {
         torrentSummary.status = 'paused'
-        ipcRenderer.send('wt-stop-torrenting', torrentSummary.infoHash)
+        reportErrors(ipcEngine.stopTorrenting(torrentSummary.infoHash))
       }
     })
     sound.play('DISABLE')
@@ -152,7 +152,7 @@ export default class TorrentListController {
 
   pauseTorrent (torrentSummary, playSound) {
     torrentSummary.status = 'paused'
-    ipcRenderer.send('wt-stop-torrenting', torrentSummary.infoHash)
+    reportErrors(ipcEngine.stopTorrenting(torrentSummary.infoHash))
 
     if (playSound) sound.play('DISABLE')
   }
@@ -189,7 +189,8 @@ export default class TorrentListController {
 
     // Let the WebTorrent process know to start or stop fetching that file
     if (torrentSummary.status !== 'paused') {
-      ipcRenderer.send('wt-select-files', infoHash, torrentSummary.selections)
+      reportErrors(
+        ipcEngine.selectFiles(infoHash, torrentSummary.selections))
     }
   }
 
@@ -399,7 +400,7 @@ function showItemInFolder (torrentSummary) {
 }
 
 function deleteTorrentFile (torrentSummary, deleteData) {
-  ipcRenderer.send('wt-stop-torrenting', torrentSummary.infoHash)
+  reportErrors(ipcEngine.stopTorrenting(torrentSummary.infoHash))
 
   // remove torrent and poster file
   deleteFile(TorrentSummary.getTorrentPath(torrentSummary))
