@@ -11,6 +11,7 @@ Both reach Electron as CommonJS, but by two different routes, and
   `build-vite/renderer/main.js`, which `static/main.html` loads.
 - `npm run build:main` (`babel src --out-dir build`) compiles
   everything else: `src/config.js`, `src/main/**`,
+  `src/shared/**` (see `src/shared/AGENTS.md`),
   `src/renderer/webtorrent.js` (FR-4 exempts it from Vite) and
   `src/renderer/lib/**`, which both `webtorrent.js` and
   `src/main/index.js` require.

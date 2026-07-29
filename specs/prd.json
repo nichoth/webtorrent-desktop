@@ -665,8 +665,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 38,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "src/shared/wire.js added with a __wtWire tag for Uint8Array, Buffer, undefined and non-finite numbers, plus an escape for a payload key that collides with the tag. test/unit/wire.js round-trips one sample payload for all 24 channels (10 commands, 12 events, both dynamic families) and covers 24 malformed-input cases; 178 assertions. build/shared/wire.js is emitted by build:main with no build change. Full suite 1474 assertions green, lint clean. Nothing imports the module yet, so no launch check applied."
     },
     {
       "id": "US-039",

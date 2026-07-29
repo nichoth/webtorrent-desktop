@@ -3317,3 +3317,74 @@ leftover processes.
     `onPosterSaved` subscription; it is actually `main.js:376`. Grep
     for the symbol before quoting a line number in a new doc.
 ---
+
+## 2026-07-29 - US-038
+- Added `src/shared/wire.js`: the `wt-*` wire codec from ADR-012. ESM,
+  exports `encode(channel, args)` and `decode(message)` over a
+  `{ channel, args }` JSON envelope. JSON alone loses four things this
+  protocol actually sends, so each is tagged with a `__wtWire` marker
+  key: `Uint8Array`, `Buffer`, `undefined` and non-finite numbers.
+  Anything JSON cannot carry at all (function, symbol, bigint, raw
+  `ArrayBuffer`, non-byte typed array) throws in `encode` instead of
+  arriving as `null` or `{}`. `decode` validates the frame, the
+  channel, the arity and every tag, and throws rather than returning a
+  partial envelope.
+- Added `test/unit/wire.js`: 178 assertions. One sample payload
+  round-tripped for each of the 24 channels in the command and event
+  tables of `docs/platform-shim.md` (10 commands, 12 events, both
+  dynamic families), plus targeted tests for nested binary values,
+  `null` vs `undefined` argument positions, the tag-key collision
+  escape, non-finite numbers, and 24 malformed-input cases.
+- Added `src/shared/AGENTS.md`; noted `src/shared/**` in the
+  `build:main` list in `src/AGENTS.md`.
+- Files changed: `src/shared/wire.js` (new),
+  `src/shared/AGENTS.md` (new), `test/unit/wire.js` (new),
+  `src/AGENTS.md`, `progress.log`, `specs/prd.json`.
+- Full suite green: 1474 assertions, `npm run lint` clean.
+  `npm run build:main` emits `build/shared/wire.js` with no build
+  change -- `src/shared/` is outside the four Vite-owned `--ignore`
+  paths, so a new top-level directory under `src/` needs no
+  registration to be compiled or unit-testable. No app launch was
+  needed: nothing imports the module yet (US-039 onward wire it up).
+- **Learnings for future iterations:**
+  - **`null` vs `undefined` is the trap in this protocol, not
+    binary.** `JSON.stringify([undefined])` is `"[null]"`, and
+    `wt-warning`/`wt-error` send a *real* `null` for `torrentKey`. Any
+    codec that leans on plain JSON silently merges the two. Tagging
+    `undefined` also keeps `wt-start-torrenting`'s three optional
+    trailing arguments at their documented positions.
+  - **`Buffer` is a `Uint8Array` subclass**, so `instanceof
+    Uint8Array` catches both and `Buffer.isBuffer` is the only way to
+    tell them apart. Narrow a view to `new Uint8Array(v.buffer,
+    v.byteOffset, v.byteLength)` before encoding, or a `subarray`
+    ships its whole backing store.
+  - **`Buffer.from(x, 'base64')` and `atob` both silently ignore junk
+    characters**, so "decode throws on malformed input" needs an
+    explicit `/^[A-Za-z0-9+/]*={0,2}$/` plus a length check. The
+    decoder will not do it for you.
+  - **The prototype was already gone before this story.** Structured
+    clone stripped it too, which is why `player-page.js:943` uses
+    `BitField.prototype.get.call(...)`. So the correct expectation for
+    a round-tripped `Progress.bitfield` is a *plain* object carrying a
+    `Uint8Array` buffer -- `t.deepEqual` against a real `BitField`
+    instance fails on the constructor alone. That is the contract
+    working, not the codec losing data. `test/unit/wire.js` covers
+    both the instance the engine sends and the plain object the UI
+    receives.
+  - **`standard` overrides `operator-linebreak` to put `?` and `:` at
+    the start of the line**, which is the opposite of the global
+    CLAUDE.md ternary style. The project lint is the gate, so an
+    early-return `if` avoids the conflict entirely -- prefer that to
+    fighting either rule.
+  - **`standard` warns on `{ NaN: NaN }`** (`object-shorthand`, "will
+    be an error in the next version"). A `Map` of string to value is
+    the clean way to keep a non-finite lookup table.
+  - **`npx tape test/unit/<file>.js` runs against a stale `build/`.**
+    It is the right loop for iterating on a *test* file, but after
+    editing anything under `src/` re-run `npm run build:main` first --
+    or `npm run test-unit`, which does both.
+  - **`bitfield` is a real dependency (4.1.0)**, so a unit test may
+    require it without upsetting depcheck. It is CJS with a `.default`
+    export; `require('bitfield').default || require('bitfield')`
+    covers both interop shapes.
+---
