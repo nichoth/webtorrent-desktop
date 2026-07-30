@@ -391,6 +391,43 @@ it tight.
   forever. Whenever a story deletes a file, grep
   `eslint-boundary.config.js` and `test/unit/*boundary*.js` for its
   path.
+- **The Tauri host's document root is generated, so Cargo depends on
+  npm.** `src-tauri/tauri.conf.json` points `frontendDist` at
+  `../build-tauri`, which `bin/build-tauri.js` assembles by copying
+  `static/` and `build-vite/` side by side -- the shared
+  `static/main.html` reaches the bundle through a relative
+  `<script src="../build-vite/renderer/main.js">`, so the two have to
+  be siblings inside the asset root and the window URL is
+  `static/main.html`, not `main.html`. Symlinks do not work.
+  `tauri::generate_context!` embeds that directory **at compile time
+  even in dev** (only a `devUrl` skips it), so `cargo build`,
+  `cargo test` and `cargo clippy` in `src-tauri/` all fail until
+  `npm run build:tauri` has run, and `cargo run` keeps serving the
+  embedded copy until it is re-run. Details in `src-tauri/AGENTS.md`.
+- **The shared HTML tag is a classic `<script src>`**, so the Tauri
+  bundle cannot carry top-level `import`/`export` either, and
+  `type="module"` cannot be added while Electron loads the CJS build
+  from the same file. Whoever implements ADR-014's `WT_HOST` has to
+  check the emitted output for top-level import/export and reach for
+  `iife` if there are any; the ADR's "ESM" is not automatically safe.
+- **`cargo clippy` after `cargo build` recompiles the whole dependency
+  tree** (~250 crates, minutes) -- the clippy driver is a different
+  rustc, and the two contend for the `target/` lock, so never run
+  `tauri dev` beside one. Run it in the background rather than
+  concluding it hung, and note that a foreground command the harness
+  moves to the background mid-`cargo` may be killed outright, which
+  looks exactly like a silent clippy pass. Echo an exit code.
+- **Getting evidence out of the Tauri webview.** There is no
+  Electron-style `console-message` event, WKWebView says nothing on
+  stdout, and `screencapture` fails with "could not create image from
+  display" in a non-interactive session. The equivalent of the
+  `build/main/index.js` patch trick is a throwaway probe build of
+  `src-tauri/src/main.rs`: a `#[tauri::command] fn probe(message:
+  String)` that `println!`s, plus
+  `.append_invoke_initialization_script(...)` hooking
+  `window.addEventListener('error', ...)` and `console.error`. An
+  app-defined command needs no capability entry in v2. Revert
+  `main.rs` afterwards -- unlike `build/`, it is source-controlled.
 
 ---
 
@@ -4337,4 +4374,135 @@ launch was needed -- this story changes no shipped code.
     Vite 8 needs Node 20.19+. Left alone here because the story forbids
     code changes; worth folding into a Phase 4 story that touches
     `package.json` anyway.
+---
+
+## 2026-07-29 - US-051
+
+Scaffold the Tauri host: a second, launchable host alongside
+`src/main/` (ADR-014), loading the same `static/main.html` and the same
+Vite output Electron loads.
+
+**What was implemented**
+
+- `src-tauri/` as a Cargo crate: `Cargo.toml` (`tauri = "2"`,
+  `tauri-build = "2"`, `serde_json` for tests, `rust-version =
+  "1.77.2"`), `build.rs`, `src/main.rs`, `tauri.conf.json`, and
+  `Cargo.lock` (committed -- it is a binary crate).
+- One window, declared in `tauri.conf.json`: `static/main.html`,
+  500x638 with the 425x238 minimum from `src/config.js`, background
+  `#282828`. Bounds restore and the macOS title-bar inset are US-056's,
+  not copied here.
+- `bin/build-tauri.js` assembles `build-tauri/`, the document root the
+  window loads, by copying `static/` and `build-vite/` into it side by
+  side. It exports `{ COPY, OUT_DIR }` so the unit test asserts against
+  the real list rather than a duplicated string.
+- `npm run build:tauri` (renderer build + assembly) and
+  `npm run start:tauri` (`build:tauri && tauri dev`). `npm start` is
+  byte-identical to what it was, and a test holds it that way.
+- `@tauri-apps/cli` 2.11.4 as an exact devDependency. depcheck finds it
+  through the `tauri dev` in `start:tauri`, so it needs no ignore entry.
+- The five registrations a new generated directory needs:
+  `.gitignore` (plus `src-tauri/target/`), nodemon's `--ignore` list,
+  depcheck's `--ignore-dirs`, the `rimraf` block in `bin/package.js`,
+  and `bin/clean.js`. electron-packager's `ignore` regex already
+  excludes `src-tauri/` -- `^\/src` matches it as a prefix.
+- `test/unit/tauri-host.js` (19 assertions) and two `cargo test` cases
+  in `main.rs`, both on the one property a launch depends on: the
+  window URL has to sit at the same depth inside the document root that
+  `static/main.html` sits at inside the repo.
+
+**Files changed**
+
+`src-tauri/{Cargo.toml,Cargo.lock,build.rs,tauri.conf.json,AGENTS.md}`,
+`src-tauri/src/main.rs`, `bin/build-tauri.js`, `bin/clean.js`,
+`bin/package.js`, `package.json`, `package-lock.json`, `.gitignore`,
+`test/unit/tauri-host.js`, `specs/prd.json`.
+
+**Acceptance criterion 2 is half met, and the other half cannot be met
+in this story**
+
+Measured, not assumed. A probe build of `main.rs` (a `probe` command
+plus an init script hooking `window.onerror`; recipe in
+`src-tauri/AGENTS.md`) reported:
+
+```
+PROBE: ERROR global code@tauri://localhost/build-vite/renderer/main.js:1:1106
+PROBE: DOM title=Main Window bodyLen=0 header=false scripts=1
+```
+
+So the window does open, and it does load `static/main.html` and the
+existing Vite output -- the HTML rendered, and the webview fetched
+`build-vite/renderer/main.js` through the asset protocol from the
+assembled root. The UI does not render: offset 1106 is the bundle's
+first `require("fs")`. The bundle is CJS with host externals (ADR-004)
+and a Tauri webview has no `require`, so it throws at load, before any
+host call.
+
+Fixing that is not one flag away, and three later stories own the
+pieces:
+
+- **US-052** owns `WT_HOST` -- ESM/no-externals output is listed in
+  ADR-014 under the build flag, and adding it here would front-run the
+  story that has to select the shim tree with it.
+- **US-054** owns the next failure after that one. With `require` gone
+  the load reaches `application-config-path`, which calls
+  `os.platform()` at import time; a browser-stubbed `os` throws there.
+  `src/config.js`'s `CONFIG_PATH` is on the same path.
+- **US-055** owns the one after. `State.load(onState)` is the first
+  statement of `src/renderer/main.js` and `onState` does
+  `if (err) return onError(err)`, so React never renders unless the
+  config read succeeds -- and under US-052's rules every Tauri shim
+  stub throws a not-implemented error rather than returning undefined.
+
+That last point is worth stating plainly: US-051's "the UI renders,
+even though host calls fail" and US-052's "every stub throws rather
+than returning undefined" cannot both hold before US-055. The only way
+to make this window render today is a stub that lies about succeeding,
+which rule 6 forbids and US-052 forbids. Marked passing on the
+scaffolding, with the render deferred to the stories that own it and
+recorded in the story's `notes`.
+
+**Learnings for future iterations**
+
+- **Tauri embeds `frontendDist` at compile time, even in dev.**
+  `tauri-codegen`'s `context_codegen` only skips embedding when
+  `devUrl` is set; with a directory it calls `EmbeddedAssets::new` and
+  panics if the path is missing. So `cargo build`, `cargo test` and
+  `cargo clippy` in `src-tauri/` all fail in a fresh clone until
+  `npm run build:tauri` has run, and a renderer change is not visible
+  to `cargo run` until it is re-run. It also means the document root
+  should stay small; ours is 6.5M, almost all of it `static/`.
+- **The shared `static/main.html` is what forces the copied document
+  root.** Its `<script src="../build-vite/renderer/main.js">` resolves
+  on disk for Electron but has to resolve *inside* the asset root for
+  Tauri, so the root mirrors the repo layout (`static/` +
+  `build-vite/`) and the window URL is `static/main.html`, not
+  `main.html`. Symlinks do not work -- the compile-time walk does not
+  follow them. Do not "tidy" the root to a flat directory without
+  changing that tag, and changing that tag means touching the Electron
+  host.
+- **An ESM bundle cannot be dropped into that HTML either.** The tag is
+  a classic `<script src>`, so top-level `import`/`export` in the
+  output would be a syntax error, and `type="module"` cannot be added
+  while Electron loads the CJS build from the same file. ADR-014 says
+  the Tauri bundle is ESM; whoever implements `WT_HOST` has to check
+  the emitted output for top-level import/export statements and reach
+  for `iife` if there are any. This is a real gap in the ADR, not a
+  detail.
+- **How to see anything at all in the Tauri webview:** there is no
+  Electron-style `console-message` event and WKWebView says nothing on
+  stdout. A throwaway `#[tauri::command]` plus
+  `.append_invoke_initialization_script(...)` is the equivalent of the
+  `build/main/index.js` patch trick, and an app-defined command needs
+  no capability entry in v2. `screencapture` is not an option in a
+  non-interactive session -- it fails with "could not create image from
+  display".
+- **`cargo clippy` after a `cargo build` recompiles the whole
+  dependency tree** (~250 crates, minutes) because the clippy driver
+  is a different rustc. Run it in the background and do not conclude it
+  hung. The two also contend for `target/`'s lock, so do not run a
+  `tauri dev` beside it.
+- **The npm-side gates were indifferent to all of this.** `standard`
+  and the boundary lint see no JS under `src-tauri/`, and depcheck
+  picked `@tauri-apps/cli` up from the npm script by itself.
 ---

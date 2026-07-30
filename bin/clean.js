@@ -16,6 +16,7 @@ const handlers = require('../src/main/handlers')
 // First, remove generated files
 rimraf.sync('build/')
 rimraf.sync('build-vite/')
+rimraf.sync('build-tauri/')
 rimraf.sync('dist/')
 
 // Remove any saved configuration

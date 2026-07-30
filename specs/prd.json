@@ -888,8 +888,8 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`"
       ],
       "priority": 51,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Scaffold complete and launch-verified: the window opens and loads static/main.html plus the existing build-vite output through the asset protocol, from the assembled build-tauri/ document root. The 'the UI renders' half of criterion 2 is NOT met and cannot be met in this story: the bundle is CJS with host externals (ADR-004) and a Tauri webview has no require, so it throws at offset 1106 on require(\"fs\") before any host call. WT_HOST is US-052's, the load-time os.platform() behind it is US-054's, and State.load succeeding -- which onState requires before React renders -- is US-055's. See the US-051 entry in progress.log for the measured evidence and for why US-052's throwing stubs make an earlier render impossible."
     },
     {
       "id": "US-052",

@@ -1,0 +1,21 @@
+[package]
+name = "webtorrent-desktop"
+# Kept in sync with `version` in package.json by hand. Nothing reads
+# both, so nothing catches a drift; the packaging stories (US-083,
+# US-084) are where this stops being cosmetic.
+version = "0.24.0"
+description = "Streaming torrent client"
+authors = ["WebTorrent, LLC"]
+license = "MIT"
+edition = "2021"
+# Tauri 2's stated minimum (ADR-014).
+rust-version = "1.77.2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[dev-dependencies]
+serde_json = "1"

@@ -23,6 +23,10 @@ const BUILD_PATH = path.join(config.ROOT_PATH, 'build')
 // `<script src>`, so it has to be nuked and rebuilt alongside `build/`
 // and shipped inside the packaged app.
 const BUILD_VITE_PATH = path.join(config.ROOT_PATH, 'build-vite')
+// The document root the Tauri window loads (`bin/build-tauri.js`). It is
+// a copy of `static/` plus `build-vite/`, so a stale one would ship a
+// stale UI; the Electron package never wants it either way.
+const BUILD_TAURI_PATH = path.join(config.ROOT_PATH, 'build-tauri')
 const DIST_PATH = path.join(config.ROOT_PATH, 'dist')
 const NODE_MODULES_PATH = path.join(config.ROOT_PATH, 'node_modules')
 
@@ -44,10 +48,11 @@ function build () {
   rimraf.sync(NODE_MODULES_PATH)
   cp.execSync('npm ci', { stdio: 'inherit' })
 
-  console.log('Nuking dist/, build/ and build-vite/...')
+  console.log('Nuking dist/, build/, build-vite/ and build-tauri/...')
   rimraf.sync(DIST_PATH)
   rimraf.sync(BUILD_PATH)
   rimraf.sync(BUILD_VITE_PATH)
+  rimraf.sync(BUILD_TAURI_PATH)
 
   console.log('Build: Compiling main process and renderer bundle...')
   cp.execSync('npm run build', { NODE_ENV: 'production', stdio: 'inherit' })
