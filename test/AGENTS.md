@@ -212,6 +212,16 @@ before running any test:
   `engine-ipc-call-sites.js` emits under a `.engine-test.js` suffix
   into the same directory (the directory is what resolves
   `../lib/...`, not the file name).
+- **Two files testing `build/main/ipc` collide the same way.** It is
+  cached under its own path, bound to whichever file seeded `electron`,
+  `log`, `menu` and `windows` first (`hidden-window-removed.js`, by
+  glob order). A second file wanting its own stubs has to
+  `delete require.cache[...]` before requiring, then put the previous
+  entry back -- both instances then keep the stubs they were built
+  with. `unported-modules-removed.js` does this. Its handlers also
+  `require()` `power-save-blocker`, `shortcuts` and `external-player`
+  **lazily, when the event fires**, so those stubs must still be seeded
+  at emit time and withdrawn in a trailing test.
 - **Stub every built module the controller graph reaches, not just the
   one under test.** Letting a real shim module load here binds *this*
   file's `electron` stub into it for the whole run, which breaks

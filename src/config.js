@@ -54,9 +54,7 @@ export const IS_PORTABLE = isPortable()
 export const UI_HEADER_HEIGHT = 38
 export const UI_TORRENT_HEIGHT = 100
 
-export const ANNOUNCEMENT_URL = 'https://webtorrent.io/desktop/announcement'
 export const AUTO_UPDATE_URL = 'https://webtorrent.io/desktop/update'
-export const CRASH_REPORT_URL = 'https://webtorrent.io/desktop/crash-report'
 
 export const APP_COPYRIGHT = `Copyright © 2014-${new Date().getFullYear()} ${APP_TEAM}`
 export const APP_FILE_ICON = path.join(DIRNAME, '..', 'static', 'WebTorrentFile')
@@ -129,9 +127,7 @@ export const WINDOW_MIN_WIDTH = 425
 
 // Keep in sync with the named exports above.
 export default {
-  ANNOUNCEMENT_URL,
   AUTO_UPDATE_URL,
-  CRASH_REPORT_URL,
 
   APP_COPYRIGHT,
   APP_FILE_ICON,

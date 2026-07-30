@@ -921,7 +921,7 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 53,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

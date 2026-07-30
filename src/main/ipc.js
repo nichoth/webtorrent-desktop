@@ -56,46 +56,33 @@ function init () {
   ipcMain.on('onPlayerOpen', () => {
     const powerSaveBlocker = require('./power-save-blocker')
     const shortcuts = require('./shortcuts')
-    const thumbar = require('./thumbar')
 
     menu.togglePlaybackControls(true)
     powerSaveBlocker.enable()
     shortcuts.enable()
-    thumbar.enable()
   })
 
   ipcMain.on('onPlayerUpdate', (e, ...args) => {
-    const thumbar = require('./thumbar')
-
     menu.onPlayerUpdate(...args)
-    thumbar.onPlayerUpdate(...args)
   })
 
   ipcMain.on('onPlayerClose', () => {
     const powerSaveBlocker = require('./power-save-blocker')
     const shortcuts = require('./shortcuts')
-    const thumbar = require('./thumbar')
 
     menu.togglePlaybackControls(false)
     powerSaveBlocker.disable()
     shortcuts.disable()
-    thumbar.disable()
   })
 
   ipcMain.on('onPlayerPlay', () => {
     const powerSaveBlocker = require('./power-save-blocker')
-    const thumbar = require('./thumbar')
-
     powerSaveBlocker.enable()
-    thumbar.onPlayerPlay()
   })
 
   ipcMain.on('onPlayerPause', () => {
     const powerSaveBlocker = require('./power-save-blocker')
-    const thumbar = require('./thumbar')
-
     powerSaveBlocker.disable()
-    thumbar.onPlayerPause()
   })
 
   /**
@@ -214,11 +201,9 @@ function init () {
   ipcMain.on('openExternalPlayer', (e, ...args) => {
     const externalPlayer = require('./external-player')
     const shortcuts = require('./shortcuts')
-    const thumbar = require('./thumbar')
 
     menu.togglePlaybackControls(false)
     shortcuts.disable()
-    thumbar.disable()
     externalPlayer.spawn(...args)
   })
 

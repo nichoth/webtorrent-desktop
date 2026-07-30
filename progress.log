@@ -4623,3 +4623,73 @@ afterwards, `pgrep` clean). The six-step manual smoke test was not run
     `test/unit/platform-tauri.js` fails. A new non-module file under
     `tauri/` has to go in that file's `HELPERS` list too.
 ---
+
+## 2026-07-29 - US-053
+- Deleted the five modules the port does not carry forward:
+  `src/main/squirrel-win32.js`, `src/main/thumbar.js`,
+  `src/main/user-tasks.js`, `src/main/announcement.js` and
+  `src/crash-reporter.js` (docs/init.md, "Delete rather than port").
+  Also deleted the four `static/*ThumbnailBarButton.png` icons, which
+  had `thumbar.js` as their only caller, and the two `src/config.js`
+  constants that only the deleted modules read (`ANNOUNCEMENT_URL`,
+  `CRASH_REPORT_URL`) -- from both the named exports and the
+  `export default` block.
+- Call sites removed. In `src/main/index.js`: the top-of-file
+  `crashReporter.init()`, the whole `process.platform === 'win32'`
+  Squirrel block **including the `--squirrel` argv filtering** (which
+  made `argv` a `const`), and, in `delayedInit()`, the
+  `announcement.init()` call and the win32 `userTasks.init()` block.
+  In `src/main/ipc.js`: the thumbar half of all five player handlers
+  plus `openExternalPlayer`. `onPlayerUpdate` is now a one-line
+  handler that only calls `menu.onPlayerUpdate(...args)`, so
+  `ipc-os.notifyPlayerUpdate` keeps working unchanged.
+- Test first: `test/unit/unported-modules-removed.js` (24 assertions),
+  modelled on US-045's `hidden-window-removed.js`. Three parts -- the
+  files (and icons) are gone; nothing under `src/` still names any of
+  them (one case-insensitive scan over every `src/**/*.js`, comment
+  lines excluded); and the player IPC handlers still behave, driven
+  through a real `EventEmitter` standing in for `ipcMain`. Confirmed
+  failing before the change: the source scans reported the live call
+  sites and `onPlayerOpen` crashed in `thumbar.update()`.
+- Nothing was removed from `package.json`: `simple-get` was
+  announcement.js's only interesting dependency and `src/main/updater.js`
+  still uses it. `depcheck` passes (it runs inside `npm test`).
+- Files changed: `src/main/index.js`, `src/main/ipc.js`,
+  `src/config.js`, `test/unit/unported-modules-removed.js` (new),
+  `test/AGENTS.md`, `specs/prd.json`; nine files deleted.
+- Verification: `npm run lint` clean, `npm test` green (2124
+  assertions), and the launch check passes -- `init: 839ms`, one
+  window, sidecar up at `build/engine/index.js`, killed afterwards,
+  `pgrep` clean. **The six-step manual smoke test was NOT run** (not
+  possible non-interactively). The risk it carries here is the
+  playback menu items and play/pause, which is exactly what the new
+  behavioural tests cover at the IPC layer -- but they stub `menu`, so
+  "the Play/Pause item actually greys out" is still unproven by
+  machine.
+- **Learnings for future iterations:**
+  - **`build/main/ipc` is already in `require.cache` by the time a
+    second test file loads it.** `hidden-window-removed.js` requires
+    it first (glob order) with its own `electron`/`log`/`menu`/
+    `windows` stubs, so a later file asking for different stubs must
+    delete the cache entry, require its private instance, then restore
+    the previous entry. Both instances keep the stubs they were built
+    with. Written up in `test/AGENTS.md`.
+  - **`src/main/ipc.js` handlers `require()` their collaborators
+    lazily, inside the listener.** So a `require.cache` stub for
+    `power-save-blocker` / `shortcuts` / `external-player` has to
+    survive until the *event fires*, not just until `ipc.init()`.
+    Seed them in a leading test and withdraw them in a trailing one --
+    tape runs a file's tests contiguously, so the window stays narrow.
+  - **`[ERROR:system_services.cc] SetApplicationIsDaemon ... paramErr`
+    in the macOS launch log is pre-existing noise**, not fallout from
+    deleting the crash reporter. Verified by `git stash -u` + rebuild +
+    relaunch at HEAD. Do not chase it.
+  - **Deleting `squirrel-win32.js` is a real, deliberate behaviour
+    loss on Windows**, not just dead code: the Squirrel installer that
+    `bin/package.js` still produces will no longer get its
+    `--squirrel-install` / `--createShortcut` handling, so shortcut
+    creation and handler uninstall on the Electron build regress until
+    US-084 replaces the installer with Tauri's bundler. `bin/package.js`
+    was deliberately left alone -- its Squirrel references are about
+    packaging, not the runtime event handler.
+---

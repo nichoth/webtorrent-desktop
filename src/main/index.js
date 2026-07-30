@@ -3,10 +3,6 @@ console.time('init')
 require('@electron/remote/main').initialize()
 const { app, ipcMain } = require('electron')
 
-// Start crash reporter early, so it takes effect for child processes
-const crashReporter = require('../crash-reporter')
-crashReporter.init()
-
 const parallel = require('run-parallel')
 
 const config = require('../config')
@@ -21,7 +17,7 @@ const windows = require('./windows')
 const WEBTORRENT_VERSION = require('webtorrent/package.json').version
 
 let shouldQuit = false
-let argv = sliceArgv(process.argv)
+const argv = sliceArgv(process.argv)
 
 // allow electron/chromium to play startup sounds (without user interaction)
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
@@ -35,12 +31,6 @@ if (config.IS_PRODUCTION) {
   // When Electron is running in production mode (packaged app), then run React
   // in production mode too.
   process.env.NODE_ENV = 'production'
-}
-
-if (process.platform === 'win32') {
-  const squirrelWin32 = require('./squirrel-win32')
-  shouldQuit = squirrelWin32.handleEvent(argv[0])
-  argv = argv.filter((arg) => !arg.includes('--squirrel'))
 }
 
 if (!shouldQuit && !config.IS_PORTABLE) {
@@ -146,24 +136,17 @@ function init () {
 function delayedInit (state) {
   if (app.isQuitting) return
 
-  const announcement = require('./announcement')
   const dock = require('./dock')
   const updater = require('./updater')
   const FolderWatcher = require('./folder-watcher')
   const folderWatcher = new FolderWatcher({ window: windows.main, state })
 
-  announcement.init()
   dock.init()
   updater.init()
 
   ipc.setModule('folderWatcher', folderWatcher)
   if (folderWatcher.isEnabled()) {
     folderWatcher.start()
-  }
-
-  if (process.platform === 'win32') {
-    const userTasks = require('./user-tasks')
-    userTasks.init()
   }
 
   if (process.platform !== 'darwin') {
