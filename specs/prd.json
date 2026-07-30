@@ -1001,8 +1001,8 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 58,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Both dialogs are host commands over tauri-plugin-dialog's Rust API, so capabilities/default.json stays at core:default; the Electron options object is translated by the pure functions in src-tauri/src/dialog.rs. Two documented casualties: buttonLabel is dropped and ['openFile', 'openDirectory'] opens a directory picker (rfd does one or the other, as Electron itself does off macOS). The interactive half of the criterion -- actually opening a .torrent and choosing a folder under `npm run start:tauri` -- is a modal waiting on a human and is left to US-073."
     },
     {
       "id": "US-059",

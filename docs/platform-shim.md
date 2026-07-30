@@ -94,6 +94,7 @@ Ported so far:
 | `ipcOs.onFullscreenChanged` | US-057 | a Tauri event, emitted on the resize edge |
 | `ipcOs.setTitle`, `setProgress`, `setBounds`, `setAspectRatio`, `toggleFullScreen`, `show` | US-057 | one host command each, in `src-tauri/src/main.rs` |
 | `window.isVisible`, `window.isMaximized` | US-057 | host commands, for the same reason |
+| `dialog.showOpenDialog`, `showSaveDialog` | US-058 | one host command each, over the dialog plugin's **Rust** API; the options translation is `src-tauri/src/dialog.rs` |
 
 The window operations are **commands rather than core window calls
 from the webview**, although `@tauri-apps/api/window` could do several
@@ -119,6 +120,28 @@ site:
   the window resizes and emits only the transitions. A fullscreen
   entered from the OS window chrome is still reported, as it is under
   Electron.
+
+The dialogs are commands for the same two reasons, and the second one
+is worth spelling out: `@tauri-apps/plugin-dialog` would have to be
+granted `dialog:allow-open` and `dialog:allow-save` in
+`capabilities/default.json`, which is a capability the *whole* webview
+carries. Reaching the plugin's Rust API from a command instead leaves
+the renderer with `core:default`, and the picker, the parent window and
+the option translation all stay in the host -- which is where the
+Electron version of them lives too.
+
+Two dialog options have no equivalent under Tauri, both recorded at the
+top of `src-tauri/src/dialog.rs`:
+
+- **`buttonLabel` is dropped.** `FileDialogBuilder` cannot relabel the
+  accept button, so the save dialog reads "Save" (the platform
+  default). The one caller passes exactly that, so there is nothing
+  visible to lose today.
+- **`['openFile', 'openDirectory']` opens a directory picker.** rfd
+  picks files or directories, never both. This is what Electron itself
+  does on Windows and Linux -- `src/main/dialog.js` writes the same
+  fallback out by hand -- so the change is macOS-only, and no renderer
+  call site asks for both: all three pass one property.
 
 A ported listener export is a `listen()` (or `once()`) from
 `@tauri-apps/api/event`, wrapped so the caller sees the payload alone

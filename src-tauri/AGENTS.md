@@ -89,6 +89,19 @@ renderer reaches through `@tauri-apps/api` do** -- event subscription
 included. Without that file the shim's listener exports fail at
 runtime with a permission error and nothing else looks wrong.
 
+The same is true of a **plugin**, and it cuts the other way too: a
+plugin's JS API (`@tauri-apps/plugin-dialog` and friends) needs its
+permissions granted to the whole webview, while its *Rust* API does
+not. So `register the plugin, wrap it in a command` is the cheaper
+shape -- US-058's dialogs are `tauri_plugin_dialog::init()` plus
+`show_open_dialog` / `show_save_dialog` in `main.rs`, and the renderer
+still carries nothing but `core:default`. Two things to know when
+following it: the plugin's own `blocking_*` helpers deadlock the event
+loop on the main thread, so the command that calls them must be
+`async` (which is what puts it on the async runtime), and a plugin adds
+its ACL manifest to the regenerated `gen/schemas/`, which is
+gitignored -- nothing to commit.
+
 ## Gates
 
 `cargo fmt --check` and `cargo clippy -- -D warnings` are gates from

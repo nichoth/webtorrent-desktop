@@ -23,3 +23,4 @@ serde = { version = "1", features = ["derive"] }
 # Not just for tests since US-056: the saved window bounds are read out
 # of the renderer's `config.json` before the renderer exists.
 serde_json = "1"
+tauri-plugin-dialog = "2"

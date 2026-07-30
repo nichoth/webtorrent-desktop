@@ -56,7 +56,9 @@ const IMPLEMENTED = {
     'onFullscreenChanged'
   ],
   // US-057: the two current-window reads.
-  'window.js': ['isVisible', 'isMaximized']
+  'window.js': ['isVisible', 'isMaximized'],
+  // US-058: the file dialogs.
+  'dialog.js': ['showOpenDialog', 'showSaveDialog']
 }
 
 function implemented (name) {

@@ -7,9 +7,10 @@
 //! Phase 4 and neither host is a branch. Both open one window onto the
 //! same `static/main.html` and the same Vite output, so there is
 //! nothing here that decides what the UI is -- only where it lives.
-//! Every host concern the UI calls (dialogs, menus, the tray) arrives
+//! The remaining host concerns the UI calls (menus, the tray) arrive
 //! in a later story. Paths landed first, in `paths`, because the rest
-//! of Phase 4 is built on them; the window itself is `window`.
+//! of Phase 4 is built on them; the window itself is `window`, and the
+//! file dialogs are `dialog`.
 //!
 //! `tauri.conf.json` declares the window **hidden**, exactly as
 //! `src/main/windows/main.js` passes `show: false`. Everything about
@@ -18,6 +19,7 @@
 //! so it is made below and the window is shown afterwards, rather than
 //! flashing at the default size first.
 
+mod dialog;
 mod paths;
 mod window;
 
@@ -25,6 +27,7 @@ use std::sync::Arc;
 
 use tauri::window::{ProgressBarState, ProgressBarStatus};
 use tauri::{Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow};
+use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
 
 use paths::AppPaths;
 use window::{Debounce, FullscreenWatch, ProgressBar, WindowLayout};
@@ -243,6 +246,80 @@ fn show(main: WebviewWindow) -> Result<(), String> {
     main.set_focus().map_err(failed)
 }
 
+// -- the dialogs (US-058) --------------------------------------------
+//
+// `platform/dialog.js` against the dialog plugin's *Rust* API rather
+// than its JS one, which is what keeps the renderer's capability at
+// `core:default`: registering the plugin does not grant the webview
+// its commands. The translation from Electron's options object is
+// [`dialog::plan_open`] / [`dialog::plan_save`].
+//
+// Both commands are `async` because the pickers below are the plugin's
+// blocking variants, which deadlock the event loop if they run on the
+// main thread -- an `async` command does not.
+
+/// `dialog.showOpenDialog`: the paths chosen, empty on cancel.
+#[tauri::command]
+async fn show_open_dialog(
+    main: WebviewWindow,
+    options: dialog::DialogOptions,
+) -> Result<Vec<String>, String> {
+    let plan = dialog::plan_open(&options);
+    let picker = file_dialog(&main, &plan.dialog);
+
+    let picked = match plan.picker {
+        dialog::Picker::File => picker.blocking_pick_file().map(|path| vec![path]),
+        dialog::Picker::Files => picker.blocking_pick_files(),
+        dialog::Picker::Folder => picker.blocking_pick_folder().map(|path| vec![path]),
+        dialog::Picker::Folders => picker.blocking_pick_folders(),
+    };
+
+    // Cancelling is not a failure: the shim resolves to `[]`, which is
+    // what `showOpenDialogSync` returning `undefined` becomes under
+    // Electron.
+    dialog::plain_paths(picked.unwrap_or_default())
+}
+
+/// `dialog.showSaveDialog`: the path chosen, or `null` on cancel.
+#[tauri::command]
+async fn show_save_dialog(
+    main: WebviewWindow,
+    options: dialog::DialogOptions,
+) -> Result<Option<String>, String> {
+    let plan = dialog::plan_save(&options);
+
+    match file_dialog(&main, &plan).blocking_save_file() {
+        Some(path) => dialog::plain_path(path).map(Some),
+        None => Ok(None),
+    }
+}
+
+/// A dialog builder with the plan applied, parented to the one window.
+///
+/// Parenting is the shim's contract rather than a nicety: callers pass
+/// no parent window and the shim promises to supply one, which is what
+/// took `remote.getCurrentWindow()` out of `path-selector.js` and
+/// `torrent-list-controller.js` in US-027.
+fn file_dialog(main: &WebviewWindow, plan: &dialog::DialogPlan) -> FileDialogBuilder<tauri::Wry> {
+    let mut builder = main.dialog().file().set_parent(main);
+
+    if let Some(title) = &plan.title {
+        builder = builder.set_title(title);
+    }
+    if let Some(directory) = &plan.directory {
+        builder = builder.set_directory(directory);
+    }
+    if let Some(file_name) = &plan.file_name {
+        builder = builder.set_file_name(file_name);
+    }
+    for filter in &plan.filters {
+        let extensions: Vec<&str> = filter.extensions.iter().map(String::as_str).collect();
+        builder = builder.add_filter(&filter.name, &extensions);
+    }
+
+    builder
+}
+
 /// Open the window where the last session left it.
 ///
 /// The order matters: the minimum size is set before the size, so a
@@ -378,6 +455,12 @@ fn main() {
     }
 
     builder
+        // The dialogs are opened by `show_open_dialog` and
+        // `show_save_dialog` below, through this plugin's Rust API. The
+        // renderer cannot reach the plugin's own commands: they are not
+        // in `capabilities/default.json`, and nothing above the shim
+        // should want them (ADR-005).
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             // `download_dir` is the one path Tauri resolves better than
             // this crate can: on Linux it reads the XDG user-dirs
@@ -412,7 +495,9 @@ fn main() {
             set_bounds,
             set_aspect_ratio,
             toggle_full_screen,
-            show
+            show,
+            show_open_dialog,
+            show_save_dialog
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the WebTorrent Desktop window");

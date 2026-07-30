@@ -5017,3 +5017,76 @@ state file.
     promise then rejects with that message and `reportErrors` in
     `src/renderer/main.js` picks it up.
 ---
+## 2026-07-30 - US-058
+- Implemented the dialog surface of the Tauri shim:
+  `tauri/dialog.js` (`showOpenDialog`, `showSaveDialog`) over two host
+  commands, `show_open_dialog` and `show_save_dialog`. No Electron
+  reference remains in the module; the options object crosses
+  unchanged and the host translates it.
+- Rust host: new `src-tauri/src/dialog.rs` holding the translation as
+  pure functions (`plan_open`, `plan_save`, `plain_path`,
+  `plain_paths`) with 14 tests, plus the two commands and a
+  `file_dialog` builder helper in `main.rs`. The commands reach
+  `tauri-plugin-dialog`'s **Rust** API, so
+  `capabilities/default.json` stays at `core:default` -- the JS plugin
+  API would have needed `dialog:allow-open` / `dialog:allow-save`
+  granted to the whole webview.
+- Cancelling resolves the way it does under Electron (`[]` and `null`)
+  and no caller changed: `components/path-selector.js`,
+  `controllers/subtitles-controller.js` and
+  `controllers/torrent-list-controller.js` are untouched.
+- Files: `src/renderer/lib/platform/tauri/dialog.js`,
+  `src-tauri/src/dialog.rs`, `src-tauri/src/main.rs`,
+  `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`,
+  `test/unit/platform-dialog.js`, `test/unit/platform-tauri.js`,
+  `docs/platform-shim.md`, `test/AGENTS.md`, `src-tauri/AGENTS.md`,
+  `specs/prd.json`.
+- Verified: the JS tests were written first and observed failing on
+  the `NotImplementedError`; the Rust tests were written with the
+  module and checked non-tautological by mutating `ALL_FILES` (two
+  filter tests fail). `cargo fmt --check`, `cargo clippy -- -D
+  warnings` and `cargo test` (57 tests) pass in `src-tauri/`;
+  `npm test` passes (2217 assertions). `npm run build:tauri && cargo
+  build`, then the binary launched in the background, came up with no
+  stderr and exited on `kill`; `pgrep` clean afterwards.
+- The interactive half of the criterion (*opening* a `.torrent` and
+  *choosing* a download folder under `npm run start:tauri`) cannot be
+  driven non-interactively -- a picker is a modal waiting on a human
+  -- so it is left to the Phase 4 verification pass, US-073, as
+  US-057's window observations were.
+- Two documented casualties, in `dialog.rs` and
+  `docs/platform-shim.md`: `buttonLabel` is dropped (rfd cannot
+  relabel the accept button; the one caller passes "Save", the
+  platform default anyway) and `['openFile', 'openDirectory']` opens a
+  *directory* picker (rfd does one or the other). The second is
+  macOS-only and no renderer call site asks for both -- all three pass
+  a single property.
+- **Learnings for future iterations:**
+  - **A Tauri plugin has two APIs and only the JS one costs a
+    capability.** Registering the plugin and wrapping its Rust API in
+    an app command keeps `capabilities/default.json` at
+    `core:default`, and puts the behaviour where the Electron original
+    lived (the main process). This is the shape for US-059
+    (shell/clipboard: `opener`, `clipboard-manager`) and US-060 (fs)
+    as well, and it is now in `src-tauri/AGENTS.md`.
+  - **The plugin's `blocking_*` pickers must not run on the main
+    thread** -- they deadlock the event loop. Declaring the command
+    `async` is what moves it onto the async runtime, and is the
+    documented pattern in the crate's own examples. The non-blocking
+    callback variants are for main-thread contexts like `setup()`.
+  - **serde makes an `Option<T>` field optional for free, but a
+    `null`-or-missing *argument* is a hard error.** A struct argument
+    with every field optional still fails to deserialize if the whole
+    key is absent, so a shim export whose only parameter is optional
+    sends `{}` rather than `undefined`.
+  - **Electron dialog options do not map one-to-one.** `properties`
+    picks between four rfd calls rather than being flags,
+    `defaultPath` is a directory for open and a directory *plus*
+    filename for save, and the `'*'` extension has to be stripped or
+    rfd offers a filter matching files literally ending in `.*`.
+  - **`FilePath` is not a path.** The picker answers
+    `FilePath::Path | FilePath::Url`, and `into_path()` is fallible;
+    a plain `String` is what crosses the boundary (ADR-007), so the
+    conversion is a `Result` and the `Url` case is reported rather
+    than guessed at.
+---
