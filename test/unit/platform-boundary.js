@@ -225,6 +225,28 @@ test('no renderer file outside the shim requires a banned host module',
     t.end()
   })
 
+// US-052: the shim has two implementations (ADR-014), and which one a
+// build talks to is decided by `WT_HOST` at resolve time, not by any
+// import. A UI file naming `lib/platform/tauri/` would pin itself to
+// one host and quietly survive a bundle built for the other. The lint
+// rule bans the specifier; this covers the `require()` spelling it
+// cannot see, and both directions of slash.
+test('no renderer file outside the shim names the Tauri tree',
+  function (t) {
+    const files = rendererSources()
+    t.ok(files.length > 20, 'walked the renderer sources')
+    const pattern = /platform[\\/]tauri/
+    for (const file of files) {
+      const rel = path.relative(RENDERER, file)
+      const hits = fs.readFileSync(file, 'utf8').split('\n')
+        .map((line, i) => ({ line, n: i + 1 }))
+        .filter(({ line }) => pattern.test(line))
+        .map(({ line, n }) => n + ': ' + line.trim())
+      t.deepEqual(hits, [], rel + ' lets the build pick the shim tree')
+    }
+    t.end()
+  })
+
 // US-032 AC-4: with both IPC concerns migrated, the only renderer
 // modules left importing Electron were the shim itself (skipped by the
 // walk) and the hidden WebTorrent window (FR-4). AC-4 also exempts

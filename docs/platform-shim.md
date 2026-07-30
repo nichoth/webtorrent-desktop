@@ -68,6 +68,49 @@ because they were spelled `ipcRenderer.send`, not `electron.shell`.
 Line references below are against the tree at US-018 and will drift
 as call sites move. They are a starting point, not a contract.
 
+### Two implementations of that layout (US-052)
+
+Since US-052 the table above describes an *interface* with two
+implementations, per ADR-014. `src/renderer/lib/platform/*.js` is the
+Electron one and `src/renderer/lib/platform/tauri/*.js` is the Tauri
+one, and **exactly one of the two is in a given bundle**. Everything
+this document says about a module's arguments, return values and
+error behaviour is the contract both trees are written against.
+
+The Tauri tree is stubs today: every export is `async`, takes the same
+arguments, and throws a `NotImplementedError` carrying
+`code: 'WT_TAURI_NOT_IMPLEMENTED'` naming the module and the export.
+Each Phase 4 story turns one module's throws into working calls;
+`test/unit/platform-tauri.js` keeps the two trees exporting the same
+names with the same arities in the meantime.
+
+`tauri/ipc-engine.js` is the one exception, and re-exports the sibling
+rather than stubbing it. That module has been host-free since US-044 --
+it is a WebSocket client of the sidecar, banned from importing Electron
+by the boundary config -- so there is nothing for a Tauri version to do
+differently, and no Phase 4 story reimplements it. The host knowledge
+it depends on is `ipc-os.getEngineEndpoint()`, which is stubbed like
+the rest.
+
+Selection is by `WT_HOST`, defaulting to `electron`:
+
+| Command | `WT_HOST` | Tree |
+| --- | --- | --- |
+| `npm run build:renderer` | unset | Electron |
+| `npm run build:renderer:tauri` | `tauri` | Tauri |
+
+The mechanism is a `resolveId` plugin in `vite.config.js` over the
+decision in `bin/shim-resolver.js`, which rewrites any resolution
+landing on `lib/platform/<mod>.js` to `lib/platform/tauri/<mod>.js` and
+leaves imports made from inside `tauri/` alone. It matches the resolved
+*file*, not the import specifier, because the specifiers that matter
+are relative (`./clipboard`, from the barrel) -- a `resolve.alias`
+entry would miss those and ship a bundle with half of each tree in it,
+which is the worst available failure because it builds cleanly.
+
+Nothing outside the shim may name `lib/platform/tauri/`: a UI file that
+did would pin itself to one host. Both boundary checks cover it.
+
 ## `shell.js`
 
 `openExternal` is the only one the renderer performs directly today.
@@ -794,7 +837,8 @@ Overrides, in order:
 1. `src/renderer/lib/platform/**/*.js` -- the rule is **off**. The shim
    is the boundary, and is the one place these imports belong. This is a
    directory glob, so a new shim module is exempt without editing the
-   config.
+   config -- and it covers `platform/tauri/` too, which is why the
+   Tauri tree's own relative imports are not caught by the ban below.
 2. `src/renderer/lib/platform/ipc-engine.js` -- the Electron half goes
    back **on** (US-046). It needed `ipcRenderer` while the `wt-*`
    protocol rode Electron IPC; since US-044 it is a WebSocket client of
@@ -817,6 +861,13 @@ Overrides, in order:
 
 `lib/cast.js` is the only override that switches the rule off for a
 single file, and `test/unit/lint-boundary.js` asserts that stays true.
+
+On top of the specifier list, US-052 adds one `patterns` entry:
+`**/platform/tauri` and `**/platform/tauri/**` are banned under
+`src/renderer/` and pointed at `WT_HOST`. Which shim tree a build talks
+to is a fact about the build, not about a caller. The `require()`
+spelling and the Windows slash are covered by the source scan in
+`test/unit/platform-boundary.js`, as usual.
 
 `src/shared/` is covered by neither: it is loaded by both processes, so
 no host import is legitimate there at all. That rule is prose in

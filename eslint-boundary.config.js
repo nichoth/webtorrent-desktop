@@ -75,7 +75,23 @@ const NO_DOM = ['error',
   { name: 'XMLHttpRequest', message: 'The engine is a Node process.' }
 ]
 
+// US-052: the shim has two implementations now (ADR-014), and which
+// one a build talks to is a property of the build -- the `WT_HOST`
+// resolver in `bin/shim-resolver.js` swaps the whole tree. A UI file
+// that named `lib/platform/tauri/` directly would pin itself to one
+// host and defeat that, so the subdirectory is banned by name while
+// `lib/platform/` itself stays the way in. The shim override below
+// switches this off inside the shim, which is where the Tauri tree's
+// own relative imports live.
+const TAURI_TREE = [{
+  group: ['**/platform/tauri', '**/platform/tauri/**'],
+  message: 'The Tauri shim tree is selected at build time by ' +
+    'WT_HOST (ADR-014), never imported by name. Import ' +
+    SHIM + ' instead (FR-11).'
+}]
+
 const RESTRICTED = ['error', {
+  patterns: TAURI_TREE,
   paths: [
     ...HOST,
 

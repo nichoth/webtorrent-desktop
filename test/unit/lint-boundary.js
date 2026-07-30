@@ -117,6 +117,46 @@ test('the boundary config allows the imports the renderer still needs',
     t.end()
   })
 
+// US-052: `lib/platform/` is the way in; `lib/platform/tauri/` is one
+// of the two trees behind it and is selected by the build, never
+// named by a caller.
+test('the boundary config rejects a direct Tauri-tree import',
+  async function (t) {
+    const specifiers = [
+      '../lib/platform/tauri',
+      '../lib/platform/tauri/window',
+      './platform/tauri/fs.js',
+      'src/renderer/lib/platform/tauri/clipboard'
+    ]
+    for (const specifier of specifiers) {
+      const messages = await lintAs(
+        "import x from '" + specifier + "'\nexport default x\n",
+        'src/renderer/probe.js'
+      )
+      const restricted = messages
+        .filter((m) => m.ruleId === 'no-restricted-imports')
+      t.equal(restricted.length, 1, specifier + ' is rejected')
+      t.ok(/WT_HOST/.test(restricted[0].message || ''),
+        specifier + ' is pointed at the build flag')
+    }
+    t.end()
+  })
+
+test('the shim itself may still reach both trees', async function (t) {
+  const inside = [
+    'src/renderer/lib/platform/tauri/index.js',
+    'src/renderer/lib/platform/tauri/ipc-engine.js'
+  ]
+  for (const relPath of inside) {
+    const messages = await lintAs(
+      "import * as x from '../ipc-engine'\nexport { x }\n", relPath)
+    t.deepEqual(
+      messages.filter((m) => m.ruleId === 'no-restricted-imports'), [],
+      relPath + ' may import its sibling tree')
+  }
+  t.end()
+})
+
 test('the shim and the deferred casualty are exempt',
   async function (t) {
     for (const relPath of EXEMPT) {

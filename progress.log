@@ -3,6 +3,34 @@
 Consolidated, reusable knowledge. Re-read in full every session -- keep
 it tight.
 
+- **The platform shim has two trees since US-052.**
+  `src/renderer/lib/platform/*.js` is Electron,
+  `src/renderer/lib/platform/tauri/*.js` is Tauri, and exactly one is
+  in a bundle. `WT_HOST=tauri` selects the second (default: Electron)
+  through a `resolveId` plugin in `vite.config.js` over
+  `bin/shim-resolver.js`. **Adding or renaming a shim export means
+  editing both trees**, or `test/unit/platform-tauri.js` fails on
+  export-name/arity parity; a new *non-module* file under `tauri/`
+  goes in that test's `HELPERS` list. The Tauri stubs throw
+  `NotImplementedError` (`code: 'WT_TAURI_NOT_IMPLEMENTED'`) until the
+  story that owns each module lands -- that is the plan, not a
+  regression. `tauri/ipc-engine.js` re-exports its sibling and is not
+  a stub. Nothing outside the shim may name `platform/tauri`.
+  `npm run build:renderer:tauri` is the Tauri bundle;
+  `npm run build:renderer` is unchanged.
+- **A Vite `resolveId` plugin must set `enforce: 'pre'`.** Vite puts
+  `vite:resolve` ahead of *normal* user plugins, so a plugin without
+  it never sees a resolution Vite can answer -- which is all of them.
+  Inside, call `this.resolve(source, importer, { ...options, skipSelf:
+  true })` and rewrite the result. And when swapping a directory of
+  modules, match the **resolved file**, not the specifier: relative
+  specifiers like a barrel's `./clipboard` slip past a
+  `resolve.alias` entry, and the resulting half-and-half bundle
+  *builds* cleanly.
+- **An inline env var in an npm script is POSIX-only.**
+  `FOO=bar vite build` fails on Windows, which Phase 4 targets. Set it
+  from a small Node wrapper that then calls the tool's JS API
+  (`bin/build-renderer.js` is the example).
 - **Test scripts.** Since US-034 `npm run lint` is
   `standard && npm run lint:boundary`, and `npm test` is
   `npm run lint && depcheck && npm run test-unit`. Since US-019
@@ -4505,4 +4533,93 @@ recorded in the story's `notes`.
 - **The npm-side gates were indifferent to all of this.** `standard`
   and the boundary lint see no JS under `src-tauri/`, and depcheck
   picked `@tauri-apps/cli` up from the npm script by itself.
+---
+
+## 2026-07-29 - US-052 - Add the Tauri shim tree behind a build flag
+
+Added the second platform shim implementation and the `WT_HOST` build
+flag that selects it (ADR-014). The default is unchanged: `npm start`,
+`npm run build` and `npm run build:renderer` all still produce the
+Electron tree.
+
+- `src/renderer/lib/platform/tauri/` -- one module per Electron shim
+  module (`clipboard`, `dialog`, `fs`, `ipc-os`, `menu`, `shell`,
+  `window`, plus the `index.js` barrel), same export names, same
+  arities, every export `async`. Each throws a `NotImplementedError`
+  with `code: 'WT_TAURI_NOT_IMPLEMENTED'` naming the module and the
+  export, from the shared `tauri/not-implemented.js`.
+- `tauri/ipc-engine.js` is **not** a stub: it is
+  `export * from '../ipc-engine'`. See the interpretation note below.
+- `bin/shim-resolver.js` -- the selection decision as a plain CommonJS
+  module (`host()`, `redirect()`), so it is unit-testable without a
+  build. `vite.config.js` wraps it in a `resolveId` plugin.
+- `bin/build-renderer.js` plus `npm run build:renderer:tauri`;
+  `build:tauri` now uses it, so the Tauri document root gets a Tauri
+  bundle.
+- `eslint-boundary.config.js` gains a `patterns` ban on
+  `**/platform/tauri**` under `src/renderer/`; the `require()` and
+  backslash spellings are covered by a new scan in
+  `test/unit/platform-boundary.js`.
+- `test/unit/platform-tauri.js` -- tree parity, per-module export
+  name/arity parity, every stub rejects, and the resolver's five
+  behaviours. `test/unit/lint-boundary.js` gains the two new lint
+  cases.
+- Docs: `docs/platform-shim.md` (a two-implementation section and the
+  lint section), `src/renderer/lib/platform/AGENTS.md`,
+  `src-tauri/AGENTS.md`.
+
+Verification: `npm test` 2100/2100 green; `npm run lint` clean; both
+renderer builds succeed with zero `has been externalized` warnings;
+the Electron launch check passes (`init: 798ms`, sidecar up, killed
+afterwards, `pgrep` clean). The six-step manual smoke test was not run
+-- this session is non-interactive.
+
+**Interpretation notes (AC judgement calls, recorded per rule 2):**
+
+- AC-1/AC-2 say "one stub module per existing shim module" and "every
+  stub throws". `ipc-engine.js` is re-exported instead. It has had no
+  host import since US-044 -- it is a WebSocket client of the sidecar,
+  and `eslint-boundary.config.js` bans it from importing Electron --
+  so there is nothing for a Tauri version to do differently, and **no
+  Phase 4 story reimplements it**. Stubbing it would have taken the
+  torrent engine out of the Tauri build for the whole phase with
+  nothing scheduled to put it back, which ADR-014 calls a sequencing
+  error rather than a plan. The parity test still covers it.
+- ADR-014 also says the Tauri bundle should be **ESM with no host
+  externals**. Deliberately not done here. `src/renderer/main.js` and
+  `src/config.js` still reach `electron` / `@electron/remote`
+  directly, so dropping the externals today fails the build outright.
+  The ADR ties that change to the concerns migrating (US-054 for
+  config paths, US-072 for the cutover), not to this story.
+
+- **Learnings for future iterations:**
+  - **A Vite `resolveId` plugin needs `enforce: 'pre'` or it never
+    runs.** Vite inserts `vite:resolve` ahead of *normal* user
+    plugins, so anything it can already answer -- which is every
+    resolution -- never reaches a plugin without it. The plugin then
+    calls `this.resolve(source, importer, { ...options, skipSelf:
+    true })` to get the real id and rewrites the result.
+  - **Requiring a built shim module in a unit test loads the real
+    `@electron/remote`, which dies outside Electron** with `Error: No
+    such binding was linked: electron_common_features`. Worse, the
+    sibling test files that *do* stub it share one `require.cache`:
+    caching `platform/window` here with this file's stub would hand it
+    to `platform-window.js`, which loads later in the glob. When a
+    test only needs export *shapes*, parse the ESM source instead of
+    requiring it.
+  - **An inline env var in an npm script is not portable.**
+    `WT_HOST=tauri vite build` is POSIX shell only, and Windows is one
+    of Phase 4's three targets. `bin/build-renderer.js` sets
+    `process.env.WT_HOST` and then calls Vite's JS API
+    (`import('vite').then(({ build }) => build())`) -- one process, one
+    exit code, no shell.
+  - **Match the resolved file, never the import specifier**, when
+    swapping a directory of modules. The barrel imports its siblings
+    relatively (`./clipboard`), so a `resolve.alias` entry misses them
+    and emits a bundle with half of each tree in it -- and that
+    failure *builds*, so nothing catches it until a call site throws.
+  - **The two-tree parity test is what keeps Phase 4 honest.** Adding
+    or renaming a shim export now means doing it in both trees or
+    `test/unit/platform-tauri.js` fails. A new non-module file under
+    `tauri/` has to go in that file's `HELPERS` list too.
 ---

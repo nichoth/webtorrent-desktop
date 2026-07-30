@@ -22,6 +22,21 @@ Run `npm run build:tauri` first in a fresh clone. For the same reason a
 renderer change needs `npm run build:tauri` before the Rust binary
 serves it -- `cargo run` alone reuses the embedded copy.
 
+## The renderer in that root is built for *this* host
+
+Since US-052 `npm run build:tauri` runs
+`npm run build:renderer:tauri`, not `npm run build:renderer`: the
+former sets `WT_HOST=tauri`, which swaps
+`src/renderer/lib/platform/*.js` for `src/renderer/lib/platform/tauri/*.js`
+in the bundle (ADR-014). Assembling the document root from a plain
+`npm run build:renderer` gives a window full of Electron shim code
+that cannot load, so use the npm script rather than running
+`bin/build-tauri.js` by hand after some other build.
+
+Most of that Tauri tree throws `NotImplementedError` today, on purpose
+-- each Phase 4 story implements one module. A window that comes up and
+reports not-implemented is the expected state, not a regression.
+
 ## Gates
 
 `cargo fmt --check` and `cargo clippy -- -D warnings` are gates from

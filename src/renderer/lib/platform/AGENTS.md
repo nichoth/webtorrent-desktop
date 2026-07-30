@@ -5,6 +5,38 @@ The platform shim: the sole source of Electron and Node access for
 read it before changing anything here, and update it in the same
 commit when the surface changes.
 
+## There are two trees here now (US-052)
+
+`*.js` is the Electron implementation and `tauri/*.js` is the Tauri
+one (ADR-014). Exactly one is in a given bundle: `WT_HOST=tauri`
+selects the second, and anything else -- including nothing, which is
+the default -- selects the first. The rewrite is a `resolveId` plugin
+in `vite.config.js` over `bin/shim-resolver.js`; it matches the
+resolved *file*, so relative specifiers like the barrel's
+`./clipboard` are caught, and it skips imports made from inside
+`tauri/` so it cannot recurse.
+
+Consequences for anything done in this directory:
+
+- **Adding or renaming an export means doing it in both trees.**
+  `test/unit/platform-tauri.js` fails otherwise -- it compares export
+  names and arities across the two, reading the ESM sources rather
+  than requiring them (half of this directory only loads inside a real
+  Electron process, and the sibling test files stub `electron` in a
+  `require.cache` this one would trample).
+- **A new file here that is not a shim module** has to be added to
+  `HELPERS` in that test, or the tree-parity check reads it as drift.
+  `tauri/not-implemented.js` is the only one today.
+- **Tauri stubs throw, they do not return `undefined`.** Every one
+  calls `notImplemented(module, name)`, which throws a
+  `NotImplementedError` with `code: 'WT_TAURI_NOT_IMPLEMENTED'`. A
+  Phase 4 story replaces one module's throws with real calls and
+  leaves the rest alone.
+- **`tauri/ipc-engine.js` is a re-export, not a stub**, because the
+  module has been host-free since US-044. Do not "finish" it.
+- **Nothing outside this directory may name `platform/tauri`.** Both
+  the lint config and `test/unit/platform-boundary.js` ban it.
+
 ## Rules every module follows
 
 - **Every export is `async`** (FR-10), including wrappers around

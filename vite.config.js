@@ -1,6 +1,8 @@
 import { fileURLToPath } from 'node:url'
 import { defineConfig, transformWithOxc } from 'vite'
 
+import { host, redirect } from './bin/shim-resolver.js'
+
 // Replaces the old `Module.prototype.require` hook in
 // `src/renderer/main.js`. Matched exactly (not as a prefix) so that
 // material-ui's deep imports -- `inline-style-prefixer/static/...`,
@@ -40,6 +42,40 @@ const inlineStylePrefixerStub = fileURLToPath(
 // `src/renderer/`. The behaviour is therefore preserved, and the option
 // has no counterpart to carry over.
 const srcDir = fileURLToPath(new URL('./src/', import.meta.url))
+
+// Build-time selection between the two platform shim trees (ADR-014).
+// The decision itself lives in `bin/shim-resolver.js` so it can be
+// unit-tested without running a build; this is the bundler half of it.
+//
+// `enforce: 'pre'` is required, not stylistic. Vite inserts its own
+// `vite:resolve` ahead of normal user plugins, so a plugin without it
+// would never see a resolution that Vite can already answer -- which
+// is every one of these.
+//
+// `this.resolve` does the real work and `skipSelf` keeps it from
+// calling back into here. The result is matched as a *file*, because
+// the specifiers that matter are relative (`./clipboard` from the
+// barrel) and an alias list matching specifiers would miss them and
+// ship a mixed bundle.
+const repoRoot = fileURLToPath(new URL('.', import.meta.url))
+const WT_HOST = host()
+
+const shimTree = {
+  name: 'webtorrent:shim-tree',
+  enforce: 'pre',
+  async resolveId (source, importer, options) {
+    if (WT_HOST !== 'tauri') return null
+    const resolved = await this.resolve(source, importer, {
+      ...options,
+      skipSelf: true
+    })
+    if (!resolved) return null
+    const id = redirect({
+      root: repoRoot, id: resolved.id, importer, host: WT_HOST
+    })
+    return id ? { ...resolved, id } : resolved
+  }
+}
 
 const jsxInJs = {
   name: 'webtorrent:jsx-in-js',
@@ -153,7 +189,7 @@ const processEnv = { 'process.env': 'globalThis.process.env' }
 
 export default defineConfig({
   define: processEnv,
-  plugins: [jsxInJs],
+  plugins: [shimTree, jsxInJs],
   resolve: {
     alias: [
       {
