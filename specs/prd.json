@@ -872,8 +872,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck)"
       ],
       "priority": 50,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Docs only, as AC-7 requires. ADR-014 records: (1) dual host -- src-tauri/ and src/main/ both launchable through Phase 4, same Vite output and same static/main.html, with US-072 the single cutover that flips the default and deletes src/main/; (2) build-time shim selection via a Vite resolveId plugin keyed on WT_HOST (default electron), rewriting lib/platform/<mod>.js to lib/platform/tauri/<mod>.js -- a resolve.alias entry cannot do it, because alias find patterns match the specifier as written and the barrel imports its siblings relatively; build-time because a runtime branch cannot produce a loadable Tauri bundle at all (require('electron') would survive into it), keeps ADR-009's boundary enforceable, does not triple what each story must keep working, and lets nodeIntegration die by construction; (3) Tauri 2 with the v2 plugin set, Rust >= 1.77.2 (developed on 1.97.1), Node >= 20.19 for Vite 8, Xcode CLT/WKWebView on macOS, MSVC + WebView2 on Windows, webkit2gtk-4.1 + libsoup3 on Linux; (4) casualties -- enableBlinkFeatures: 'AudioVideoTracks' has no WKWebView or WebKitGTK equivalent, so multi-audio switching goes (US-082) and, more seriously, the unguarded videoTracks/audioTracks reads at player-page.js:185-191 would throw in onLoadedMetadata and break playback startup (US-081); nodeIntegration and contextIsolation are lost by construction. Listed in docs/adr/INDEX.md. npm test 1736/1736 with lint and depcheck clean."
     },
     {
       "id": "US-051",

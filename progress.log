@@ -4290,3 +4290,51 @@ launch was needed -- this story changes no shipped code.
     `src/shared/AGENTS.md`. Worth knowing before assuming the lint
     catches a host import there.
 ---
+
+## 2026-07-29 - US-050
+- Wrote `docs/adr/ADR-014-dual-host-during-the-tauri-port.md` and
+  listed it in `docs/adr/INDEX.md`. Docs only; no code changed, which
+  the story's own criteria require.
+- No test written: this is a pure documentation story, so a test would
+  only assert the presence of prose (and the global rules forbid tests
+  for docs). `npm test` was run as the gate instead: 1736/1736, lint
+  and depcheck clean.
+- Decisions recorded, all of which later Phase 4 stories are now bound
+  by:
+  - `src-tauri/` and `src/main/` both live and both launchable for the
+    whole of Phase 4, loading the same Vite output and the same
+    `static/main.html`. US-072 is the only story that flips the default
+    or deletes `src/main/`.
+  - Shim selection is build-time via a Vite `resolveId` plugin keyed on
+    `WT_HOST` (default `electron`), rewriting resolutions of
+    `lib/platform/<mod>.js` to `lib/platform/tauri/<mod>.js`.
+  - Tauri 2; Rust >= 1.77.2; Node >= 20.19 for Vite 8; webkit2gtk-4.1 +
+    libsoup3 on Linux, WebView2 on Windows.
+  - Casualties: `enableBlinkFeatures: 'AudioVideoTracks'`, plus
+    `nodeIntegration`/`contextIsolation` (lost by construction).
+- Files changed: `docs/adr/ADR-014-dual-host-during-the-tauri-port.md`
+  (new), `docs/adr/INDEX.md`, `progress.log`, `specs/prd.json`.
+- **Learnings for future iterations:**
+  - **A `resolve.alias` entry cannot select the shim tree.** Vite
+    matches `find` against the import specifier *as written*, and
+    `lib/platform/index.js` imports its siblings relatively
+    (`'./clipboard'`). An alias list would miss every one of them and
+    still build -- a mixed Electron/Tauri bundle. US-052 needs a
+    `resolveId` plugin that works on resolved absolute paths, and it
+    must leave resolutions already under `tauri/` alone or it recurses.
+  - **The `AudioVideoTracks` flag breaks more than the track menu.**
+    `player-page.js:185-191` dereferences `mediaElement.videoTracks.length`
+    and `.audioTracks.length` with no `|| []` guard, unlike line 125.
+    On a webview without the flag those throw inside
+    `onLoadedMetadata`, killing playback startup, not just the audio
+    menu. That is US-081's problem (codec fallback), not only US-082's
+    (multi-track casualty), and it has to be fixed by the cutover.
+  - **ADR-004 (CJS + host externals) expires at US-072.** It only works
+    because the Electron window has `nodeIntegration: true`. The Tauri
+    bundle has to be ESM with `electron` and `@electron/remote` out of
+    the external list; there is no `require` to resolve them.
+  - **`package.json`'s `engines` field is stale** -- `^16 || ^18`, while
+    Vite 8 needs Node 20.19+. Left alone here because the story forbids
+    code changes; worth folding into a Phase 4 story that touches
+    `package.json` anyway.
+---
