@@ -19,6 +19,7 @@
  * being written against.
  */
 
+import { invoke } from '@tauri-apps/api/core'
 import { listen, once } from '@tauri-apps/api/event'
 import { notImplemented } from './not-implemented'
 
@@ -42,32 +43,95 @@ function subscribe (event, listener, options) {
   return register(event, (received) => listener(received.payload))
 }
 
-export async function setTitle (title) {
-  notImplemented('ipc-os', 'setTitle')
+/**
+ * An optional argument, as a Tauri command reads it.
+ *
+ * `undefined` is dropped by JSON serialisation, and a dropped key is
+ * not the same thing as an argument the caller left out on purpose:
+ * `toggleFullScreen()` with no flag means *toggle*, and the host has
+ * to be told that rather than left to guess from a missing key.
+ *
+ * @param {any} value
+ * @returns {any}
+ */
+function optional (value) {
+  return value === undefined ? null : value
 }
 
+/**
+ * Set the window title (US-057).
+ *
+ * @param {string} title
+ * @returns {Promise<void>}
+ */
+export async function setTitle (title) {
+  return invoke('set_title', { title })
+}
+
+/**
+ * Set the taskbar progress bar, 0..1. Negative hides it, above 1 is
+ * indeterminate -- the host reads those the way Electron does, so the
+ * number crosses unchanged (US-057).
+ *
+ * @param {number} progress
+ * @returns {Promise<void>}
+ */
 export async function setProgress (progress) {
-  notImplemented('ipc-os', 'setProgress')
+  return invoke('set_progress', { progress })
 }
 
 export async function setBadge (count) {
   notImplemented('ipc-os', 'setBadge')
 }
 
+/**
+ * Move and resize the window (US-057).
+ *
+ * @param {object} bounds `{ x, y, width, height, contentBounds }`,
+ *   any of which may be absent; `x` and `y` are null together to mean
+ *   "centre on the current display".
+ * @param {boolean} [maximize] Whether to maximise or restore.
+ * @returns {Promise<void>}
+ */
 export async function setBounds (bounds, maximize) {
-  notImplemented('ipc-os', 'setBounds')
+  return invoke('set_bounds', { bounds, maximize: optional(maximize) })
 }
 
+/**
+ * Lock the window to an aspect ratio -- **not supported under Tauri**.
+ *
+ * The host has no aspect-ratio API to call, so this reaches a command
+ * that does nothing. The visible consequence, on macOS only: dragging
+ * the player window's edge no longer snaps to the video's shape, and
+ * the video letterboxes inside whatever rectangle the drag makes. The
+ * window still *opens* at the video's shape, because every caller in
+ * `src/renderer/main.js` follows this with a `setBounds`. See the
+ * command's own comment in `src-tauri/src/main.rs`.
+ *
+ * @param {number} aspectRatio
+ * @returns {Promise<void>}
+ */
 export async function setAspectRatio (aspectRatio) {
-  notImplemented('ipc-os', 'setAspectRatio')
+  return invoke('set_aspect_ratio', { aspectRatio })
 }
 
+/**
+ * Enter or leave full screen (US-057).
+ *
+ * @param {boolean} [setTo] Toggles when omitted.
+ * @returns {Promise<void>}
+ */
 export async function toggleFullScreen (setTo) {
-  notImplemented('ipc-os', 'toggleFullScreen')
+  return invoke('toggle_full_screen', { setTo: optional(setTo) })
 }
 
+/**
+ * Show and focus the main window (US-057).
+ *
+ * @returns {Promise<void>}
+ */
 export async function show () {
-  notImplemented('ipc-os', 'show')
+  return invoke('show')
 }
 
 export async function signalReady () {
@@ -158,8 +222,20 @@ export async function onDispatch (listener, options) {
   notImplemented('ipc-os', 'onDispatch')
 }
 
+/**
+ * The window entered or left full screen (US-057).
+ *
+ * Tauri has no enter/leave-fullscreen event, so the host reads the
+ * state on every resize and emits only the transitions -- including
+ * one the user made from the OS window chrome, which is what Electron
+ * reports too. The payload is the same boolean.
+ *
+ * @param {(isFullScreen: boolean) => void} listener
+ * @param {{ once?: boolean }} [options]
+ * @returns {Promise<() => void>}
+ */
 export async function onFullscreenChanged (listener, options) {
-  notImplemented('ipc-os', 'onFullscreenChanged')
+  return subscribe('fullscreenChanged', listener, options)
 }
 
 /**

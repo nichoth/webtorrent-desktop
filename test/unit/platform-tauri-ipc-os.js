@@ -15,9 +15,13 @@ const test = require('tape')
 // lives behind stable functions rather than being rebuilt.
 
 const eventPath = require.resolve('@tauri-apps/api/event')
+const corePath = require.resolve('@tauri-apps/api/core')
 
 let calls = []
 let unsubscribe = () => {}
+
+let invocations = []
+let answer
 
 require.cache[eventPath] = {
   id: eventPath,
@@ -36,11 +40,38 @@ require.cache[eventPath] = {
   }
 }
 
+// US-057 added the window-control half, which is commands rather than
+// events. This file requires `tauri/ipc-os` first in the glob, so this
+// is the `invoke` that module binds for the whole run -- a later file
+// seeding its own core stub (`platform-window.js` does) gets a fresh
+// entry for its own module and leaves this one alone.
+//
+// The reference is kept here rather than read back out of
+// `require.cache` at use, because that later file overwrites the
+// entry: the cache holds *its* stub by then, and `ipc-os` holds this
+// one.
+const core = {
+  __esModule: true,
+  async invoke (command, args) {
+    invocations.push({ command, args })
+    return answer
+  }
+}
+
+require.cache[corePath] = {
+  id: corePath,
+  filename: corePath,
+  loaded: true,
+  exports: core
+}
+
 const ipcOs = require('../../build/renderer/lib/platform/tauri/ipc-os')
 
 function reset () {
   calls = []
   unsubscribe = () => {}
+  invocations = []
+  answer = undefined
 }
 
 test('onWindowBoundsChanged subscribes to the host event',
@@ -95,5 +126,138 @@ test('onWindowBoundsChanged returns a promise', function (t) {
   reset()
   t.ok(ipcOs.onWindowBoundsChanged(() => {}) instanceof Promise,
     'every shim export is async (FR-10)')
+  t.end()
+})
+
+// -- the window controls (US-057) ------------------------------------
+//
+// Each of these is one command in `src-tauri/src/main.rs`, and the
+// contract asserted here is the command name and the arguments: the
+// Rust side names its parameters in snake_case and Tauri accepts them
+// as camelCase, so a renamed key here is a silently ignored argument
+// rather than a failure. The behaviour behind each command (the
+// fullscreen guard, the centring, the progress mapping) is tested in
+// Rust, where it lives.
+
+test('setTitle sends the title to the host', async function (t) {
+  reset()
+  await ipcOs.setTitle('WebTorrent - 42%')
+
+  t.deepEqual(invocations, [{
+    command: 'set_title',
+    args: { title: 'WebTorrent - 42%' }
+  }], 'one command, carrying the title')
+  t.end()
+})
+
+test('setProgress sends the fraction unchanged', async function (t) {
+  reset()
+  await ipcOs.setProgress(0.5)
+  await ipcOs.setProgress(-1)
+
+  t.deepEqual(invocations.map(c => c.command), ['set_progress', 'set_progress'])
+  t.deepEqual(invocations.map(c => c.args.progress), [0.5, -1],
+    'the out-of-range values keep their meaning for the host to read')
+  t.end()
+})
+
+test('setBounds sends the rectangle and the maximize flag',
+  async function (t) {
+    reset()
+    const bounds = { contentBounds: true, x: null, y: null, width: 640, height: 480 }
+    await ipcOs.setBounds(bounds, false)
+
+    t.equal(invocations.length, 1, 'one command')
+    t.equal(invocations[0].command, 'set_bounds', 'named the command')
+    t.deepEqual(invocations[0].args.bounds, bounds,
+      'the rectangle crosses as the caller wrote it, nulls and all')
+    t.equal(invocations[0].args.maximize, false, 'and the flag')
+    t.end()
+  })
+
+test('setBounds sends null rather than undefined for no flag',
+  async function (t) {
+    reset()
+    await ipcOs.setBounds({ width: 500, height: 638 })
+
+    t.equal(invocations[0].args.maximize, null,
+      'an omitted flag is JSON null, which the host reads as "leave it"')
+    t.end()
+  })
+
+test('setAspectRatio asks the host, which does not support it',
+  async function (t) {
+    reset()
+    await ipcOs.setAspectRatio(1.78)
+
+    t.deepEqual(invocations, [{
+      command: 'set_aspect_ratio',
+      args: { aspectRatio: 1.78 }
+    }], 'still one call per track, so the day Tauri gains the API ' +
+      'there is one place to fill in')
+    t.end()
+  })
+
+test('toggleFullScreen carries the flag, and null when omitted',
+  async function (t) {
+    reset()
+    await ipcOs.toggleFullScreen(true)
+    await ipcOs.toggleFullScreen()
+
+    t.deepEqual(invocations.map(c => c.command),
+      ['toggle_full_screen', 'toggle_full_screen'])
+    t.equal(invocations[0].args.setTo, true, 'the explicit flag')
+    t.equal(invocations[1].args.setTo, null,
+      'no flag means toggle, which the host decides')
+    t.end()
+  })
+
+test('show asks the host to show the window', async function (t) {
+  reset()
+  await ipcOs.show()
+
+  t.deepEqual(invocations, [{ command: 'show', args: undefined }],
+    'one command, no arguments')
+  t.end()
+})
+
+test('a failing command rejects the caller', async function (t) {
+  reset()
+  const real = core.invoke
+  core.invoke = async () => { throw new Error('no window') }
+
+  try {
+    await ipcOs.setTitle('x')
+    t.fail('resolved over a host failure')
+  } catch (err) {
+    t.equal(err.message, 'no window', 'the host error reaches the caller')
+  }
+
+  core.invoke = real
+  t.end()
+})
+
+test('onFullscreenChanged subscribes to the host event',
+  async function (t) {
+    reset()
+    const received = []
+    const stop = await ipcOs.onFullscreenChanged((on) => received.push(on))
+
+    t.equal(calls.length, 1, 'registered once')
+    t.equal(calls[0].api, 'listen', 'a standing subscription')
+    t.equal(calls[0].name, 'fullscreenChanged',
+      'the same event name the Electron host sends')
+
+    calls[0].handler({ event: 'fullscreenChanged', id: 3, payload: true })
+    t.deepEqual(received, [true], 'the flag alone, not the event envelope')
+    t.equal(typeof stop, 'function', 'resolved to an unsubscribe')
+    t.end()
+  })
+
+test('onFullscreenChanged honours { once: true }', async function (t) {
+  reset()
+  await ipcOs.onFullscreenChanged(() => {}, { once: true })
+
+  t.equal(calls[0].api, 'once', 'a one-shot subscription')
   t.end()
 })

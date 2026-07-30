@@ -88,3 +88,97 @@ test('every window export is async', function (t) {
   }
   t.end()
 })
+
+// -- the same contract, against the Tauri tree (US-057) --------------
+//
+// The two reads are host commands under Tauri rather than
+// `@electron/remote` calls, so what is asserted is the command name,
+// the absence of arguments, and that the host's answer reaches the
+// caller unchanged. The stub is seeded the same way, at
+// `@tauri-apps/api/core`; this file is the first to require
+// `tauri/window`, so its recorder is the one that module binds (see
+// test/AGENTS.md).
+
+const corePath = require.resolve('@tauri-apps/api/core')
+
+let invocations = []
+let answer = null
+
+require.cache[corePath] = {
+  id: corePath,
+  filename: corePath,
+  loaded: true,
+  exports: {
+    __esModule: true,
+    async invoke (command, args) {
+      invocations.push({ command, args })
+      return answer
+    }
+  }
+}
+
+const tauriWindow = require(
+  '../../build/renderer/lib/platform/tauri/window'
+)
+
+function resetTauri (value) {
+  invocations = []
+  answer = value
+}
+
+test('tauri window.isVisible asks the host', async function (t) {
+  resetTauri(true)
+  const result = await tauriWindow.isVisible()
+
+  t.equal(result, true, 'resolves to the window state')
+  t.equal(invocations.length, 1, 'one command')
+  t.equal(invocations[0].command, 'window_is_visible', 'named the command')
+  t.end()
+})
+
+test('tauri window.isVisible resolves false when hidden',
+  async function (t) {
+    resetTauri(false)
+    t.equal(await tauriWindow.isVisible(), false, 'false when hidden')
+    t.end()
+  })
+
+test('tauri window.isMaximized asks the host', async function (t) {
+  resetTauri(true)
+  const result = await tauriWindow.isMaximized()
+
+  t.equal(result, true, 'resolves to the window state')
+  t.equal(invocations.length, 1, 'one command')
+  t.equal(invocations[0].command, 'window_is_maximized', 'named the command')
+  t.end()
+})
+
+test('the two trees answer the same questions', function (t) {
+  const electron = Object.keys(platformWindow).filter(k => k !== '__esModule')
+  const tauri = Object.keys(tauriWindow).filter(k => k !== '__esModule')
+
+  t.deepEqual(tauri.sort(), electron.sort(),
+    'the same two reads, and still no window handle')
+  t.end()
+})
+
+test('every tauri window export is async and rejects on host failure',
+  async function (t) {
+    for (const name of ['isVisible', 'isMaximized']) {
+      resetTauri(false)
+      t.ok(tauriWindow[name]() instanceof Promise, `${name} is async`)
+    }
+
+    const failing = require.cache[corePath].exports.invoke
+    require.cache[corePath].exports.invoke = async () => {
+      throw new Error('no window')
+    }
+    try {
+      await tauriWindow.isVisible()
+      t.fail('resolved over a host failure')
+    } catch (err) {
+      t.equal(err.message, 'no window', 'the host error reaches the caller')
+    }
+    require.cache[corePath].exports.invoke = failing
+    t.end()
+  })

@@ -44,7 +44,19 @@ const REEXPORTED = 'ipc-engine'
 // keeps the sweep honest as the tree fills in.
 const IMPLEMENTED = {
   // US-056: the window restore loop's renderer half.
-  'ipc-os.js': ['onWindowBoundsChanged']
+  // US-057: the window controls, and the fullscreen event.
+  'ipc-os.js': [
+    'onWindowBoundsChanged',
+    'setTitle',
+    'setProgress',
+    'setBounds',
+    'setAspectRatio',
+    'toggleFullScreen',
+    'show',
+    'onFullscreenChanged'
+  ],
+  // US-057: the two current-window reads.
+  'window.js': ['isVisible', 'isMaximized']
 }
 
 function implemented (name) {

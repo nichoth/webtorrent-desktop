@@ -173,6 +173,165 @@ pub fn logical_bounds(position: (i32, i32), size: (u32, u32), scale_factor: f64)
     }
 }
 
+/// The rectangle the renderer asks for, as `ipcOs.setBounds` sends it.
+///
+/// Every field is optional and `x`/`y` are explicitly nullable,
+/// because the renderer's own calls are partial: the player sends
+/// `{ contentBounds: true, x: null, y: null, width, height }` to say
+/// "this size, centred", and `playback-controller` sends the whole
+/// saved rectangle back. `null` and "absent" mean the same thing here,
+/// exactly as they do in `src/main/windows/main.js`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct BoundsRequest {
+    pub x: Option<f64>,
+    pub y: Option<f64>,
+    pub width: Option<f64>,
+    pub height: Option<f64>,
+    /// Size the content area rather than the whole window. Electron's
+    /// `setContentBounds`; see [`outer_size`].
+    pub content_bounds: Option<bool>,
+}
+
+/// What the window is doing when a `setBounds` arrives. The two reads
+/// `src/main/windows/main.js` makes before it decides anything.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct WindowState {
+    pub fullscreen: bool,
+    pub maximized: bool,
+}
+
+/// What a `setBounds` call comes to: at most one maximize state change
+/// and at most one resize.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct BoundsPlan {
+    /// `Some(true)` maximizes, `Some(false)` restores, `None` leaves
+    /// the maximize state alone.
+    pub maximize: Option<bool>,
+    /// Whether the rectangle is applied at all.
+    pub resize: bool,
+}
+
+/// `setBounds` in `src/main/windows/main.js`, as a decision over plain
+/// values.
+///
+/// Three rules, in order: a fullscreen window is left alone entirely;
+/// the maximize state changes only when the caller asked for a state
+/// it is not already in; and the rectangle is applied only when the
+/// window will not be maximized afterwards -- a maximized window
+/// ignores its bounds, and setting them would fight the OS.
+pub fn plan_bounds(maximize: Option<bool>, state: WindowState) -> BoundsPlan {
+    if state.fullscreen {
+        return BoundsPlan {
+            maximize: None,
+            resize: false,
+        };
+    }
+
+    let change = match maximize {
+        Some(true) if !state.maximized => Some(true),
+        Some(false) if state.maximized => Some(false),
+        _ => None,
+    };
+
+    BoundsPlan {
+        maximize: change,
+        resize: !maximize.unwrap_or(state.maximized),
+    }
+}
+
+/// Where a window of this size sits when it is asked to be centred.
+///
+/// Electron centres on `screen.getDisplayMatching(win.getBounds())` --
+/// the display the window is mostly on, whose Tauri equivalent is
+/// `current_monitor()`. Both rectangles are logical here, so the
+/// arithmetic is the same as the Electron host's.
+pub fn centered_origin(size: (f64, f64), monitor: Bounds) -> (f64, f64) {
+    (
+        (monitor.x + (monitor.width / 2.0) - (size.0 / 2.0)).round(),
+        (monitor.y + (monitor.height / 2.0) - (size.1 / 2.0)).round(),
+    )
+}
+
+/// The outer size that gives a content area of `size`.
+///
+/// Tauri's `set_size` sizes the *content* area, so a request that is
+/// already `contentBounds` needs no adjustment and one that is not has
+/// to give the window chrome back its room. `chrome` is the window's
+/// own outer-minus-inner difference, measured at the call.
+pub fn outer_size(size: (f64, f64), chrome: (f64, f64)) -> (f64, f64) {
+    (
+        (size.0 - chrome.0).max(MIN_WIDTH),
+        (size.1 - chrome.1).max(MIN_HEIGHT),
+    )
+}
+
+/// What `setProgress` asks of the taskbar, in Electron's vocabulary:
+/// a fraction sets the bar, anything above 1 makes it indeterminate,
+/// and anything below 0 removes it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ProgressBar {
+    Hidden,
+    Indeterminate,
+    /// A percentage, 0..=100, which is the unit Tauri takes.
+    Normal(u64),
+}
+
+/// `win.setProgressBar(progress)` as a decision over a plain number.
+///
+/// A NaN is treated as "remove": it is not a fraction, and passing it
+/// on would put a nonsense bar on the taskbar for the rest of the
+/// session.
+pub fn progress_bar(progress: f64) -> ProgressBar {
+    if progress.is_nan() || progress < 0.0 {
+        ProgressBar::Hidden
+    } else if progress > 1.0 {
+        ProgressBar::Indeterminate
+    } else {
+        ProgressBar::Normal((progress * 100.0).round() as u64)
+    }
+}
+
+/// The event the renderer's `onFullscreenChanged` subscribes to. As
+/// with [`BOUNDS_CHANGED_EVENT`], it is the Electron channel name
+/// unchanged.
+pub const FULLSCREEN_CHANGED_EVENT: &str = "fullscreenChanged";
+
+/// Edge detection for the fullscreen state.
+///
+/// Electron has `enter-full-screen` and `leave-full-screen` events;
+/// Tauri's `WindowEvent` has neither, and entering fullscreen arrives
+/// as an ordinary `Resized`. So the state is read on every resize and
+/// this decides whether it is news -- which also means a fullscreen
+/// entered from the OS window chrome is reported, not just one the
+/// renderer asked for.
+#[derive(Debug)]
+pub struct FullscreenWatch {
+    last: std::sync::atomic::AtomicBool,
+}
+
+impl FullscreenWatch {
+    /// Starts from the state the window was opened in, which is never
+    /// fullscreen -- [`WindowLayout`] has no such field.
+    pub fn new() -> FullscreenWatch {
+        FullscreenWatch {
+            last: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    /// Whether `fullscreen` differs from the last state seen. Records
+    /// it either way.
+    pub fn changed(&self, fullscreen: bool) -> bool {
+        self.last.swap(fullscreen, Ordering::SeqCst) != fullscreen
+    }
+}
+
+impl Default for FullscreenWatch {
+    fn default() -> FullscreenWatch {
+        FullscreenWatch::new()
+    }
+}
+
 /// The trailing-edge debounce the Electron host gets from the
 /// `debounce` package.
 ///
@@ -429,6 +588,204 @@ mod tests {
             2,
             "a call after the delay is a new burst, not a swallowed one"
         );
+    }
+
+    // -- setBounds ---------------------------------------------------
+
+    /// The Electron host returns early on a fullscreen window: the
+    /// player asks for a video-shaped rectangle whenever the track
+    /// changes, and applying it would drop the window out of
+    /// fullscreen mid-playback.
+    #[test]
+    fn a_fullscreen_window_is_left_alone() {
+        let plan = plan_bounds(
+            Some(true),
+            WindowState {
+                fullscreen: true,
+                maximized: false,
+            },
+        );
+
+        assert_eq!(plan.maximize, None);
+        assert!(!plan.resize);
+    }
+
+    #[test]
+    fn a_plain_request_resizes_and_touches_nothing_else() {
+        let plan = plan_bounds(None, WindowState::default());
+
+        assert_eq!(plan.maximize, None, "no maximize state was asked for");
+        assert!(plan.resize);
+    }
+
+    #[test]
+    fn the_maximize_state_changes_only_when_it_is_not_already_there() {
+        let restored = WindowState {
+            fullscreen: false,
+            maximized: false,
+        };
+        let maximized = WindowState {
+            fullscreen: false,
+            maximized: true,
+        };
+
+        assert_eq!(plan_bounds(Some(true), restored).maximize, Some(true));
+        assert_eq!(
+            plan_bounds(Some(true), maximized).maximize,
+            None,
+            "already maximized"
+        );
+        assert_eq!(plan_bounds(Some(false), maximized).maximize, Some(false));
+        assert_eq!(
+            plan_bounds(Some(false), restored).maximize,
+            None,
+            "already restored"
+        );
+    }
+
+    /// A maximized window ignores its bounds, so setting them is at
+    /// best wasted and at worst a fight with the window manager.
+    #[test]
+    fn a_window_that_will_be_maximized_is_not_resized() {
+        assert!(!plan_bounds(Some(true), WindowState::default()).resize);
+        assert!(
+            !plan_bounds(
+                None,
+                WindowState {
+                    fullscreen: false,
+                    maximized: true
+                }
+            )
+            .resize,
+            "no flag means the state it is already in"
+        );
+        assert!(
+            plan_bounds(
+                Some(false),
+                WindowState {
+                    fullscreen: false,
+                    maximized: true
+                }
+            )
+            .resize,
+            "unmaximizing to a rectangle applies the rectangle"
+        );
+    }
+
+    #[test]
+    fn a_centred_window_sits_in_the_middle_of_its_monitor() {
+        let monitor = Bounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1440.0,
+            height: 900.0,
+        };
+
+        assert_eq!(centered_origin((500.0, 638.0), monitor), (470.0, 131.0));
+    }
+
+    /// `screen.getDisplayMatching` returns the monitor's own origin in
+    /// the desktop's coordinate space, which is not `(0, 0)` for a
+    /// second display -- centring without it throws the window onto
+    /// the primary monitor.
+    #[test]
+    fn a_centred_window_stays_on_its_own_monitor() {
+        let second = Bounds {
+            x: 1440.0,
+            y: -200.0,
+            width: 1000.0,
+            height: 800.0,
+        };
+        let (x, y) = centered_origin((500.0, 400.0), second);
+
+        assert_eq!(x, 1690.0);
+        assert_eq!(y, 0.0);
+    }
+
+    /// Tauri sizes the content area, Electron's plain `setBounds`
+    /// sizes the whole window -- so the chrome has to come off a
+    /// request that was not `contentBounds`, or the window grows by a
+    /// title bar every time the saved rectangle is restored.
+    #[test]
+    fn the_chrome_comes_off_a_whole_window_rectangle() {
+        assert_eq!(outer_size((500.0, 638.0), (0.0, 28.0)), (500.0, 610.0));
+        assert_eq!(
+            outer_size((500.0, 638.0), (0.0, 0.0)),
+            (500.0, 638.0),
+            "an undecorated window is its own content area"
+        );
+    }
+
+    #[test]
+    fn a_rectangle_smaller_than_the_chrome_clamps_to_the_minimum() {
+        let (width, height) = outer_size((MIN_WIDTH, MIN_HEIGHT), (0.0, 28.0));
+
+        assert_eq!(width, MIN_WIDTH);
+        assert_eq!(height, MIN_HEIGHT, "never below the minimum size");
+    }
+
+    // -- setProgress -------------------------------------------------
+
+    #[test]
+    fn a_fraction_becomes_a_percentage() {
+        assert_eq!(progress_bar(0.0), ProgressBar::Normal(0));
+        assert_eq!(progress_bar(0.5), ProgressBar::Normal(50));
+        assert_eq!(progress_bar(1.0), ProgressBar::Normal(100));
+        assert_eq!(progress_bar(0.336), ProgressBar::Normal(34));
+    }
+
+    /// `src/renderer/main.js` sends `-1` to clear the bar and the
+    /// Electron docs give `> 1` as indeterminate; both have to survive
+    /// the crossing or the taskbar keeps a stale bar forever.
+    #[test]
+    fn the_out_of_range_values_keep_their_electron_meaning() {
+        assert_eq!(progress_bar(-1.0), ProgressBar::Hidden);
+        assert_eq!(progress_bar(2.0), ProgressBar::Indeterminate);
+        assert_eq!(progress_bar(f64::NAN), ProgressBar::Hidden);
+    }
+
+    // -- fullscreenChanged -------------------------------------------
+
+    /// Tauri has no enter/leave-fullscreen event, so the state is read
+    /// on every resize. Without edge detection the renderer would get
+    /// a `fullscreenChanged` for every pixel of a window drag.
+    #[test]
+    fn only_a_change_of_fullscreen_state_is_news() {
+        let watch = FullscreenWatch::new();
+
+        assert!(!watch.changed(false), "a window opens un-fullscreen");
+        assert!(watch.changed(true), "entering is news");
+        assert!(!watch.changed(true), "a resize while fullscreen is not");
+        assert!(watch.changed(false), "leaving is news");
+        assert!(!watch.changed(false));
+    }
+
+    /// The renderer subscribes to these names because the Electron
+    /// main process sends them; the shim absorbs host differences,
+    /// never the channel name (ADR-014).
+    #[test]
+    fn the_event_names_are_the_electron_channel_names() {
+        assert_eq!(BOUNDS_CHANGED_EVENT, "windowBoundsChanged");
+        assert_eq!(FULLSCREEN_CHANGED_EVENT, "fullscreenChanged");
+    }
+
+    /// The renderer sends partial rectangles with explicit nulls; both
+    /// spellings have to arrive as `None` rather than failing the
+    /// command.
+    #[test]
+    fn a_partial_bounds_request_deserializes() {
+        let request: BoundsRequest = serde_json::from_str(
+            r#"{ "contentBounds": true, "x": null, "y": null,
+                 "width": 640, "height": 480 }"#,
+        )
+        .expect("the player's own request does not parse");
+
+        assert_eq!(request.x, None);
+        assert_eq!(request.width, Some(640.0));
+        assert_eq!(request.content_bounds, Some(true));
+
+        let empty: BoundsRequest = serde_json::from_str("{}").expect("an empty request");
+        assert_eq!(empty, BoundsRequest::default());
     }
 
     /// The window geometry the host opens with is stated in

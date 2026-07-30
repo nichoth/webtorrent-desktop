@@ -30,6 +30,17 @@ it tight.
   `src-tauri/capabilities/default.json` grants it -- Tauri gives the
   renderer nothing without a capability, and the failure is a silent
   runtime permission error in a webview with no visible console.
+- **Writing a Tauri command for the shim (US-057 onward).** Prefer an
+  app command over a core API call from the webview: the behaviour
+  being ported is the Electron *main* process's, and an app command
+  needs no capability, so `capabilities/default.json` stays at
+  `core:default`. Three things bite. `tauri::Error` is not
+  `Serialize`, so a command that reports failure returns
+  `Result<T, String>`. `undefined` never crosses -- JSON drops the
+  key, so an argument the caller deliberately omitted must be sent as
+  `null`. And a Rust parameter `set_to` is `setTo` on the JS side;
+  a mistyped key is a silently ignored argument, not an error, so
+  assert the argument object in the shim's test.
 - **Tauri reports physical pixels, Electron logical ones.** Any
   geometry crossing the shim divides by `scale_factor()` first
   (`logical_bounds` in `src-tauri/src/window.rs`), or a retina window
@@ -4953,4 +4964,56 @@ state file.
     is a single process (no Electron-style tree), `kill $PID` lands,
     and a second foreground launch returning immediately is exactly
     the single-instance assertion.
+---
+
+## 2026-07-30 - US-057
+- Implemented the window surface of the Tauri shim: `tauri/window.js`
+  (`isVisible`, `isMaximized`) and the window half of `tauri/ipc-os.js`
+  (`setTitle`, `setProgress`, `setBounds`, `setAspectRatio`,
+  `toggleFullScreen`, `show`, `onFullscreenChanged`). Each is one host
+  command or one Tauri event; no Electron reference remains in either
+  module.
+- Rust host: eight commands in `src-tauri/src/main.rs`, over new pure
+  helpers in `src-tauri/src/window.rs` (`plan_bounds`,
+  `centered_origin`, `outer_size`, `progress_bar`, `FullscreenWatch`)
+  with tests for each. `watch_bounds` now also reports the fullscreen
+  edge, and the watch is shared with `toggle_full_screen` through
+  managed state so a transition is reported once however it is reached.
+- Files: `src/renderer/lib/platform/tauri/{window,ipc-os}.js`,
+  `src-tauri/src/{main,window}.rs`,
+  `test/unit/{platform-window,platform-tauri-ipc-os,platform-tauri}.js`,
+  `docs/platform-shim.md`, `test/AGENTS.md`, `specs/prd.json`.
+- Verified: `cargo fmt --check`, `cargo clippy -- -D warnings`,
+  `cargo test` (43 tests) and `npm test` (2199 assertions) all pass.
+  `npm run build:tauri && cargo build`, then the binary launched in the
+  background, came up and exited on `kill`. The interactive half of the
+  acceptance criterion (title, progress bar and fullscreen *observed*
+  under `npm run start:tauri`) is not checkable non-interactively and
+  is left to the Phase 4 verification pass, US-073.
+- Interpretation note: the story's criteria name `setProgress`, which
+  US-063 also claims. Taken here as `win.setProgressBar` -- the
+  window's own taskbar bar. `setBadge` and the rest of
+  `src/main/dock.js` stay stubbed for US-063.
+- **Learnings for future iterations:**
+  - **Tauri's `set_size` sizes the *content* area**, so Electron's
+    `setContentBounds` is the free case and its plain `setBounds` is
+    the one needing work: subtract `outer_size - inner_size` or the
+    window grows by a title bar every time a saved rectangle is
+    restored. (`restore()` in `main.rs` still passes the saved *outer*
+    rectangle to `set_size`; the drift is a title bar per restore and
+    is worth revisiting.)
+  - **Tauri 2 has no aspect-ratio API and no fullscreen event.** The
+    first is a documented casualty (macOS player edge-drag no longer
+    snaps); the second is recoverable, because entering fullscreen
+    arrives as an ordinary `Resized` -- read `is_fullscreen()` there
+    and edge-detect, which also catches a fullscreen entered from the
+    OS window chrome.
+  - **`undefined` never reaches a Tauri command.** JSON drops the key,
+    and a dropped key is not the same as an argument deliberately
+    omitted (`toggleFullScreen()` with no flag means *toggle*). The
+    shim maps `undefined` to `null` before invoking.
+  - **`tauri::Error` is not `Serialize`.** A command returning a
+    `Result` to the renderer has to map it to `String`; the shim's
+    promise then rejects with that message and `reportErrors` in
+    `src/renderer/main.js` picks it up.
 ---

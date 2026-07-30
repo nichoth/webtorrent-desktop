@@ -91,6 +91,34 @@ Ported so far:
 | Export | Story | Backed by |
 | --- | --- | --- |
 | `ipcOs.onWindowBoundsChanged` | US-056 | a Tauri event, emitted by `src-tauri/src/window.rs` |
+| `ipcOs.onFullscreenChanged` | US-057 | a Tauri event, emitted on the resize edge |
+| `ipcOs.setTitle`, `setProgress`, `setBounds`, `setAspectRatio`, `toggleFullScreen`, `show` | US-057 | one host command each, in `src-tauri/src/main.rs` |
+| `window.isVisible`, `window.isMaximized` | US-057 | host commands, for the same reason |
+
+The window operations are **commands rather than core window calls
+from the webview**, although `@tauri-apps/api/window` could do several
+of them directly. Two reasons. The behaviour is the Electron *main*
+process's -- the fullscreen guard in `setBounds`, the centring, the
+maximize bookkeeping are all in `src/main/windows/main.js`, not in its
+renderer -- so it belongs in the host either way. And an app-defined
+command needs no capability, so `src-tauri/capabilities/default.json`
+stays at `core:default` (the event API) rather than growing a window
+permission per operation.
+
+Two host differences the shim absorbs, both documented at their call
+site:
+
+- **`setAspectRatio` does nothing under Tauri.** Tauri 2 has no
+  aspect-ratio API. On macOS this means dragging the player window's
+  edge no longer snaps to the video's shape and the video letterboxes
+  inside whatever rectangle the drag makes. The window still *opens*
+  at the video's shape, because every caller follows the call with a
+  `setBounds`. The command stays so there is one place to fill in.
+- **`fullscreenChanged` is edge-detected on resize.** Tauri has no
+  enter/leave-fullscreen event, so the host reads the state whenever
+  the window resizes and emits only the transitions. A fullscreen
+  entered from the OS window chrome is still reported, as it is under
+  Electron.
 
 A ported listener export is a `listen()` (or `once()`) from
 `@tauri-apps/api/event`, wrapped so the caller sees the payload alone

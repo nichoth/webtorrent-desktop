@@ -21,13 +21,24 @@
 mod paths;
 mod window;
 
+use std::sync::Arc;
+
+use tauri::window::{ProgressBarState, ProgressBarStatus};
 use tauri::{Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow};
 
 use paths::AppPaths;
-use window::{Debounce, WindowLayout};
+use window::{Debounce, FullscreenWatch, ProgressBar, WindowLayout};
 
 /// The label of the one window, as `tauri.conf.json` declares it.
 const MAIN_WINDOW: &str = "main";
+
+/// Every window command returns its failure to the renderer, where the
+/// shim's promise rejects and `reportErrors` in `src/renderer/main.js`
+/// picks it up. A `tauri::Error` is not serializable, so it crosses as
+/// its own message -- which is all the renderer can do with it anyway.
+fn failed(err: tauri::Error) -> String {
+    err.to_string()
+}
 
 /// The renderer's one way to learn where its data lives. The layout is
 /// resolved once at startup and handed over as plain data (ADR-007),
@@ -36,6 +47,200 @@ const MAIN_WINDOW: &str = "main";
 #[tauri::command]
 fn app_paths(paths: tauri::State<'_, AppPaths>) -> AppPaths {
     paths.inner().clone()
+}
+
+// -- The window, as the renderer drives it (US-057) -------------------
+//
+// Everything the shim's `window.js` and the window half of its
+// `ipc-os.js` do arrives here as a command rather than as a core
+// window call from the webview. Two reasons: the behaviour is the
+// Electron *main* process's -- the fullscreen guard, the centring, the
+// maximize bookkeeping all live in `src/main/windows/main.js`, not in
+// its renderer -- and an app command needs no capability, so the
+// renderer's reach stays exactly this list.
+//
+// Each command takes the calling `WebviewWindow`, which is the one
+// window `tauri.conf.json` declares.
+
+/// `getCurrentWindow().isVisible()`.
+#[tauri::command]
+fn window_is_visible(main: WebviewWindow) -> Result<bool, String> {
+    main.is_visible().map_err(failed)
+}
+
+/// `getCurrentWindow().isMaximized()`.
+#[tauri::command]
+fn window_is_maximized(main: WebviewWindow) -> Result<bool, String> {
+    main.is_maximized().map_err(failed)
+}
+
+/// `ipcOs.setTitle`.
+#[tauri::command]
+fn set_title(main: WebviewWindow, title: String) -> Result<(), String> {
+    main.set_title(&title).map_err(failed)
+}
+
+/// `ipcOs.setProgress`: the taskbar bar, in Electron's units.
+///
+/// The dock badge and the rest of `src/main/dock.js` are US-063; this
+/// is `win.setProgressBar` alone, which is the window's own.
+#[tauri::command]
+fn set_progress(main: WebviewWindow, progress: f64) -> Result<(), String> {
+    let state = match window::progress_bar(progress) {
+        ProgressBar::Hidden => ProgressBarState {
+            status: Some(ProgressBarStatus::None),
+            progress: None,
+        },
+        ProgressBar::Indeterminate => ProgressBarState {
+            status: Some(ProgressBarStatus::Indeterminate),
+            progress: None,
+        },
+        ProgressBar::Normal(percent) => ProgressBarState {
+            status: Some(ProgressBarStatus::Normal),
+            progress: Some(percent),
+        },
+    };
+
+    main.set_progress_bar(state).map_err(failed)
+}
+
+/// `ipcOs.setBounds`, which is `setBounds` in
+/// `src/main/windows/main.js`: [`window::plan_bounds`] decides, this
+/// applies.
+#[tauri::command]
+fn set_bounds(
+    main: WebviewWindow,
+    bounds: window::BoundsRequest,
+    maximize: Option<bool>,
+) -> Result<(), String> {
+    let state = window::WindowState {
+        fullscreen: main.is_fullscreen().map_err(failed)?,
+        maximized: main.is_maximized().map_err(failed)?,
+    };
+    let plan = window::plan_bounds(maximize, state);
+
+    match plan.maximize {
+        Some(true) => main.maximize().map_err(failed)?,
+        Some(false) => main.unmaximize().map_err(failed)?,
+        None => {}
+    }
+
+    if !plan.resize {
+        return Ok(());
+    }
+
+    let scale = main.scale_factor().map_err(failed)?;
+    let inner = main.inner_size().map_err(failed)?.to_logical::<f64>(scale);
+    let outer = main.outer_size().map_err(failed)?.to_logical::<f64>(scale);
+
+    // A request with no size keeps the size it has.
+    let width = bounds.width.unwrap_or(outer.width);
+    let height = bounds.height.unwrap_or(outer.height);
+
+    // Tauri sizes the content area; Electron's plain `setBounds` sizes
+    // the whole window and its `setContentBounds` does what Tauri
+    // does, so only the first spelling needs the chrome taken off.
+    let content = if bounds.content_bounds.unwrap_or(false) {
+        (width, height)
+    } else {
+        window::outer_size(
+            (width, height),
+            (outer.width - inner.width, outer.height - inner.height),
+        )
+    };
+    main.set_size(LogicalSize::new(content.0, content.1))
+        .map_err(failed)?;
+
+    let origin = match (bounds.x, bounds.y) {
+        (Some(x), Some(y)) => Some((x, y)),
+        // No origin means "centre on the display the window is on",
+        // which is what the player asks for when a video opens.
+        (None, None) => monitor_bounds(&main)?.map(|m| window::centered_origin((width, height), m)),
+        // A half-specified origin is not one; leave the window where
+        // it is rather than guessing the other half.
+        _ => None,
+    };
+
+    if let Some((x, y)) = origin {
+        main.set_position(LogicalPosition::new(x, y))
+            .map_err(failed)?;
+    }
+
+    Ok(())
+}
+
+/// The logical rectangle of the display the window is mostly on --
+/// Tauri's answer to `screen.getDisplayMatching(win.getBounds())`.
+/// `None` when no monitor can be identified, in which case the window
+/// keeps the position it has rather than being centred on a guess.
+fn monitor_bounds(main: &WebviewWindow) -> Result<Option<window::Bounds>, String> {
+    let monitor = match main.current_monitor().map_err(failed)? {
+        Some(monitor) => monitor,
+        None => return Ok(None),
+    };
+    let position = *monitor.position();
+    let size = *monitor.size();
+
+    Ok(Some(window::logical_bounds(
+        (position.x, position.y),
+        (size.width, size.height),
+        monitor.scale_factor(),
+    )))
+}
+
+/// `ipcOs.setAspectRatio` -- **not supported under Tauri**, and this
+/// is the whole of it.
+///
+/// Electron's `win.setAspectRatio` locks a window's proportions while
+/// the user drags its edge, on macOS. Tauri 2 exposes no equivalent
+/// (there is no `set_aspect_ratio` on `WebviewWindow`, and tao has no
+/// hook for the live-resize callback it would need). The visible
+/// consequence: on macOS, dragging the player window's edge no longer
+/// snaps to the video's shape, so the video letterboxes inside
+/// whatever rectangle the user drags. Nothing else changes -- the
+/// window is still *opened* at the video's aspect ratio by the
+/// `setBounds` call that follows every `setAspectRatio` call in
+/// `src/renderer/main.js`, and playback is unaffected.
+///
+/// The command stays rather than the shim resolving on its own, so
+/// that the day Tauri grows the API there is one place to fill in.
+#[tauri::command]
+fn set_aspect_ratio(aspect_ratio: f64) {
+    let _ = aspect_ratio;
+}
+
+/// `ipcOs.toggleFullScreen`.
+#[tauri::command]
+fn toggle_full_screen(
+    main: WebviewWindow,
+    watch: tauri::State<'_, Arc<FullscreenWatch>>,
+    set_to: Option<bool>,
+) -> Result<(), String> {
+    // A hidden window cannot go fullscreen; Electron returns here too.
+    if !main.is_visible().map_err(failed)? {
+        return Ok(());
+    }
+
+    let fullscreen = match set_to {
+        Some(flag) => flag,
+        None => !main.is_fullscreen().map_err(failed)?,
+    };
+    main.set_fullscreen(fullscreen).map_err(failed)?;
+
+    // The resize this causes reports the change on its own, but only
+    // once it arrives; saying so here as well makes the renderer's
+    // state right by the time the call resolves. The watch is
+    // edge-triggered, so whichever gets there first is the only one
+    // the renderer hears.
+    report_fullscreen(&main, &watch);
+    Ok(())
+}
+
+/// `ipcOs.show`. Electron's `win.show()` focuses as well as shows.
+#[tauri::command]
+fn show(main: WebviewWindow) -> Result<(), String> {
+    main.show().map_err(failed)?;
+    main.set_focus().map_err(failed)
 }
 
 /// Open the window where the last session left it.
@@ -94,8 +299,39 @@ fn send_bounds(main: &WebviewWindow) {
     }
 }
 
-/// Report every move and resize to the renderer, debounced.
-fn watch_bounds(main: &WebviewWindow) {
+/// Tell the renderer the window entered or left fullscreen, and only
+/// when it did.
+///
+/// Electron sends this from its `enter-full-screen` and
+/// `leave-full-screen` handlers. Tauri has neither event, so the state
+/// is read whenever the window resizes and [`FullscreenWatch`] decides
+/// whether it is news. Reading it costs a window call and nothing
+/// else, and going through the watch means the renderer sees exactly
+/// the two transitions it would under Electron -- including one the
+/// user made from the OS window chrome rather than through the app.
+fn report_fullscreen(main: &WebviewWindow, watch: &FullscreenWatch) {
+    let report = || -> tauri::Result<()> {
+        let fullscreen = main.is_fullscreen()?;
+        if watch.changed(fullscreen) {
+            main.emit(window::FULLSCREEN_CHANGED_EVENT, fullscreen)?;
+        }
+        Ok(())
+    };
+
+    if let Err(err) = report() {
+        eprintln!("fullscreenChanged: {err}");
+    }
+}
+
+/// Report every move and resize to the renderer: the rectangle
+/// debounced, the fullscreen state immediately.
+///
+/// The two share the one handler because they share the one event.
+/// The rectangle is debounced because a drag emits hundreds of them
+/// and each is a state write; the fullscreen edge is not, because it
+/// is a rare transition the UI lays itself out around and a second of
+/// letterboxed video would be visible.
+fn watch_bounds(main: &WebviewWindow, watch: Arc<FullscreenWatch>) {
     let debounce = Debounce::new(window::BOUNDS_DEBOUNCE);
     let watched = main.clone();
 
@@ -105,6 +341,10 @@ fn watch_bounds(main: &WebviewWindow) {
             tauri::WindowEvent::Moved(_) | tauri::WindowEvent::Resized(_)
         ) {
             return;
+        }
+
+        if matches!(event, tauri::WindowEvent::Resized(_)) {
+            report_fullscreen(&watched, &watch);
         }
 
         let main = watched.clone();
@@ -152,12 +392,28 @@ fn main() {
                 .get_webview_window(MAIN_WINDOW)
                 .expect("tauri.conf.json declares no main window");
             restore(&main, layout, hidden)?;
-            watch_bounds(&main);
+
+            // Shared between the resize handler and
+            // `toggle_full_screen`, so that a transition is reported
+            // once however it was reached.
+            let watch = Arc::new(FullscreenWatch::new());
+            watch_bounds(&main, Arc::clone(&watch));
 
             app.manage(paths);
+            app.manage(watch);
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![app_paths])
+        .invoke_handler(tauri::generate_handler![
+            app_paths,
+            window_is_visible,
+            window_is_maximized,
+            set_title,
+            set_progress,
+            set_bounds,
+            set_aspect_ratio,
+            toggle_full_screen,
+            show
+        ])
         .run(tauri::generate_context!())
         .expect("failed to start the WebTorrent Desktop window");
 }
