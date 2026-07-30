@@ -10,8 +10,11 @@ const engineProcess = require('./engine-process')
 const ipc = require('./ipc')
 const log = require('./log')
 const menu = require('./menu')
-// state.js is ESM; Babel emits its `export default` as `.default`
-const State = require('../renderer/lib/state').default
+// Since US-055 the renderer owns config.json. This is the main
+// process's own read-only reader for the two things it needs out of
+// it before the renderer exists: the window bounds and the folder
+// watcher's prefs.
+const savedState = require('./saved-state')
 const windows = require('./windows')
 
 const WEBTORRENT_VERSION = require('webtorrent/package.json').version
@@ -65,7 +68,7 @@ function init () {
 
   parallel({
     appReady: (cb) => app.on('ready', () => cb(null)),
-    state: (cb) => State.load(cb)
+    state: (cb) => savedState.load(cb)
   }, onReady)
 
   function onReady (err, results) {

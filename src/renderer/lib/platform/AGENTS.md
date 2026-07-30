@@ -158,9 +158,12 @@ engine seam be reimplemented without touching `ipc-os.js`.
 - `index.js` uses `import * as x` plus `export { x }`, not
   `export * as x from`. Keep it that way: three toolchains
   (`standard`, Babel, Rolldown) have to agree on the syntax.
-- This directory is compiled by **both** Babel (`build/`, because
-  `src/main/index.js` requires `../renderer/lib/state`) and Vite
-  (`build-vite/`). Both must keep building.
+- This directory is compiled by **both** Babel (`build/`, which is
+  what `test/unit/*.js` requires) and Vite (`build-vite/`). Both must
+  keep building. The main process stopped requiring
+  `../renderer/lib/state` in US-055, so nothing the *app* runs loads
+  the Babel copy of this tree any more -- but the unit tests do, so
+  do not add it to the `build:main` ignore list.
 - The lint rule from US-034 (`eslint-boundary.config.js`, run by
   `npm run lint:boundary` inside `npm run lint`) exempts this
   directory. It is the only place a direct `electron`,

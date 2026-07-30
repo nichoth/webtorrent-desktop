@@ -456,6 +456,21 @@ it tight.
   `window.addEventListener('error', ...)` and `console.error`. An
   app-defined command needs no capability entry in v2. Revert
   `main.rs` afterwards -- unlike `build/`, it is source-controlled.
+- **`NODE_ENV=test` does NOT give you a throwaway profile.** It looks
+  like it does -- `config.IS_TEST` makes `IS_PORTABLE` true and
+  `CONFIG_PATH` becomes `/tmp/WebTorrentTest` -- but only in the
+  *main* process. Vite statically replaces `process.env.NODE_ENV`
+  with `"production"` in the renderer bundle, so the renderer's
+  `config.js` computes `IS_TEST === false` and reads and writes
+  `~/Library/Application Support/WebTorrent/config.json`, the user's
+  real profile. The two halves of the app end up on different config
+  paths and any probe that mutates state clobbers real data. To
+  isolate a profile for a launch check, override **`HOME`** instead
+  (`HOME=/tmp/wt-smoke-home npx electron --no-sandbox .`):
+  `application-config-path` reads it through `globalThis.process.env`,
+  which Vite leaves alone, so both processes relocate together and
+  Electron's `userData` follows. Back the real `config.json` up first
+  anyway, and `shasum` it against the backup when you are done.
 
 ---
 
@@ -4757,4 +4772,91 @@ afterwards, `pgrep` clean). The six-step manual smoke test was not run
     the bundle identifier and there is no `app.setPath` equivalent, so
     `AppPaths` reports the relocated layout but does not enforce it on
     the WebView2/WKWebView cache.
+---
+
+## 2026-07-29 - US-055
+
+Moved app-state load and save behind the platform shim. `State.load`
+and `State.saveImmediate` now read and write `config.json` through
+`lib/platform/fs.js` instead of through `application-config`, and the
+main process stopped requiring the renderer's state module.
+
+- `src/renderer/lib/state.js`: dropped the `application-config`
+  import; `STATE_FILE` is `path.join(config.CONFIG_PATH,
+  'config.json')`. New `readSavedState()` (`fs.readFile` +
+  `TextDecoder` + `JSON.parse`, returning `null` on any failure) and
+  `writeSavedState()` (`fs.mkdir(CONFIG_PATH)` then `fs.writeFile`
+  with tab-indented JSON and a trailing newline). The
+  `process.type === 'renderer'` guard around `migrations.run()` is
+  gone -- nothing but the renderer loads this module now, and the test
+  would read false under a non-Electron host anyway.
+- `src/main/saved-state.js` (new): the main process's own read-only
+  reader for the two things it needs before the renderer exists --
+  `state.saved.bounds` for `windows/main.js` and `state.saved.prefs`
+  for `folder-watcher.js`. Plain `fs.readFile`; a missing, unreadable
+  or corrupt file yields `{ saved: { prefs: {} } }` rather than an
+  error, because the renderer is about to create or replace it.
+  `prefs` must be an object even with no file: `FolderWatcher
+  .isEnabled()` reads straight through it.
+- `src/main/index.js`: `require('../renderer/lib/state').default` ->
+  `require('./saved-state')`.
+- `test/unit/state-file.js` (new, 28 assertions): routing (every read
+  and write of `config.json` lands in a recording wrapper around the
+  real shim), format (byte-identical to what `application-config`
+  writes for the same object), migrations (fresh profile and existing
+  profile, no `process.type` in the way), the main process's reader
+  (bounds, prefs, missing file, corrupt file), and two source scans.
+- Docs: `docs/platform-shim.md`, `src/AGENTS.md`,
+  `src/renderer/lib/platform/AGENTS.md`, `test/AGENTS.md`, and the
+  externals comment in `vite.config.js`.
+
+Verification: `npm test` green (2152 assertions -- lint + depcheck +
+unit). Both bundles still build (`npm run build` and
+`npm run build:renderer:tauri`). TDD was confirmed by stashing
+`state.js` and `index.js` and re-running the new file: 9 of the 28
+assertions fail without the implementation.
+
+The six-step manual smoke test was NOT run -- it cannot be, in a
+non-interactive session. Step 6 was verified empirically instead:
+two launches against an isolated profile (`HOME=/tmp/wt-smoke-home`),
+the first creating a fresh profile, renaming a torrent to
+`PERSISTENCE-MARKER` and dispatching `stateSaveImmediate`, the second
+reading it back. Launch A logged "Missing config file: Creating new
+one" and saved to the isolated path; launch B did not, and
+`window.state.saved.torrents` came back with the marker intact. The
+written file is tab-indented with a trailing newline, the same shape
+as the real profile. Steps 1-5 carry the residual risk, and the
+untested surface there is narrow: nothing else in the app touches the
+state file.
+
+**Learnings for future iterations:**
+- **`NODE_ENV=test` is a trap for profile isolation** -- promoted to
+  Codebase Patterns. It relocates the main process to
+  `/tmp/WebTorrentTest` and leaves the renderer on the real
+  `~/Library/Application Support/WebTorrent`, because Vite hard-codes
+  the NODE_ENV lookup to `"production"` in the bundle. A probe run
+  that way wrote a marker into the real config; restoring it needed a
+  pre-made backup. Override `HOME` instead.
+- **`application-config` is still a direct dependency and still in the
+  Vite externals**, because `src/config.js` derives `CONFIG_PATH` from
+  `applicationConfig('WebTorrent').filePath`. US-055 removed the only
+  *writer*, not the package. That also makes it available as the
+  reference implementation in the format test -- comparing our output
+  to what the old writer actually produces beats asserting a
+  hand-written string.
+- **`fs.readFile` from the shim resolves to a `Uint8Array`, not a
+  `Buffer`**, so `JSON.parse(await fs.readFile(p))` does not work.
+  Decode first: `JSON.parse(new TextDecoder().decode(bytes))`.
+- **The write is no longer atomic.** `application-config` went through
+  `write-file-atomic` (temp file plus rename); the shim has no atomic
+  write and adding one would push a Node-shaped guarantee onto the
+  Tauri host. A crash mid-write can now truncate `config.json`. Both
+  readers treat an unparseable file as "no config", so the failure
+  mode is a lost profile rather than a startup crash -- if that turns
+  out to matter, the fix belongs in the shim (a `writeFileAtomic`
+  export both trees implement), not back in `lib/state.js`.
+- `src/renderer/lib/**` is still built by Babel even though the app no
+  longer loads that copy: `test/unit/*.js` is CommonJS and requires
+  `build/`. Do not "clean up" by adding it to the `build:main`
+  `--ignore` list.
 ---

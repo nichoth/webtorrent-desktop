@@ -312,6 +312,14 @@ removed.
 | `stat(path)` | `main.js:566`, `controllers/torrent-list-controller.js:97`, `:364` |
 | `exists(path)` | `lib/migrations.js:135` (`try { statSync() } catch {}`) |
 
+US-055 added one caller the US-023 grep could not see, because it went
+through a dependency rather than through `fs`: the saved-state file
+itself. `lib/state.js` now does `readFile` / `mkdir` / `writeFile` on
+`<CONFIG_PATH>/config.json` where it used to call
+`application-config`'s `read()` and `write()`. No new export was
+needed. The Tauri `fs.js` (US-060) therefore has to be good enough to
+carry config persistence, not just torrent bookkeeping.
+
 Shape changes for the migration:
 
 - `stat` resolves to a plain `{ size, isDirectory, isFile }` object,

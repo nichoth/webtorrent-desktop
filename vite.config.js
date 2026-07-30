@@ -148,9 +148,13 @@ const firstPartyExternals = [
 ]
 
 // Builtins no first-party renderer file imports, reached only through
-// dependencies -- the config-persistence stack under `lib/state.js`
-// (`application-config`, `write-file-atomic`, `graceful-fs`, `rimraf`)
-// and the casting stack under `lib/cast.js`. They are externalized for
+// dependencies -- the config-persistence stack under `src/config.js`
+// (`application-config`, and through it `write-file-atomic` and
+// `graceful-fs`), `rimraf` under `lib/migrations.js`, and the casting
+// stack under `lib/cast.js`. Since US-055 `lib/state.js` reads and
+// writes through the shim rather than through `application-config`,
+// but `src/config.js` still takes the config path from it, so the
+// stack is still in the bundle. They are externalized for
 // the same reason as the list above: the alternative is a browser stub
 // that throws the first time config is written or a cast device is
 // discovered. Kept in a separate list so the first-party inventory above

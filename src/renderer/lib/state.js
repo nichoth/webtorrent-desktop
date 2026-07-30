@@ -1,4 +1,3 @@
-import applicationConfig from 'application-config'
 import path from 'path'
 import { EventEmitter } from 'events'
 import debounce from 'debounce'
@@ -10,12 +9,16 @@ import config from '../../config'
 import * as fs from './platform/fs'
 import * as migrations from './migrations'
 
-const appConfig = applicationConfig('WebTorrent')
 const defaultAnnounceList = createTorrent.announceList.map((arr) => arr[0])
 
 const SAVE_DEBOUNCE_INTERVAL = 1000
 
-appConfig.filePath = path.join(config.CONFIG_PATH, 'config.json')
+// The renderer owns this file. It used to be read and written through
+// `application-config`, which reaches for Node's `fs` directly; since
+// US-055 both halves go through the platform shim, so a host without
+// a Node filesystem can back them. The main process reads the same
+// path, read-only, in `src/main/saved-state.js`.
+const STATE_FILE = path.join(config.CONFIG_PATH, 'config.json')
 
 const State = Object.assign(new EventEmitter(), {
   getDefaultPlayState,
@@ -76,7 +79,7 @@ function getDefaultState () {
      * Windows (> Vista)    %LOCALAPPDATA%/WebTorrent/config.json
      * Windows (XP, 2000)   %USERPROFILE%/Local Settings/Application Data/WebTorrent/config.json
      *
-     * Also accessible via `require('application-config')('WebTorrent').filePath`
+     * The directory is `config.CONFIG_PATH`; see `STATE_FILE` above.
      */
     saved: {},
 
@@ -220,7 +223,7 @@ function getGlobalTrackers () {
 }
 
 async function load (cb) {
-  let saved = await appConfig.read()
+  let saved = await readSavedState()
 
   if (!saved || !saved.version) {
     console.log('Missing config file: Creating new one')
@@ -234,25 +237,55 @@ async function load (cb) {
   const state = getDefaultState()
   state.saved = saved
 
-  // Migrations only make sense in the renderer, which owns the config file
-  // and the ipcRenderer channel installHandlers() uses. The import is now
-  // static (ESM has no conditional import), so only the call stays guarded.
+  // Migrations used to be guarded by a `process.type === 'renderer'`
+  // test, because the main process loaded this module too and must not
+  // run them. It does not load it any more (US-055), and the test would
+  // be false under a host that is not Electron, so the guard is gone.
   // They are async since US-028, and `cb` must not fire until they have
   // finished writing -- the caller starts torrenting off `state.saved`.
-  if (process.type === 'renderer') {
-    try {
-      await migrations.run(state)
-    } catch (err) {
-      return cb(err)
-    }
+  try {
+    await migrations.run(state)
+  } catch (err) {
+    return cb(err)
   }
 
   cb(null, state)
 }
 
+/**
+ * Read the saved state file. A missing or unparseable file is not an
+ * error: `load()` treats `null` as "no config yet" and creates a fresh
+ * profile, which is also the only sane response to a corrupt one --
+ * the old reader threw a SyntaxError out of `load()` instead.
+ */
+async function readSavedState () {
+  try {
+    const bytes = await fs.readFile(STATE_FILE)
+    return JSON.parse(new TextDecoder().decode(bytes))
+  } catch (err) {
+    return null
+  }
+}
+
+/**
+ * Write the saved state file, reproducing exactly what
+ * `application-config` wrote through `write-json-file`: the directory
+ * created first, tab-indented JSON, trailing newline. A config written
+ * by this version and one written by the last are byte-identical.
+ *
+ * The one thing not reproduced is `write-file-atomic`'s
+ * write-to-temp-and-rename. The shim has no atomic write and adding
+ * one would put a Node-shaped guarantee into a surface the Tauri host
+ * has to implement as well.
+ */
+async function writeSavedState (saved) {
+  await fs.mkdir(config.CONFIG_PATH)
+  await fs.writeFile(STATE_FILE, JSON.stringify(saved, null, '\t') + '\n')
+}
+
 // Write state.saved to the JSON state file
 async function saveImmediate (state, cb) {
-  console.log('Saving state to ' + appConfig.filePath)
+  console.log('Saving state to ' + STATE_FILE)
 
   // Clean up, so that we're not saving any pending state
   const copy = Object.assign({}, state.saved)
@@ -275,7 +308,7 @@ async function saveImmediate (state, cb) {
     })
 
   try {
-    await appConfig.write(copy)
+    await writeSavedState(copy)
     State.emit('stateSaved')
   } catch (err) {
     console.error(err)

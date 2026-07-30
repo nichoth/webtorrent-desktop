@@ -44,7 +44,7 @@ Both reach Electron as CommonJS, but by two different routes, and
   everything else: `src/config.js`, `src/main/**`,
   `src/shared/**` (see `src/shared/AGENTS.md`),
   `src/engine/**` (see `src/engine/AGENTS.md`) and
-  `src/renderer/lib/**`, which `src/main/index.js` requires.
+  `src/renderer/lib/**`, which the unit tests require.
 
 `build:main` therefore passes `--ignore` for the four paths Vite now
 owns exclusively -- `src/renderer/main.js`, `components/`,
@@ -52,8 +52,11 @@ owns exclusively -- `src/renderer/main.js`, `components/`,
 them, so Babel emitting them again would only leave a stale second copy
 of the renderer that nothing loads. If a *new* non-Vite consumer ever
 needs one of those files, shrink the ignore list rather than adding a
-second build step. `src/renderer/lib/**` is deliberately NOT ignored:
-it is shared, so it is built both ways.
+second build step. `src/renderer/lib/**` is deliberately NOT ignored.
+It was shared with the main process until US-055 moved the last
+require (`lib/state.js`) out of `src/main/index.js`; it is still built
+both ways because `test/unit/*.js` is CommonJS and requires the Babel
+output, never the ESM sources.
 
 The `babel` key in `package.json` carries
 `@babel/plugin-transform-modules-commonjs` with

@@ -228,6 +228,21 @@ before running any test:
   `platform-clipboard.js` / `platform-ipc-engine.js` later in the
   glob. `playback-controller` reaches `lib/state` -> `lib/migrations`
   that way, which is exactly what `migrations.js` tests against.
+- **`migrations.js` never withdraws its `build/config` stub.** It is
+  seeded at require time and left there for the rest of the run, so a
+  later file wanting its own config has to save the previous cache
+  entry, seed its own, `require()` the module under test, and put the
+  previous one back -- `state-file.js`'s `withConfig()` helper is the
+  shape. Pointing that stub's `CONFIG_PATH`, `POSTER_PATH` and
+  `TORRENT_PATH` at a `mkdtemp` directory is what makes it safe to run
+  the *real* `lib/platform/fs` against a throwaway profile.
+- **A recording wrapper beats a fake when the claim is "it goes
+  through the shim".** Require the real built shim first, wrap each
+  export in a function that pushes its arguments onto an array and
+  delegates, seed *that* at the shim's path, require the module under
+  test, then restore. The assertions are then about real filesystem
+  behaviour and about the routing at once, and anything reaching for
+  `fs` directly leaves no trace in the array.
 
 ## Testing `src/renderer/main.js`
 
