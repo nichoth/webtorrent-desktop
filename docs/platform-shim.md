@@ -368,9 +368,10 @@ The full protocol, including payload shapes and delivery semantics, is
 in **The `wt-*` protocol** below (US-033); the tables here map the
 functions onto the call sites they replaced.
 
-The counterparty is `src/renderer/webtorrent.js` in the hidden
-window. Per FR-4 it is not migrated and stays a direct `ipcRenderer`
-consumer.
+The counterparty is the engine sidecar, `src/engine/index.js`, reached
+over a localhost WebSocket since US-044. The hidden-window engine
+(`src/renderer/webtorrent.js`) is still loaded but nothing in the UI
+talks to it any more; US-045 deletes it.
 
 ### Commands
 
@@ -440,33 +441,41 @@ wire contract those functions carry.
 
 ### Transport, and what "the engine" is today
 
-There is no direct renderer-to-renderer channel. Every `wt-*` message
-goes renderer -> `ipcMain` -> the other renderer, relayed by the
-`ipcMain.emit` override in `src/main/ipc.js:220-244`. The main process
-inspects nothing but the channel prefix and the sending window's
-title: anything starting with `wt-` from the `'WebTorrent Hidden
-Window'` is forwarded to the main window, and anything else starting
-with `wt-` is forwarded to the hidden window, or queued until it has
-finished loading.
+Since US-044 the engine is a sidecar process (ADR-012) and the
+transport is a WebSocket on `127.0.0.1`. `ipc-engine.js` asks
+`ipc-os.getEngineEndpoint()` for `{ url, token }`, presents the token
+as `?token=`, and encodes every message as a `{ channel, args }` frame
+with `src/shared/wire.js`. The host holds the port and the token; the
+port changes when the sidecar restarts, so the endpoint is asked for on
+every connect rather than cached.
 
-Two consequences for a replacement engine. First, the relay is
+The relay it replaced -- renderer -> `ipcMain` -> the hidden renderer,
+via the `ipcMain.emit` override in `src/main/ipc.js` -- is still in the
+tree until US-045, but no `wt-*` message travels through it any more.
+
+Three consequences for a replacement engine. First, the socket is
 transport, not protocol: a librqbit host is free to deliver these
 messages any way it likes, as long as the channel names and argument
 lists match. Second, the pre-ready queue is part of the behaviour the
 UI depends on. `main.js` sends `wt-set-global-trackers` and
 `wt-start-torrenting` during startup, before the engine can possibly
-be listening, and expects them to be delivered rather than dropped.
+be listening, and expects them to be delivered rather than dropped;
+that queue now lives in `ipc-engine.js`. Third, the connection can
+drop, which `ipcMain` could not. `ipc-engine.js` reconnects with capped
+backoff and keeps every subscription in its own map, so a reconnect is
+invisible to callers and the unsubscribe functions handed out before a
+drop still work after it.
 
 ### Direction and delivery
 
 Two directions only:
 
-- **UI -> engine** (commands). Every one is `ipcRenderer.send` from
-  the shim: fire and forget, no return value, no acknowledgement.
+- **UI -> engine** (commands). Every one is one frame out of the
+  shim's socket: fire and forget, no return value, no acknowledgement.
   Failures come back as `wt-error` or `wt-warning`, or as nothing at
   all.
-- **Engine -> UI** (events). Every one is `ipcRenderer.send` from the
-  engine, delivered to a listener the shim registered.
+- **Engine -> UI** (events). Every one is one frame out of the engine's
+  bus, delivered to a listener the shim registered.
 
 "One-shot" below means the UI registers the listener with
 `{ once: true }` for a single expected reply. "Subscription" means a

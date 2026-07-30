@@ -5,11 +5,13 @@ engine here from `src/renderer/webtorrent.js` and turns it into a Node
 sidecar; US-039 landed the transport seam first and US-040 added the
 sidecar entry point.
 
-**Two engines exist until US-045.** `src/engine/index.js` is the
-sidecar; `src/renderer/webtorrent.js` in the hidden window is still the
-live one. US-040 copied rather than shared, so that the live engine
-stayed byte-identical through the move. Until US-045 deletes the hidden
-window, a change to engine behaviour has to land in both files.
+**Two engines exist until US-045, but only one is live.** US-044 moved
+the UI onto the sidecar (`src/engine/index.js`), so
+`src/renderer/webtorrent.js` in the hidden window still loads and still
+listens but nothing sends to it any more. US-040 copied rather than
+shared so the live engine stayed byte-identical through the move; now
+that the traffic has moved, a change to engine behaviour belongs in
+`src/engine/index.js` and the hidden window can be left to US-045.
 
 `build:main` compiles the whole of `src` except the four Vite-owned
 paths, so a file added here is emitted to `build/engine/` with no build
@@ -43,8 +45,9 @@ substitutable, so keep it passing rather than relaxing it.
 The Phase 3 transitional implementation: `ipcRenderer` in the hidden
 `BrowserWindow`, relayed by the `ipcMain.emit` override in
 `src/main/ipc.js`. It is the only file on the engine side that knows
-the engine is currently a renderer at all. US-044 adds the WebSocket
-implementation and US-045 deletes this one.
+the engine is currently a renderer at all. US-044 pointed the UI at
+`bus-websocket.js`, so nothing drives this one now and US-045 deletes
+it.
 
 It is only reachable from `src/renderer/webtorrent.js`, so it dies with
 that file.
@@ -70,7 +73,7 @@ Three behaviours are contract, not incidental:
 - **A send with nobody connected is dropped, not queued.** Commands
   always originate from the UI, so a connected client is the normal
   case; the pre-connect queue that ADR-012 requires lives on the *UI*
-  side, in `ipc-engine.js` (US-044).
+  side, in `ipc-engine.js`, and has since US-044.
 - **A malformed frame and a throwing handler are both reported through
   `onError`, never rethrown and never fatal to the socket.** The engine
   is a long-lived process; one bad message from a buggy UI must not end
@@ -80,9 +83,10 @@ Three behaviours are contract, not incidental:
   answers a bad upgrade with HTTP 401 before any frame is read. It is
   read from `WEBTORRENT_ENGINE_TOKEN` by `index.js`. No token means an
   open server, which is only acceptable for running the sidecar by
-  hand. The `Origin` check ADR-012 also asks for is not implemented
-  yet -- it needs the real header the Electron and Tauri webviews send,
-  which is US-044/US-046 territory.
+  hand. The `Origin` check ADR-012 also asks for is still not
+  implemented -- US-044 connected the UI without needing it, so it needs
+  the real header the Electron and Tauri webviews send and is US-046
+  territory.
 
 ## `index.js`
 

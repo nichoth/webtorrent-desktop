@@ -42,12 +42,44 @@ commit when the surface changes.
   already a promise there. `fs/promises` is externalized as a
   first-party builtin in `vite.config.js` for this module's sake.
 
+## `ipc-engine.js` is not an IPC module any more (US-044)
+
+It is a WebSocket client. The engine is a sidecar process (ADR-012), so
+this module holds the socket to it: the endpoint comes from
+`ipc-os.getEngineEndpoint()` on every connect (the port changes when the
+sidecar restarts, so it is never cached), frames are encoded by
+`src/shared/wire.js`, and the socket class is read as
+`globalThis.WebSocket` at connect time so a test can swap it.
+
+It is the one module here that imports another shim module. That is
+deliberate: the endpoint is host knowledge and `ipc-os.js` already owns
+the channel that carries it.
+
+Three behaviours are contract, not incidental:
+
+- **Sends are queued until a socket is open**, then flushed in order.
+  `main.js` sends `wt-set-global-trackers` and `wt-start-torrenting`
+  during startup, before any socket can exist, and expects delivery
+  rather than a drop. Do not "simplify" that queue away.
+- **Subscriptions live in this module's own `handlers` map, never on the
+  socket.** That is what makes a reconnect transparent: there is nothing
+  to re-register, and an unsubscribe function handed out before a drop
+  still works after it.
+- **A dropped connection retries forever, with capped backoff**, and a
+  `null` endpoint is a wait rather than a failure -- the host already
+  waits out a sidecar restart before answering.
+
+Transport faults (a malformed frame, a throwing listener, a dead socket)
+go to `console.error` through the private `report()`. They happen
+between calls, so there is no caller to reject at; that is the one place
+the shim's usual `dispatch('error')` route does not apply.
+
 ## Implementation pattern (set by `ipc-os.js`, US-020)
 
-`ipc-engine.js` (US-021) follows it exactly, including a private
-`listen()` helper of its own -- the two modules deliberately do not
-share code, so the engine seam can be reimplemented without touching
-`ipc-os.js`.
+Every module except `ipc-engine.js` follows it exactly. Until US-044
+`ipc-engine.js` did too, with a private `listen()` helper of its own --
+the two IPC modules deliberately share no code, which is what let the
+engine seam be reimplemented without touching `ipc-os.js`.
 
 - Import the Electron surface at module top level with a named
   import: `import { ipcRenderer } from 'electron'`. Babel compiles

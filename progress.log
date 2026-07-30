@@ -3915,3 +3915,96 @@ probe was reverted and the app rebuilt; no processes left.
     argument. Serve `Range` requests: Chromium's media loader asks for
     them.
 ---
+
+## 2026-07-29 - US-044
+
+Rewrite `ipc-engine.js` as a WebSocket client.
+
+**What was implemented**
+
+- `src/renderer/lib/platform/ipc-engine.js` no longer imports
+  `electron`. It imports `encode`/`decode` from `src/shared/wire.js`
+  and `getEngineEndpoint` from `ipc-os.js`, and holds one socket to
+  the sidecar. The exported surface is byte-for-byte the same set of
+  names, arguments and return types, so no call site in
+  `controllers/`, `main.js` or `lib/torrent-poster.js` changed.
+- Private transport, all new: `connect()` (lazy, called by every send
+  and every subscription, so there is no init step), `open()`,
+  `lost()`, `retry()` (0ms then 100ms doubling to 5s, reset on open),
+  `socketURL()` (token on the query string), `dispatch()`, `flush()`,
+  `send()`, and `report()` for transport faults.
+- Subscriptions live in a module-level `handlers` Map, never on the
+  socket. That is what makes reconnect transparent: nothing is
+  re-registered, and an unsubscribe handed out before a drop still
+  works after it.
+- Sends are queued in an `outbox` and flushed in order on open --
+  the pre-ready queue `main.js` relies on for
+  `wt-set-global-trackers` and `wt-start-torrenting`, moved from the
+  main process into the client as ADR-012 requires.
+- `test/unit/platform-ipc-engine.js` rewritten: 31 assertions against
+  a fake `globalThis.WebSocket` plus a stubbed `ipc-os`, covering the
+  endpoint/token URL, the queue-then-flush order, reconnect with
+  listeners intact, unsubscribe after a reconnect, `{ once: true }`,
+  both dynamic channel families, a `null` endpoint being retried, and
+  a source scan proving no Electron import remains.
+- Docs: `docs/platform-shim.md` (the transport section now describes
+  the socket, the queue and the reconnect, not the `ipcMain` relay),
+  `src/renderer/lib/platform/AGENTS.md` (new section: this module is
+  no longer an IPC module), `src/engine/AGENTS.md` (the hidden-window
+  engine is now loaded-but-idle, and the `Origin` check is US-046's).
+
+**Verification**
+
+`npm test` (1696 assertions) and `npm run lint` pass. `npx vite build`
+stays at 0 externalization warnings.
+
+Two real launches, not just the unit tests:
+
+1. Probe 1 -- `startTorrenting(4242, magnet:...aaaa)` from the running
+   renderer through the shim, reply `PARSED:4242:aaaa...` back from
+   the sidecar. The launch log also shows `Engine: starting torrent
+   1..11` for the resumed torrents, which are exactly the sends the
+   pre-connect queue held before the socket opened.
+2. Probe 2 -- same round trip after `kill -9` on the sidecar. The host
+   respawned it (`WEBTORRENT_ENGINE_PORT=55019` then `55076`) and the
+   second round trip succeeded on the new port, so the reconnect and
+   the re-fetched endpoint work in the app and not only against the
+   fake.
+
+No `ipc-engine:` transport errors in either launch. The six-step
+manual smoke test was **not** run (non-interactive session). The step
+that carries the risk is playback: probes covered command + event and
+per-torrent channels, but not a real `wt-start-server` -> `<video>`
+path.
+
+**Learnings for future iterations:**
+
+- **The UI is on the sidecar as of this story.** The hidden window and
+  the `ipcMain` relay still exist but carry no `wt-*` traffic; US-045
+  is now a deletion with nothing to migrate.
+- **A fake `globalThis.WebSocket` is the whole test seam.** The module
+  reads `globalThis.WebSocket` at connect time rather than binding the
+  class at module scope, so a test installs a fake class before the
+  first connect and drives it frame by frame. Read the constant `OPEN
+  = 1` as a literal for the same reason -- reading `WebSocket.OPEN`
+  would bind to whichever class was installed.
+- **Leave a lazily-connecting module quiescent at the end of a test
+  file.** An infinite reconnect loop keeps a pending `setTimeout`
+  alive and `tape test/unit/*.js` never exits. The final test in
+  `platform-ipc-engine.js` leaves one fake socket *open* (so nothing
+  is retrying) and restores the real global.
+- **A connect triggered by an `await`ed call can complete before the
+  next line runs.** `getEngineEndpoint()` is one microtask in a test,
+  so a baseline like `const before = sockets.length` taken *after* the
+  call that triggers the connect is already stale and the wait times
+  out. Capture the baseline before the trigger; `nextSocket(before)`
+  takes it as an argument for this reason.
+- **Probing a shim module in the real app costs one temporary line.**
+  `window.__ipcEngine = ipcEngine` in `src/renderer/main.js`, then
+  `npm run build`, then an appended `web-contents-created` block in
+  `build/main/index.js` that `executeJavaScript`s a promise resolving
+  to a result string. Two such blocks can be appended for two probes
+  at different delays, and the shell can `kill -9` the sidecar between
+  them -- that is how the reconnect criterion got real evidence.
+  Restore `main.js` and rebuild afterwards.
+---
