@@ -329,10 +329,22 @@ torrent identifier", so `state.js` wraps the same memory in a
 | `notifyPlayerUpdate(hasNext, hasPrevious)` | `onPlayerUpdate` | `controllers/playback-controller.js:335` |
 | `notifyPlayerClose()` | `onPlayerClose` | `controllers/playback-controller.js:367` |
 | `notifyDownloadFinished(path)` | `downloadFinished` | `controllers/torrent-controller.js:96` |
+| `getEngineEndpoint()` | `getEngineEndpoint` | new in US-042; caller is `ipc-engine.js` from US-044 |
 
-`checkForExternalPlayer` collapses a `send` plus an
-`ipcRenderer.once` reply into a single promise. It is the only
-request/response pair on the OS side.
+`checkForExternalPlayer` and `getEngineEndpoint` each collapse a `send`
+plus an `ipcRenderer.once` reply into a single promise. They are the
+only request/response pairs on the OS side.
+
+`getEngineEndpoint()` resolves with `{ url, token }` -- the sidecar's
+loopback WebSocket URL and the per-launch credential it expects -- or
+`null` when the host has no engine. Both values are plain data held in
+the host (`src/main/engine-process.js`); no Electron object crosses the
+boundary, and nothing about the sidecar is discoverable from the
+renderer's own environment (no `process.env`, no global). The port
+changes when the sidecar restarts, so this is a question to ask on
+every connect rather than a value to cache; the host makes the reply
+wait while a restart is in flight instead of answering `null` for an
+engine that is about to come back.
 
 The `notify*` prefix avoids confusion: the main process named these
 channels `onPlayerPlay` and so on, but they are outbound commands,

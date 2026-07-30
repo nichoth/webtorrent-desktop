@@ -379,3 +379,114 @@ test('the sidecar exits when the parent pipe closes', async function (t) {
     if (isAlive(child.pid)) child.kill('SIGKILL')
   }
 })
+
+// US-042: the host answers `getEngineEndpoint` from here, and the
+// renderer may ask before the child has bound its port, or during the
+// gap while a restart is in flight. `waitForEndpoint()` is that wait --
+// it always resolves with the *current* endpoint, never a stale one.
+test('waitForEndpoint() resolves with the endpoint once the port is bound',
+  async function (t) {
+    const log = makeLog()
+    const engine = engineProcess.createEngineProcess({
+      log,
+      env: CHILD_ENV,
+      backoffMs: 50
+    })
+
+    try {
+      // Asked before `start()` has settled: the caller waits rather
+      // than getting null.
+      const started = engine.start()
+      const waited = engine.waitForEndpoint()
+      const endpoint = await started
+      t.deepEqual(await waited, endpoint,
+        'a pending wait resolves with the endpoint start() reported')
+
+      t.deepEqual(await engine.waitForEndpoint(), endpoint,
+        'and a later call resolves immediately with the same endpoint')
+    } finally {
+      await engine.kill()
+    }
+  })
+
+test('waitForEndpoint() waits across a restart and reports the new port',
+  async function (t) {
+    const log = makeLog()
+    const engine = engineProcess.createEngineProcess({
+      log,
+      env: CHILD_ENV,
+      backoffMs: 50
+    })
+
+    try {
+      const first = await engine.start()
+      const pid = engine.getPid()
+
+      process.kill(pid, 'SIGKILL')
+      // The endpoint is dropped the moment the child exits, so this
+      // wait is the restart gap the renderer would hit.
+      await waitFor(() => engine.getEndpoint() === null)
+      const second = await engine.waitForEndpoint()
+
+      t.ok(/^ws:\/\/127\.0\.0\.1:\d+$/.test(second.url),
+        'resolves with a loopback url after the restart (' + second.url + ')')
+      t.notEqual(second.url, first.url,
+        'and it is the new port, not the dead one')
+      t.equal(second.token, first.token,
+        'the token is per launch, so it survives the restart')
+    } finally {
+      const pid = engine.getPid()
+      await engine.kill()
+      t.notOk(isAlive(pid), 'no orphan after the restart wait test')
+    }
+  })
+
+test('waitForEndpoint() rejects once the supervisor gives up',
+  async function (t) {
+    const entry = await writeScript('process.exit(7)\n')
+    const log = makeLog()
+    const engine = engineProcess.createEngineProcess({
+      log,
+      entry,
+      env: CHILD_ENV,
+      backoffMs: 10,
+      maxRestarts: 1
+    })
+
+    const waited = engine.waitForEndpoint()
+    let startFailure = null
+    try {
+      await engine.start()
+    } catch (err) {
+      startFailure = err
+    }
+    t.ok(startFailure, 'start() rejected')
+
+    let failure = null
+    try {
+      await waited
+    } catch (err) {
+      failure = err
+    }
+    t.ok(failure, 'a pending wait rejects rather than hanging forever')
+
+    let later = null
+    try {
+      await engine.waitForEndpoint()
+    } catch (err) {
+      later = err
+    }
+    t.ok(later, 'and so does a call made after the cap')
+
+    await engine.kill()
+  })
+
+test('the module-level waitForEndpoint() answers before init()',
+  async function (t) {
+    // Nothing is supervised in this process, so the host has nothing to
+    // hand the renderer. Null, not a hang: `src/main/ipc.js` replies
+    // with whatever this resolves to.
+    t.equal(await engineProcess.waitForEndpoint(), null,
+      'resolves with null when there is no engine')
+    t.end()
+  })

@@ -247,3 +247,37 @@ test('nothing outside the shim imports electron',
       'no renderer module outside the shim imports electron')
     t.end()
   })
+
+// US-042 AC-4: the sidecar endpoint reaches the renderer over the shim
+// and nowhere else. The two tempting shortcuts are the environment the
+// host happened to spawn the window with and a global the host poked
+// onto `window`, and both would survive every check above -- neither
+// touches an Electron API. This walk therefore includes
+// `lib/platform/` itself, because the shim is exactly the file that
+// would be tempted.
+test('no renderer file reads the engine endpoint from env or a global',
+  function (t) {
+    const patterns = [
+      /process\s*\.\s*env\s*\.\s*WEBTORRENT_ENGINE\w*/,
+      /WEBTORRENT_ENGINE_(TOKEN|PORT)/,
+      /\b(window|globalThis|global)\s*\.\s*\w*[eE]ngine(Endpoint|Url|Port|Token)\b/
+    ]
+    const files = rendererSources().concat(
+      fs.readdirSync(SHIM)
+        .filter((name) => name.endsWith('.js'))
+        .map((name) => path.join(SHIM, name))
+    )
+    t.ok(files.length > 20, 'walked the renderer sources and the shim')
+    for (const file of files) {
+      const rel = path.relative(RENDERER, file)
+      const hits = fs.readFileSync(file, 'utf8').split('\n')
+        // A comment explaining what the renderer must not do would
+        // otherwise fail this check (see test/AGENTS.md).
+        .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+        .map((line, i) => ({ line, n: i + 1 }))
+        .filter(({ line }) => patterns.some((re) => re.test(line)))
+        .map(({ line, n }) => n + ': ' + line.trim())
+      t.deepEqual(hits, [], rel + ' does not read the endpoint directly')
+    }
+    t.end()
+  })

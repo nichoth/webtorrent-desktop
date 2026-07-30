@@ -3730,3 +3730,87 @@ leftover processes.
     sidecar up", and its pid is what you `kill -9` to prove the restart
     path in the real app.
 ---
+
+## 2026-07-29 - US-042
+
+Expose the engine endpoint through the shim.
+
+**What was implemented**
+
+- `src/renderer/lib/platform/ipc-os.js` gains `getEngineEndpoint()`,
+  `async` like every other export, resolving with `{ url, token }` as
+  plain data or `null`. It is a `send` plus an `ipcRenderer.once` on
+  the `getEngineEndpoint` channel -- the same request/response shape
+  `checkForExternalPlayer` already uses, rather than
+  `invoke`/`handle`, so the existing fake `ipcRenderer` in the unit
+  tests covers it unchanged and the main side stays in the one style
+  `src/main/ipc.js` uses throughout.
+- `src/main/ipc.js` answers that channel from
+  `engineProcess.waitForEndpoint()`. Nothing but the two strings
+  crosses the boundary (ADR-007). The reply is guarded by
+  `isDestroyed()` because the window can go away during the wait.
+- `src/main/engine-process.js` gains `waitForEndpoint()` at both the
+  module and the supervisor level. It resolves with the *current*
+  endpoint, waiting when there is none: the renderer may ask before
+  the first spawn has bound a port, or during the gap while a restart
+  is in flight. Waiters are per gap (a fresh array flushed in
+  `onPort`), not the single `started` promise, so a wait that spans a
+  restart resolves with the new port rather than the dead one.
+  `kill()` resolves pending waiters with `null` and the give-up path
+  rejects them, so no request can hang forever.
+- `docs/platform-shim.md`: `getEngineEndpoint` added to the `ipc-os.js`
+  command table with the endpoint semantics.
+
+**Tests** (written first, all four failing before the implementation)
+
+- `test/unit/platform-ipc-os.js`: the endpoint round trip, the `null`
+  reply, listener cleanup, and one request per call so the port after a
+  restart is what the second call sees. `getEngineEndpoint` joins
+  `checkForExternalPlayer` in the `skip` list of the wt-* test.
+- `test/unit/engine-process.js`: `waitForEndpoint()` resolving for a
+  caller that arrived before the port line, resolving with the *new*
+  port after a `SIGKILL` restart while keeping the same token,
+  rejecting once the supervisor gives up, and the module-level form
+  answering `null` with nothing supervised.
+- `test/unit/platform-boundary.js`: AC-4 as a static scan -- no
+  renderer file, *including the shim itself*, reads the endpoint from
+  the sidecar environment variables or a `window`/`globalThis` engine
+  global. The walk deliberately includes `lib/platform/`, because the
+  shim is the file that would be tempted, and comment lines are
+  dropped first.
+
+**Verification**
+
+- `npm test` -- 1641 assertions, all passing.
+- `npm run lint` clean.
+- One launch check with a temporary probe appended to
+  `build/main/index.js` (removed by `npm run build` afterwards): both
+  renderer windows sent `getEngineEndpoint` over the real channel and
+  logged back `{"url":"ws://127.0.0.1:58646","token":"0cf5c..."}`.
+  That is the main-process handler proven end to end, which no unit
+  test can reach. No smoke test was run (non-interactive session);
+  nothing in the UI calls the new export yet, so there is no
+  user-visible surface to smoke until US-044.
+
+**Learnings for future iterations**
+
+- **`src/main/ipc.js` cannot be unit tested** -- it requires
+  `electron`'s `app`/`ipcMain` at module scope and every handler
+  reaches for a sibling main-process module. The pattern that does
+  work: unit test the module the handler delegates to (here
+  `engine-process.waitForEndpoint()`), then prove the wiring with one
+  launch probe that calls `ipcRenderer.send` from
+  `wc.executeJavaScript` and reads the reply back through the
+  `console-message` hook. Both renderer windows answer, which is
+  itself useful evidence the handler is not window-specific.
+- **`e.sender.send` needs an `isDestroyed()` guard** whenever the reply
+  is asynchronous. Any handler that awaits before replying can outlive
+  its window, and sending to a destroyed `webContents` throws inside
+  the promise chain where nothing catches it.
+- **A "wait for a value that changes" API needs per-gap waiters, not
+  one promise.** `start()` resolves once with the first endpoint;
+  reusing it for later callers would hand out the port of a process
+  that has already died. An array of `{resolve, reject}` flushed each
+  time the value arrives is the shape, and every terminal path (kill,
+  give up) has to flush it too or a caller hangs forever.
+---

@@ -31,7 +31,14 @@ const DEFAULT_MAX_RESTARTS = 5
 const DEFAULT_BACKOFF_MS = 500
 const DEFAULT_MAX_BACKOFF_MS = 8000
 
-module.exports = { init, kill, getEndpoint, getPid, createEngineProcess }
+module.exports = {
+  init,
+  kill,
+  getEndpoint,
+  waitForEndpoint,
+  getPid,
+  createEngineProcess
+}
 
 // The app has exactly one engine, but the supervisor is a factory so
 // tests can drive several with their own entry point and timings.
@@ -69,6 +76,19 @@ function kill () {
 /** @returns {{url: string, token: string}|null} */
 function getEndpoint () {
   return singleton ? singleton.getEndpoint() : null
+}
+
+/**
+ * The endpoint, waiting for it if the engine has not bound a port yet.
+ * This is what answers the renderer's `getEngineEndpoint` request
+ * (US-042): the UI may ask before the first spawn has finished, or
+ * during the gap while a restart is in flight.
+ *
+ * @returns {Promise<{url: string, token: string}|null>} null when there
+ *   is no engine to wait for
+ */
+function waitForEndpoint () {
+  return singleton ? singleton.waitForEndpoint() : Promise.resolve(null)
 }
 
 /** @returns {number|null} */
@@ -121,6 +141,12 @@ function createEngineProcess (options = {}) {
   let rejectStarted = null
   let started = null
   let settled = false
+
+  // Callers of `waitForEndpoint()` that arrived while there was no
+  // endpoint. Unlike `started` these are per gap, so a wait that spans a
+  // restart gets the new port rather than the dead one.
+  let waiters = []
+  let gaveUp = false
 
   function start () {
     if (!started) {
@@ -193,18 +219,40 @@ function createEngineProcess (options = {}) {
       settled = true
       resolveStarted(endpoint)
     }
+    const pending = waiters
+    waiters = []
+    for (const waiter of pending) waiter.resolve(endpoint)
+  }
+
+  /** @returns {Promise<{url: string, token: string}|null>} */
+  function waitForEndpoint () {
+    if (endpoint) return Promise.resolve(endpoint)
+    // Killed, so there is nothing to wait for and never will be.
+    if (stopped) return Promise.resolve(null)
+    if (gaveUp) return Promise.reject(giveUpError())
+    return new Promise((resolve, reject) => waiters.push({ resolve, reject }))
+  }
+
+  function giveUpError () {
+    return new Error(
+      'engine sidecar failed to start after ' + restarts + ' restarts'
+    )
   }
 
   function scheduleRestart () {
     if (restarts >= maxRestarts) {
+      gaveUp = true
       log.error('Engine: giving up after ' + restarts + ' restarts. ' +
         'Torrenting is unavailable until the app is restarted.')
       if (!settled) {
         settled = true
-        rejectStarted(new Error(
-          'engine sidecar failed to start after ' + restarts + ' restarts'
-        ))
+        rejectStarted(giveUpError())
       }
+      // A waiting renderer has to hear about it too, or it hangs on a
+      // request that can no longer be answered.
+      const pending = waiters
+      waiters = []
+      for (const waiter of pending) waiter.reject(giveUpError())
       return
     }
 
@@ -229,6 +277,12 @@ function createEngineProcess (options = {}) {
       restartTimer = null
     }
     endpoint = null
+
+    // Anyone still waiting gets null rather than a promise that can
+    // never settle.
+    const pending = waiters
+    waiters = []
+    for (const waiter of pending) waiter.resolve(null)
 
     const dying = child
     child = null
@@ -257,6 +311,7 @@ function createEngineProcess (options = {}) {
   return {
     start,
     kill,
+    waitForEndpoint,
     getEndpoint: () => endpoint,
     getPid: () => (child ? child.pid : null)
   }

@@ -187,6 +187,32 @@ function init () {
   ipcMain.on('setAllowNav', (e, ...args) => menu.setAllowNav(...args))
 
   /**
+   * Engine sidecar (US-042)
+   *
+   * Request/response over one channel, answering with plain data: the
+   * URL and the per-launch token, never the supervisor or any Electron
+   * object (ADR-007). The renderer asks on every connect because the
+   * port changes across a restart, and the reply is deliberately made
+   * to wait while a restart is in flight rather than reporting `null`
+   * for a sidecar that is about to come back.
+   */
+
+  ipcMain.on('getEngineEndpoint', e => {
+    const engineProcess = require('./engine-process')
+
+    // The window can go away during that wait, and sending to a
+    // destroyed webContents throws.
+    const reply = endpoint => {
+      if (!e.sender.isDestroyed()) e.sender.send('getEngineEndpoint', endpoint)
+    }
+
+    engineProcess.waitForEndpoint().then(reply, err => {
+      log.error('engine: no endpoint to report: ' + err.message)
+      reply(null)
+    })
+  })
+
+  /**
    * External Media Player
    */
 

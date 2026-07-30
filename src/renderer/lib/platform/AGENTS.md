@@ -96,3 +96,11 @@ share code, so the engine seam can be reimplemented without touching
   here needs no config change -- but adding a **new** host module to
   the shim means adding its specifier to the ban list, or the next
   file to reach for it directly will pass lint.
+- A **request/response export** (`checkForExternalPlayer`,
+  `getEngineEndpoint`) is a `send` plus an `ipcRenderer.once` on the
+  same channel name, and it never resolves without a main-process
+  answer. Two consequences: the main side must reply on that channel
+  (a `windows.main.send` or `e.sender.send`, not a `return`), and the
+  export has to go in the `skip` list of the "no export sends on a
+  wt-* channel" test in `test/unit/platform-ipc-os.js`, which calls
+  every export with no arguments and would otherwise hang.

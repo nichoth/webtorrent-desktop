@@ -323,6 +323,35 @@ export async function notifyDownloadFinished (path) {
   ipcRenderer.send('downloadFinished', path)
 }
 
+// -- The engine sidecar ---------------------------------------------
+
+/**
+ * @typedef {object} EngineEndpoint
+ * @property {string} url   WebSocket URL of the engine sidecar.
+ * @property {string} token Per-launch credential the sidecar expects.
+ */
+
+/**
+ * Ask the host where the engine sidecar is listening (US-042). Plain
+ * data, one round trip, the same send-then-`once` pair
+ * `checkForExternalPlayer` uses -- the host holds the port and the
+ * token, and nothing about the sidecar is discoverable from the
+ * renderer's environment.
+ *
+ * The port changes when the sidecar restarts, so this is a question to
+ * ask on every connect rather than a value to cache. `null` means the
+ * host has no engine to offer.
+ *
+ * @returns {Promise<EngineEndpoint|null>}
+ */
+export async function getEngineEndpoint () {
+  return await new Promise(resolve => {
+    ipcRenderer.once('getEngineEndpoint',
+      (e, endpoint) => resolve(endpoint))
+    ipcRenderer.send('getEngineEndpoint')
+  })
+}
+
 // -- Inbound events -------------------------------------------------
 
 /**

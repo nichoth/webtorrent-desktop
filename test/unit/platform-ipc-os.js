@@ -74,7 +74,8 @@ test('no export sends on a wt-* channel', async function (t) {
   // Call every command with harmless arguments and assert nothing
   // reached an engine channel. Listener registrations are covered by
   // the channel assertion below too.
-  const skip = ['checkForExternalPlayer']
+  // Both of these wait for a reply that a bare call never receives.
+  const skip = ['checkForExternalPlayer', 'getEngineEndpoint']
   for (const name of Object.keys(ipcOs)) {
     if (typeof ipcOs[name] !== 'function' || skip.includes(name)) continue
     if (name.startsWith('on')) {
@@ -153,3 +154,48 @@ test('checkForExternalPlayer resolves with the reply', async function (t) {
   t.equal(ipc.count('checkForExternalPlayer'), 0, 'reply listener removed')
   t.end()
 })
+
+// US-042: the engine endpoint. The renderer learns the sidecar's URL
+// and token from the main process, over the same send-then-`once`
+// request/response pair `checkForExternalPlayer` uses, and never from
+// `process.env` or a global (that half is asserted statically in
+// `test/unit/platform-boundary.js`).
+test('getEngineEndpoint resolves with the endpoint from the main process',
+  async function (t) {
+    reset()
+    const pending = ipcOs.getEngineEndpoint()
+    t.deepEqual(
+      ipc.sent,
+      [{ channel: 'getEngineEndpoint', args: [] }],
+      'request sent with no arguments'
+    )
+    const endpoint = { url: 'ws://127.0.0.1:51234', token: 'abc123' }
+    ipc.emit('getEngineEndpoint', endpoint)
+    t.deepEqual(await pending, endpoint, 'resolves with the reply payload')
+    t.equal(ipc.count('getEngineEndpoint'), 0, 'reply listener removed')
+    t.end()
+  })
+
+test('getEngineEndpoint resolves with null when the engine has none',
+  async function (t) {
+    reset()
+    const pending = ipcOs.getEngineEndpoint()
+    ipc.emit('getEngineEndpoint', null)
+    t.equal(await pending, null, 'a missing endpoint is null, not a throw')
+    t.end()
+  })
+
+test('a second getEngineEndpoint call gets its own reply',
+  async function (t) {
+    reset()
+    const first = ipcOs.getEngineEndpoint()
+    ipc.emit('getEngineEndpoint', { url: 'ws://127.0.0.1:1', token: 'a' })
+    t.deepEqual(await first, { url: 'ws://127.0.0.1:1', token: 'a' })
+
+    const second = ipcOs.getEngineEndpoint()
+    ipc.emit('getEngineEndpoint', { url: 'ws://127.0.0.1:2', token: 'b' })
+    t.deepEqual(await second, { url: 'ws://127.0.0.1:2', token: 'b' },
+      'the port after a restart is what the second call sees')
+    t.equal(ipc.sent.length, 2, 'one request per call')
+    t.end()
+  })
