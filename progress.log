@@ -4220,3 +4220,73 @@ launch was needed -- this story changes no shipped code.
   When a story deletes a file, grep the lint config and the boundary
   tests for its path.
 ---
+
+## 2026-07-29 - US-048
+- Documentation only: rewrote the docs that still described the
+  pre-US-044 topology (an `ipcMain.emit` relay to a hidden engine
+  window) so they describe the app that exists -- one UI window, an
+  Electron host, and an engine sidecar reached over a loopback
+  WebSocket.
+- `docs/platform-shim.md`: "Transport, and what the engine is today"
+  rewritten around the three-process topology, with an ASCII diagram
+  and the endpoint/token/port-changes-on-restart chain spelled out; the
+  relay paragraph is gone. Added a new "The pre-connect queue is
+  protocol" section stating the queue as behaviour a replacement
+  engine's transport must provide, including the deliberate asymmetry
+  (queue on the UI side, drop on the engine side). Repointed every
+  payload-shape and channel citation from the deleted
+  `src/renderer/webtorrent.js` line numbers to named functions in
+  `src/engine/index.js`. "Cross-check against what the renderer
+  actually sends" became "Cross-check against the two ends" and now
+  counts 22 static channels + 2 families in the engine against 20 + 2
+  in `ipc-engine.js`. "Files exempt from the shim" is down to
+  `lib/cast.js`, and "Enforcing the boundary" now lists all four
+  overrides in the config, including `ipc-engine.js`'s re-ban and the
+  `src/engine/**` mirror.
+- `docs/README.md`: Phase 3 marked done in the phase table (with the
+  two attended stories, US-047 and US-049, named in the prose);
+  `build:main` description fixed; "Where the code lives" gained
+  `src/engine/` and `src/shared/` and lost the hidden-window entry; the
+  "two deferred casualties" bullet is one; the multi-audio-track
+  paragraph now names the main window rather than the deleted hidden
+  one; the lint paragraph says the boundary pass covers both trees.
+- `src/AGENTS.md`: new "The four trees, and the boundary between them"
+  section at the top -- what each of `src/main`, `src/renderer`,
+  `src/engine`, `src/shared` may import and the two mechanisms that
+  enforce it.
+- `src/renderer/lib/platform/AGENTS.md`: `ipc-engine.js` section says
+  the counterparty is `src/engine/index.js` and that no `wt-*` message
+  passes through the main process; the queue bullet says it is protocol
+  and notes the engine's opposite rule; the lint gotcha mentions the
+  `src/engine/` half.
+- Files changed: `docs/platform-shim.md`, `docs/README.md`,
+  `src/AGENTS.md`, `src/renderer/lib/platform/AGENTS.md`,
+  `specs/prd.json`, `progress.log`.
+- No test was written. Per the repo-wide instruction not to write tests
+  for docs, and because every claim added here is asserted somewhere
+  else already (`test/unit/lint-boundary.js` for the override list,
+  `test/unit/platform-boundary.js` for the two-tree scan,
+  `test/unit/engine-entry.js` for the bus seam). The 80-column
+  criterion was checked with `awk` over the diff instead.
+- **Learnings for future iterations:**
+  - **The 80-column rule cannot apply to markdown table rows.**
+    `docs/platform-shim.md` has 57 pipe rows over 80 columns and every
+    one of them is a channel/payload table that markdown cannot wrap.
+    Check `git diff -U0 | grep '^+' | awk 'length > 81'` -- added lines
+    only -- rather than `awk` over the whole file, or you will chase 57
+    lines you must not touch.
+  - **Cite a function name, not a line number, when documenting the
+    engine.** The old `webtorrent.js:177-186` style citations were all
+    dead after US-045 and there was no way to tell which had merely
+    drifted. `getTorrentInfo()` in `src/engine/index.js` survives a
+    refactor and greps.
+  - **Both boundary trees are one lint invocation.**
+    `lint:boundary` is `eslint --no-eslintrc -c eslint-boundary.config.js
+    src/renderer src/engine` -- the paths are in the npm script, not in
+    the config, so a new policed tree needs the script edited too. Docs
+    that say the rule covers "src/renderer/" are stale in three places.
+  - **`src/shared/` is policed by prose only.** No ESLint override
+    covers it; its no-host-imports rule lives in
+    `src/shared/AGENTS.md`. Worth knowing before assuming the lint
+    catches a host import there.
+---

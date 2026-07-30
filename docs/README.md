@@ -42,11 +42,10 @@ output from disk, so a build has to run before Electron starts.
 | `build:main` | Babel | `src/`, minus the four renderer UI paths | `build/` |
 | `build:renderer` | Vite | `src/renderer/main.js` | `build-vite/` |
 
-- `build:main` compiles `src/config.js`, `src/main/**`,
-  `src/renderer/lib/**`, and `src/renderer/webtorrent.js` to CommonJS
-  in `build/`. `index.js` (the Electron entry point) requires
-  `build/main`, and the hidden engine window loads
-  `build/renderer/webtorrent.js` from `static/webtorrent.html`.
+- `build:main` compiles `src/config.js`, `src/main/**`, `src/engine/**`,
+  `src/shared/**` and `src/renderer/lib/**` to CommonJS in `build/`.
+  `index.js` (the Electron entry point) requires `build/main`, and the
+  host spawns the torrent engine as `build/engine/index.js`.
 - `build:renderer` bundles the UI -- `main.js`, `components/`,
   `controllers/`, `pages/` -- into `build-vite/renderer/main.js`, which
   `static/main.html` loads with a plain `<script src>`.
@@ -88,12 +87,15 @@ against Babel output rather than `src/` (see
 [ADR-010](adr/ADR-010-unit-tests-run-against-babel-output.md)).
 
 `npm run lint` runs two things: `standard` over the whole repo, and a
-separate ESLint pass (`eslint-boundary.config.js`) over
-`src/renderer/`, which fails the build if renderer code imports
+separate ESLint pass (`eslint-boundary.config.js`) over `src/renderer/`
+and `src/engine/`. It fails the build if renderer code imports
 `electron`, `@electron/remote`, or a Node builtin directly instead of
-going through the platform shim. That shim is the seam the Tauri port
-swaps out, so the rule is load-bearing rather than stylistic --
-`test/unit/platform-boundary.js` enforces the same thing for
+going through the platform shim, and if engine code imports Electron or
+touches a DOM global -- the sidecar is a plain Node process, so that is
+the mirror-image mistake. The shim is the seam the Tauri port swaps out
+and the sidecar is the seam librqbit swaps in, so both halves of the rule
+are load-bearing rather than stylistic.
+`test/unit/platform-boundary.js` enforces the same things for
 `require()` spellings and for usage the import rule cannot see.
 
 Integration tests are separate and slower:
@@ -111,19 +113,25 @@ per-platform requirements.
 ### Where the code lives
 
 - `src/main/` -- the Electron main process. Stays CommonJS; ported to
-  Rust in Phase 4.
+  Rust in Phase 4. It supervises the engine sidecar
+  (`src/main/engine-process.js`) and hands the UI its endpoint.
 - `src/renderer/` -- the UI, converted to ESM. All host access goes
   through the platform shim in `src/renderer/lib/platform/`, which is
-  the module set a Tauri host reimplements.
-- `src/renderer/webtorrent.js` -- the hidden engine window. Exempt from
-  the Vite build and from the shim; still CommonJS. Becomes a sidecar
-  in Phase 3.
+  the module set a Tauri host reimplements. There is one window.
+- `src/engine/` -- the torrent engine, as its own process: the sidecar
+  entry point `index.js` plus the WebSocket bus it talks to the UI
+  through. A plain Node process, so it has no Electron and no DOM;
+  librqbit replaces it later. See `src/engine/AGENTS.md`.
+- `src/shared/` -- code both processes must agree on. Just `wire.js`,
+  the `{ channel, args }` codec for the `wt-*` protocol. Nothing here
+  may import a host module.
 - `static/` -- HTML entry points and app icons.
 - `test/unit/` -- unit tests. `test/` -- integration tests.
 
 `src/AGENTS.md` covers the module-system rules in detail: which files
 are ESM, why the conversion order matters, and why dynamic `import()`
-does not work in the renderer.
+does not work in the renderer. It also has the map of which process
+loads what.
 
 ### Useful scripts
 
@@ -171,13 +179,16 @@ The plan is five phases:
 | --- | --- | --- |
 | 1 | Build `src/renderer/` with Vite | done |
 | 2 | Collapse host access into one platform shim | done |
-| 3 | Run `webtorrent.js` as a Node sidecar | not started |
+| 3 | Run the torrent engine as a Node sidecar | done |
 | 4 | Port `src/main/` to Rust | not started |
 | 5 | Casting, external players, codecs, signing | not started |
 
-Phases 1 and 2 require no Rust. Phase 3 keeps the existing engine and
-reuses the `wt-*` IPC channel names as its wire protocol, so the engine
-swap stays independent of the host swap.
+Phases 1 to 3 require no Rust. Phase 3 kept the existing WebTorrent
+engine and reused the `wt-*` channel names as its wire protocol, so the
+engine swap stays independent of the host swap: the app now runs a UI
+renderer, an Electron host, and an engine sidecar, and the UI reaches
+the engine over a loopback WebSocket rather than through the host. The
+topology is in `docs/platform-shim.md`.
 
 `specs/prd.json` is the authoritative task list -- each story carries a
 `passes` flag. It covers all five phases: US-001 to US-035 for Phases 1
@@ -185,19 +196,22 @@ and 2, which are complete apart from US-017's verification pass, then
 US-036 to US-049 (Phase 3), US-050 to US-073 (Phase 4), and US-074 to
 US-086 (Phase 5). Stories marked `"manual": true` need an attended
 session -- a real app window, a packaged build, a signing certificate,
-or cast hardware -- and are skipped by the headless loop.
+or cast hardware -- and are skipped by the headless loop. Phase 3's two
+remaining stories are both attended: US-047 ships the sidecar inside the
+packaged build, and US-049 is the verification pass.
 
-Two Phase 3 decisions are already made and recorded in the PRD's
-`conventions`: the renderer connects to the sidecar directly over a
-localhost WebSocket rather than relaying `wt-*` through the host, and
-Phase 4 grows `src-tauri/` alongside `src/main/` with the shim
-implementation chosen at build time, so Electron stays launchable until
-one cutover story.
+Both Phase 3 decisions recorded in the PRD's `conventions` held. The
+renderer connects to the sidecar directly over a localhost WebSocket
+rather than relaying `wt-*` through the host, which is what US-044 built
+and US-045 finished by deleting the relay. Phase 4 grows `src-tauri/`
+alongside `src/main/` with the shim implementation chosen at build time,
+so Electron stays launchable until one cutover story.
 
 ### What this means day to day
 
-Phases 1 and 2 built the seam that the rest of the port swaps out, so
-most of the rules in this document exist to protect it:
+Phases 1 to 3 built the two seams the rest of the port swaps out -- the
+platform shim on the host side and the sidecar on the engine side -- so
+most of the rules in this document exist to protect them:
 
 - **The platform shim is the swap point.** Every Electron and Node
   surface the UI needs is reachable through
@@ -213,22 +227,29 @@ most of the rules in this document exist to protect it:
 - **No host object crosses the boundary.** The shim passes plain data,
   so nothing on the UI side holds an Electron handle. The menu API is
   data-driven for the same reason.
-- **The `wt-*` IPC channels are a wire protocol**, not an
-  implementation detail. Phase 3 reuses the channel names unchanged
-  over a WebSocket to a sidecar. `docs/platform-shim.md` documents the
-  contract.
-- **Two modules are deferred casualties**, exempt from the shim:
-  `src/renderer/webtorrent.js` (also exempt from the Vite build;
-  becomes a sidecar in Phase 3, then librqbit) and
-  `src/renderer/lib/cast.js` (bundled by Vite, but reimplemented
-  outright in Phase 5). They are exempt because they are being thrown
-  away, not because the rules are optional.
+- **The `wt-*` channels are a wire protocol**, not an implementation
+  detail. Phase 3 kept the channel names unchanged and carries them over
+  a WebSocket to the sidecar instead of over Electron IPC.
+  `docs/platform-shim.md` documents the contract, including the
+  pre-connect queue a replacement engine has to provide.
+- **The sidecar is a plain Node process.** No Electron module, no DOM
+  global, and no media handling -- poster generation moved to the UI
+  renderer in US-043 for exactly that reason. The boundary lint rule
+  polices `src/engine/` for those mistakes the way it polices
+  `src/renderer/` for direct host imports.
+- **One module is a deferred casualty**, exempt from the shim:
+  `src/renderer/lib/cast.js`, which runs an `http` server in the
+  renderer and is reimplemented outright in Phase 5. It is exempt
+  because it is being thrown away, not because the rules are optional.
+  The other two exemptions are gone: US-002 deleted `lib/telemetry.js`,
+  and US-045 deleted `src/renderer/webtorrent.js` when the engine became
+  a process of its own.
 
-Some Electron capabilities will not survive the move. The hidden
-window runs with `nodeIntegration: true`, `contextIsolation: false`,
-and `enableBlinkFeatures: 'AudioVideoTracks'` -- that last one is
+Some Electron capabilities will not survive the move. The main window
+runs with `nodeIntegration: true`, `contextIsolation: false`, and
+`enableBlinkFeatures: 'AudioVideoTracks'` -- that last one is
 Chromium-only and `audio-tracks-controller.js` depends on it, so
-multi-audio-track switching will not work on WKWebView.
+multi-audio-track switching will not work on WKWebView (US-082).
 
 ### Further reading
 

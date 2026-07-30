@@ -1,5 +1,36 @@
 # src/
 
+## The four trees, and the boundary between them
+
+Since US-045 the app is three processes and there is no hidden window:
+
+- `src/main/` -- the Electron host. Imports Electron and Node freely;
+  ported to Rust in Phase 4. It spawns and supervises the engine
+  (`engine-process.js`) and hands the UI its endpoint over the
+  `getEngineEndpoint` channel.
+- `src/renderer/` -- the one UI window. Reaches the host **only**
+  through `src/renderer/lib/platform/` (FR-8/FR-11), and reaches the
+  engine only through that directory's `ipc-engine.js`.
+- `src/engine/` -- the torrent sidecar (ADR-012). A plain Node process:
+  Node builtins are its native surface, but it must not import Electron
+  or touch a DOM global. See `src/engine/AGENTS.md`.
+- `src/shared/` -- loaded by two runtimes at once, so no host import of
+  any kind. See `src/shared/AGENTS.md`.
+
+Two mechanisms enforce that, and they are complementary rather than
+redundant. `eslint-boundary.config.js` (run by `npm run lint:boundary`
+inside `npm run lint`) lints `src/renderer` and `src/engine` for banned
+`import` declarations and, in the engine, banned globals.
+`test/unit/platform-boundary.js` scans the same two trees in source,
+which is what catches the `require()` spellings ESLint cannot see plus
+the usage-level concerns no import rule can express. Adding a banned
+specifier means editing the config; adding a banned *usage* means
+editing the scan.
+
+`docs/platform-shim.md` is the contract for both seams: the shim's API
+surface and the full `wt-*` wire protocol, including the sidecar
+topology and the pre-connect queue.
+
 ## Module systems
 
 `src/renderer/` is being converted to ESM; `src/main/` stays CommonJS.

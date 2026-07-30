@@ -51,6 +51,12 @@ sidecar restarts, so it is never cached), frames are encoded by
 `src/shared/wire.js`, and the socket class is read as
 `globalThis.WebSocket` at connect time so a test can swap it.
 
+The counterparty is `src/engine/index.js` and nothing else. There is no
+hidden window and no `ipcMain` relay any more -- US-045 deleted both --
+so a `wt-*` message never passes through the Electron main process. The
+whole topology is in the "Transport, and what the engine is today"
+section of `docs/platform-shim.md`.
+
 It is the one module here that imports another shim module. That is
 deliberate: the endpoint is host knowledge and `ipc-os.js` already owns
 the channel that carries it.
@@ -60,7 +66,11 @@ Three behaviours are contract, not incidental:
 - **Sends are queued until a socket is open**, then flushed in order.
   `main.js` sends `wt-set-global-trackers` and `wt-start-torrenting`
   during startup, before any socket can exist, and expects delivery
-  rather than a drop. Do not "simplify" that queue away.
+  rather than a drop. Do not "simplify" that queue away: it is protocol
+  a replacement engine's transport has to provide, and drop it and the
+  app comes up with no trackers and nothing resumed. The engine's own
+  bus does the opposite -- a send with nobody connected is dropped, not
+  queued -- because commands always originate here.
 - **Subscriptions live in this module's own `handlers` map, never on the
   socket.** That is what makes a reconnect transparent: there is nothing
   to re-register, and an unsubscribe function handed out before a drop
@@ -127,7 +137,10 @@ engine seam be reimplemented without touching `ipc-os.js`.
   `lib/cast.js`. The exemption is a directory glob, so a new module
   here needs no config change -- but adding a **new** host module to
   the shim means adding its specifier to the ban list, or the next
-  file to reach for it directly will pass lint.
+  file to reach for it directly will pass lint. Since US-046 that same
+  config lints `src/engine/` too, for the mirror-image mistake: the
+  sidecar may use Node builtins freely and may not import Electron or
+  touch a DOM global.
 - **`ipc-engine.js` is the exception to that glob.** Since US-046 it
   is banned from importing Electron like any non-shim file, because
   US-044 turned it into a WebSocket client of the sidecar and it needs

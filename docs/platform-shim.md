@@ -248,8 +248,9 @@ rewrite; it builds ten descriptors when `torrentSummary.files` is set
 
 Exactly the operations the renderer performs today, no more. The list
 was re-enumerated at US-023 by grepping `src/renderer/` for `fs` usage
-excluding `webtorrent.js` (which FR-4 exempts from the shim) and
-excluding `lib/platform/` itself. That grep finds five files --
+excluding `webtorrent.js` (then exempt from the shim under FR-4; the
+file is gone since US-045) and excluding `lib/platform/` itself. That
+grep finds five files --
 `main.js`, `lib/state.js`, `lib/migrations.js`,
 `controllers/torrent-list-controller.js` and
 `controllers/subtitles-controller.js` -- and nine distinct operations,
@@ -369,9 +370,8 @@ in **The `wt-*` protocol** below (US-033); the tables here map the
 functions onto the call sites they replaced.
 
 The counterparty is the engine sidecar, `src/engine/index.js`, reached
-over a localhost WebSocket since US-044. The hidden-window engine
-(`src/renderer/webtorrent.js`) is still loaded but nothing in the UI
-talks to it any more; US-045 deletes it.
+over a localhost WebSocket since US-044. It is the only engine in the
+tree: US-045 deleted the hidden window and the copy that ran in it.
 
 ### Commands
 
@@ -405,7 +405,7 @@ talks to it any more; US-045 deletes it.
 | `onServerRunning` | `wt-server-running` | `main.js:361` |
 | `onServerRunningFor(infoHash, ...)` | `wt-server-${infoHash}` | `controllers/playback-controller.js:262`, `controllers/media-controller.js:76`, `lib/torrent-poster.js` |
 
-`onTorrentReady` has no renderer-UI call site: `webtorrent.js` emits
+`onTorrentReady` has no renderer-UI call site: the engine emits
 `wt-ready` but the UI listens on `wt-ready-${infoHash}` instead. It is
 declared because it is part of the protocol a replacement engine has to
 emit, and US-013's criteria call for both dynamic channels to be
@@ -418,21 +418,20 @@ server waits on the per-torrent channel. `main.js` still subscribes to
 the broadcast, and `torrent-controller.js` ignores an info that is not
 the playing torrent's.
 
-Two `wt-*` channels are deliberately **not** in the shim, because
-their only sender is `webtorrent.js` and their only receiver is
-`src/main/`:
+Two `wt-*` channels are deliberately **not** in the shim, because the
+sidecar is their only sender and nothing subscribes to either:
 
-- `wt-new-torrent` (`webtorrent.js:134`)
-- `wt-uncaught-error` (`webtorrent.js:86`)
+- `wt-new-torrent`, sent by `createTorrent()` in `src/engine/index.js`
+- `wt-uncaught-error`, sent by `onUncaughtError()` there
 
 ## The `wt-*` protocol
 
 **This is the contract any librqbit implementation must satisfy.**
 Everything below is what the UI sends and what it expects back. An
 engine that implements exactly these channels, with these payloads,
-can replace `src/renderer/webtorrent.js` without any other renderer
-change. An engine that implements less will break the UI; an engine
-that implements more is adding surface nothing consumes.
+can replace `src/engine/index.js` without any other renderer change.
+An engine that implements less will break the UI; an engine that
+implements more is adding surface nothing consumes.
 
 Recorded in US-033, after US-031 and US-032 moved the last call sites
 onto `ipc-engine.js`. The tables in the `ipc-engine.js` section above
@@ -441,30 +440,81 @@ wire contract those functions carry.
 
 ### Transport, and what "the engine" is today
 
-Since US-044 the engine is a sidecar process (ADR-012) and the
-transport is a WebSocket on `127.0.0.1`. `ipc-engine.js` asks
-`ipc-os.getEngineEndpoint()` for `{ url, token }`, presents the token
-as `?token=`, and encodes every message as a `{ channel, args }` frame
-with `src/shared/wire.js`. The host holds the port and the token; the
-port changes when the sidecar restarts, so the endpoint is asked for on
-every connect rather than cached.
+There is exactly one engine and it is a separate process: the sidecar
+at `src/engine/index.js` (ADR-012). US-044 pointed the UI at it and
+US-045 deleted the hidden window, the second engine that ran in it, and
+the `ipcMain.emit` relay that used to carry `wt-*` between the two. No
+`wt-*` message goes through the Electron main process any more; nothing
+in the tree relays one.
 
-The relay it replaced -- renderer -> `ipcMain` -> the hidden renderer,
-via the `ipcMain.emit` override in `src/main/ipc.js` -- is still in the
-tree until US-045, but no `wt-*` message travels through it any more.
+The topology, end to end:
+
+```
+UI renderer                     host                    sidecar
+-----------                     ----                    -------
+ipc-engine.js  --getEngineEndpoint()->  engine-process.js
+               <--{ url, token }------  (holds port + token)
+
+ipc-engine.js  ==== ws://127.0.0.1:PORT?token=... ====>  bus-websocket.js
+               <=== { channel, args } frames, wire.js ==>  index.js
+```
+
+- `src/main/engine-process.js` spawns the sidecar (Electron in Node
+  mode, `ELECTRON_RUN_AS_NODE=1`), reads the port off its one
+  `WEBTORRENT_ENGINE_PORT=<port>` stdout line, and holds the port and
+  the per-launch token. Neither is discoverable from the renderer's own
+  environment.
+- `ipc-engine.js` asks `ipc-os.getEngineEndpoint()` for
+  `{ url, token }` on **every** connect rather than caching it, because
+  the port changes when the sidecar restarts. A `null` reply means wait,
+  not fail: the host makes the reply wait out a restart in flight rather
+  than answering `null` for an engine that is about to come back.
+- The token rides on the query string and
+  `src/engine/bus-websocket.js` checks it in `verifyClient`, answering a
+  bad upgrade with HTTP 401 before any frame is read.
+- Every message either way is one `{ channel, args }` frame encoded by
+  `src/shared/wire.js`. The engine never names a transport API itself:
+  it is handed a bus of `send(channel, ...args)` and
+  `on(channel, handler)`, and `bus-websocket.js` is the only
+  implementation left.
 
 Three consequences for a replacement engine. First, the socket is
 transport, not protocol: a librqbit host is free to deliver these
 messages any way it likes, as long as the channel names and argument
-lists match. Second, the pre-ready queue is part of the behaviour the
-UI depends on. `main.js` sends `wt-set-global-trackers` and
-`wt-start-torrenting` during startup, before the engine can possibly
-be listening, and expects them to be delivered rather than dropped;
-that queue now lives in `ipc-engine.js`. Third, the connection can
-drop, which `ipcMain` could not. `ipc-engine.js` reconnects with capped
-backoff and keeps every subscription in its own map, so a reconnect is
-invisible to callers and the unsubscribe functions handed out before a
-drop still work after it.
+lists match. Second, the queues are asymmetric, and that is deliberate
+(see below). Third, the connection can drop, which `ipcMain` could not.
+`ipc-engine.js` reconnects with capped backoff and keeps every
+subscription in its own map, so a reconnect is invisible to callers and
+the unsubscribe functions handed out before a drop still work after it.
+
+### The pre-connect queue is protocol
+
+**A replacement engine's transport has to queue UI -> engine commands
+until the engine is reachable, and deliver them in order.** This is not
+a detail of the WebSocket implementation; it is behaviour the UI
+depends on.
+
+`main.js` sends `wt-set-global-trackers` and `wt-start-torrenting`
+during startup, before any socket to the engine can exist, and expects
+them to be delivered rather than dropped. Drop them and the app comes
+up with no trackers and none of the user's saved torrents resumed --
+silently, because commands are fire-and-forget and there is nothing to
+reject.
+
+Today that queue is the `outbox` in `ipc-engine.js`: `send()` pushes an
+encoded frame, asks for a connection, and flushes in order once the
+socket is open; a frame that fails to send stays at the head of the
+queue for the next open socket. A reconnect flushes the same way, so a
+command issued while the sidecar is restarting is delivered after it
+comes back.
+
+The queue lives on the **UI** side, and the mirror behaviour in
+`bus-websocket.js` is the opposite: an engine -> UI send with nobody
+connected is dropped, not queued. Commands always originate from the
+UI, so a connected client is the normal case for anything the engine
+has to say, and an event queued for a UI that never returns is a leak.
+A replacement engine should keep that split rather than queueing in
+both directions.
 
 ### Direction and delivery
 
@@ -517,9 +567,9 @@ always stop it.
 Two of these commands have a reply channel but **no failure reply**.
 `wt-save-torrent-file` and `wt-get-audio-metadata` both log and return
 on error today rather than sending anything back, so the UI's
-`{ once: true }` listener simply never fires. A librqbit implementation should preserve that (silence
-on failure) or the UI will need new error handling; it must not send a
-malformed reply on the success channel.
+`{ once: true }` listener simply never fires. A librqbit implementation
+should preserve that (silence on failure) or the UI will need new error
+handling; it must not send a malformed reply on the success channel.
 
 ### Events: engine -> UI
 
@@ -539,7 +589,8 @@ malformed reply on the success channel.
 
 `torrentKey` is `null` on `wt-warning` and `wt-error` when the fault
 is client-level rather than attached to one torrent
-(`webtorrent.js:94-95`).
+(`listenToClientEvents()` in `src/engine/index.js`; the per-torrent
+spellings are in `addTorrentEvents()`).
 
 `wt-progress` is not event-driven in the usual sense: the engine
 recomputes the whole aggregate on a 1s timer and on every torrent
@@ -560,10 +611,10 @@ grows at runtime:
 
 Both are emitted alongside their broadcast twin: `wt-ready` and
 `wt-ready-${infoHash}` are sent back to back with identical arguments
-(`webtorrent.js:157-158`), as are `wt-server-running` and
-`wt-server-${infoHash}` (`sendServerRunning()` in `webtorrent.js`). The families exist
-so a caller waiting on one specific torrent does not have to filter a
-broadcast stream.
+(`addTorrentEvents()` in `src/engine/index.js`), as are
+`wt-server-running` and `wt-server-${infoHash}`
+(`sendServerRunning()` there). The families exist so a caller waiting
+on one specific torrent does not have to filter a broadcast stream.
 
 Callers never build these strings. `onTorrentReadyFor(infoHash, ...)`
 and `onServerRunningFor(infoHash, ...)` take the info hash as an
@@ -578,7 +629,8 @@ switches, and US-013 requires both families to be covered.
 
 ### Payload shapes
 
-`TorrentInfo` (`webtorrent.js:177-186`), the JSON-saveable summary
+`TorrentInfo` (`getTorrentInfo()` in `src/engine/index.js`), the
+JSON-saveable summary
 sent with `wt-metadata`, `wt-ready`, `wt-ready-${infoHash}` and
 `wt-done`:
 
@@ -593,7 +645,8 @@ sent with `wt-metadata`, `wt-ready`, `wt-ready-${infoHash}` and
 }
 ```
 
-`Progress` (`webtorrent.js:253-292`), the whole-client aggregate sent
+`Progress` (`getTorrentProgress()` in `src/engine/index.js`), the
+whole-client aggregate sent
 with `wt-progress`:
 
 ```
@@ -630,9 +683,9 @@ object carrying the backing buffer. The single reader,
 to deliver something whose fields that borrowed method can read, not a
 `bitfield` instance.
 
-`ServerInfo` (`startServerFromReadyTorrent()` in `webtorrent.js`), sent
-with `wt-server-running`
-and `wt-server-${infoHash}`:
+`ServerInfo` (`startServerFromReadyTorrent()` in
+`src/engine/index.js`), sent with `wt-server-running` and
+`wt-server-${infoHash}`:
 
 ```
 {
@@ -669,7 +722,7 @@ trips.
 
 `AudioMetadata`, sent with `wt-audio-metadata`. One request produces
 up to three messages, each superseding the last
-(`webtorrent.js:325-366`):
+(`getAudioMetadata()` in `src/engine/index.js`):
 
 1. `{ title: string }` immediately, so the UI can show the filename.
 2. `{ common, format }` from the parser's progress observer, zero or
@@ -680,46 +733,51 @@ Nothing is sent on failure. The UI's one-shot listener therefore
 receives message 1 and stops listening; the standing listener in
 `main.js` receives all of them.
 
-### Cross-check against what the renderer actually sends
+### Cross-check against the two ends
 
-Grepping `src/renderer/**/*.js` for `wt-` string literals yields 24
-distinct static channels plus the two dynamic family prefixes. All 24
-appear in `webtorrent.js`; 22 of them also appear in `ipc-engine.js`,
-along with both families. The two that do not are accounted for:
+The channel names now live in exactly two files, one per process, which
+makes the contract greppable in both directions.
 
-- `wt-new-torrent` (`webtorrent.js:134`), sent with no arguments after
-  `client.seed()`.
-- `wt-uncaught-error` (`webtorrent.js:86`), the engine's
-  `window.onerror` hook, payload `{ message, stack }`.
+Grepping `src/engine/index.js` for `wt-` string literals yields 22
+distinct static channels plus the two dynamic family prefixes.
+`ipc-engine.js` carries 20 of the 22, plus both families. The two it
+does not are accounted for:
 
-Both are engine-outbound only, and **neither has a listener anywhere
-in the repo**. The `ipcMain.emit` override sees them, forwards them to
-the main window because they carry the `wt-` prefix, and nothing there
-subscribes. They are correctly out of the shim -- the shim exists to
-serve the UI renderer, and these never reach a consumer in it -- but a
-librqbit implementation should treat them as optional rather than as
-contract. `wt-uncaught-error` in particular is worth reviving as a
-real error path rather than reimplementing as a message into the void.
+- `wt-new-torrent`, sent with no arguments after `client.seed()`.
+- `wt-uncaught-error`, the sidecar's `uncaughtException` /
+  `unhandledRejection` hook, payload `{ message, stack }`.
 
-No other `wt-` literal exists in any `.js` file under `src/renderer/`
-outside `webtorrent.js` and `ipc-engine.js`. (There is prose mentioning
-`wt-ready-` in `controllers/AGENTS.md`; that is documentation, not a
-call site.) Keeping that true is the job of
-`test/unit/platform-boundary.js` and, from US-034, the lint rule.
+Both are engine-outbound only, and **neither has a listener anywhere in
+the repo**: they are encoded, put on the socket, and dropped by
+`dispatch()` in `ipc-engine.js`, which finds no handler for the channel.
+They are correctly out of the shim -- the shim exists to serve the UI
+renderer, and these never reach a consumer in it -- but a librqbit
+implementation should treat them as optional rather than as contract.
+`wt-uncaught-error` in particular is worth reviving as a real error path
+rather than reimplementing as a message into the void.
+
+On the UI side, no `wt-` literal exists in any `.js` file under
+`src/renderer/` outside `ipc-engine.js`. (There is prose mentioning
+`wt-ready-` in `controllers/AGENTS.md` and a bare `wt-` in a comment in
+`ipc-os.js`; those are documentation, not call sites.) Keeping that true
+is the job of `test/unit/platform-boundary.js` and, from US-034, the
+lint rule.
 
 ## Files exempt from the shim
 
-Per FR-4 and FR-11, and after US-002 deleted `lib/telemetry.js`,
-exactly two renderer files keep direct Electron and Node imports:
+Per FR-4 and FR-11, exactly one renderer file keeps direct Electron and
+Node imports: `src/renderer/lib/cast.js`, which runs an `http` server in
+the renderer and needs a full reimplementation in Phase 5.
 
-- `src/renderer/webtorrent.js`, the engine counterparty, which is
-  replaced wholesale by librqbit later.
-- `src/renderer/lib/cast.js`, which runs an `http` server in the
-  renderer and needs a full reimplementation.
+The other two exemptions are gone. US-002 deleted `lib/telemetry.js`,
+and US-045 deleted `src/renderer/webtorrent.js` -- the engine
+counterparty is a separate process now, so it is not a renderer file to
+exempt.
 
 ## Enforcing the boundary
 
-US-034 makes the boundary a build failure rather than a convention.
+US-034 makes the boundary a build failure rather than a convention, and
+US-046 extended it to the sidecar.
 
 `eslint-boundary.config.js` at the repo root is a standalone ESLint
 config -- it does not extend, override, or read `standard`'s settings,
@@ -731,19 +789,42 @@ modules. `os` and `crypto` are preventive: no renderer file has used
 either since the US-002 telemetry deletion and neither has a shim
 module, so the ban means the next use has to add one.
 
-Exemptions, in override order:
+Overrides, in order:
 
-1. `src/renderer/lib/platform/**/*.js` -- the shim is the boundary,
-   and is the one place these imports belong. This is a directory
-   glob, so a new shim module is exempt without editing the config.
-2. `src/renderer/webtorrent.js` -- deferred casualty (FR-4).
-3. `src/renderer/lib/cast.js` -- deferred casualty (US-013).
+1. `src/renderer/lib/platform/**/*.js` -- the rule is **off**. The shim
+   is the boundary, and is the one place these imports belong. This is a
+   directory glob, so a new shim module is exempt without editing the
+   config.
+2. `src/renderer/lib/platform/ipc-engine.js` -- the Electron half goes
+   back **on** (US-046). It needed `ipcRenderer` while the `wt-*`
+   protocol rode Electron IPC; since US-044 it is a WebSocket client of
+   the sidecar and needs no host module at all, so the blanket shim
+   exemption would let that quietly regress. The Node half stays off: it
+   is still a shim module and the next thing it needs may legitimately
+   be a builtin.
+3. `src/renderer/lib/cast.js` -- the rule is **off**. Deferred casualty
+   (US-013), and now the only one.
+4. `src/engine/**/*.js` -- the other side of the same seam (US-046). The
+   sidecar is a plain Node process, so it does not match the renderer
+   rules and its Node builtins are unrestricted. It is policed for the
+   mirror-image mistake instead: `electron`, `@electron/remote` and
+   `original-fs` are banned there too, and `no-restricted-globals` bans
+   `window`, `document`, `navigator`, `localStorage`, `sessionStorage`
+   and `XMLHttpRequest`. An Electron import in the sidecar fails at load
+   rather than degrading -- it runs under `ELECTRON_RUN_AS_NODE`, where
+   `require('electron')` has no `app`, and a packaged sidecar has no
+   `node_modules/electron` at all.
 
-Those two files are the only per-file overrides, and
-`test/unit/lint-boundary.js` asserts that stays true.
+`lib/cast.js` is the only override that switches the rule off for a
+single file, and `test/unit/lint-boundary.js` asserts that stays true.
 
-Wiring: `npm run lint:boundary` runs the config with `--no-eslintrc`;
-`npm run lint` is `standard && npm run lint:boundary`; `npm test` runs
+`src/shared/` is covered by neither: it is loaded by both processes, so
+no host import is legitimate there at all. That rule is prose in
+`src/shared/AGENTS.md` today rather than a lint override.
+
+Wiring: `npm run lint:boundary` runs the config with `--no-eslintrc`
+over **two** trees, `src/renderer` and `src/engine`; `npm run lint` is
+`standard && npm run lint:boundary`; `npm test` runs
 `npm run lint` first, so a direct host import fails the build. Adding
 `import os from 'os'` to `lib/dispatcher.js` and running `npm test`
 stops the run at `lint:boundary` with `'os' import is restricted from
@@ -753,6 +834,7 @@ being used`, before `depcheck` or the unit tests execute.
 `require()` spellings of the same specifiers, and the usage-level
 concerns no import rule can express (`ipcRenderer.` member reads,
 `wt-` channel strings, `new remote.Menu`, `remote.dialog`), stay in
-the source scan in `test/unit/platform-boundary.js`. The two checks
-are complementary; neither replaces the other. Add a new banned
-specifier to the lint config, a new banned usage to the scan.
+the source scan in `test/unit/platform-boundary.js`, which since US-046
+scans the sidecar for its own two bans as well. The two checks are
+complementary; neither replaces the other. Add a new banned specifier to
+the lint config, a new banned usage to the scan.
