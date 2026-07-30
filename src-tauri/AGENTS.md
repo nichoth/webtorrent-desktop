@@ -102,6 +102,20 @@ loop on the main thread, so the command that calls them must be
 its ACL manifest to the regenerated `gen/schemas/`, which is
 gitignored -- nothing to commit.
 
+`async` is the safer default for any plugin command generally, not just
+for the `blocking_*` pickers: the clipboard plugin's `read_text` is
+`arboard`'s, which deadlocks on Linux if it runs on the main thread
+while reading something the webview itself copied.
+
+## An ordinary crate can outrun the declared MSRV
+
+`rust-version` is 1.77.2 (ADR-014), and Cargo's resolver does not
+honour it -- `cargo add` warns about a too-new version and then the
+lockfile picks it anyway. So a non-Tauri dependency needs its
+`rust-version` checked, and pinning exactly (`trash = "=5.2.3"`, US-059)
+is how the declaration stays true. Note *why* in `Cargo.toml`, because
+the next person's instinct is to unpin it.
+
 ## Gates
 
 `cargo fmt --check` and `cargo clippy -- -D warnings` are gates from

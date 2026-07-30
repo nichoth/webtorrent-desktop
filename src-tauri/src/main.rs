@@ -9,8 +9,9 @@
 //! nothing here that decides what the UI is -- only where it lives.
 //! The remaining host concerns the UI calls (menus, the tray) arrive
 //! in a later story. Paths landed first, in `paths`, because the rest
-//! of Phase 4 is built on them; the window itself is `window`, and the
-//! file dialogs are `dialog`.
+//! of Phase 4 is built on them; the window itself is `window`, the
+//! file dialogs are `dialog`, and `shell` and `clipboard` are the two
+//! halves of "hand this to the OS".
 //!
 //! `tauri.conf.json` declares the window **hidden**, exactly as
 //! `src/main/windows/main.js` passes `show: false`. Everything about
@@ -19,15 +20,19 @@
 //! so it is made below and the window is shown afterwards, rather than
 //! flashing at the default size first.
 
+mod clipboard;
 mod dialog;
 mod paths;
+mod shell;
 mod window;
 
 use std::sync::Arc;
 
 use tauri::window::{ProgressBarState, ProgressBarStatus};
-use tauri::{Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow};
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow};
+use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
+use tauri_plugin_opener::OpenerExt;
 
 use paths::AppPaths;
 use window::{Debounce, FullscreenWatch, ProgressBar, WindowLayout};
@@ -320,6 +325,77 @@ fn file_dialog(main: &WebviewWindow, plan: &dialog::DialogPlan) -> FileDialogBui
     builder
 }
 
+// -- the OS, and the clipboard (US-059) -------------------------------
+//
+// `platform/shell.js` and `platform/clipboard.js`. Commands rather than
+// webview calls for the third time and the same two reasons: three of
+// the four shell operations are the Electron main process's already
+// (`src/main/shell.js`), and reaching the opener and clipboard plugins
+// from Rust leaves `capabilities/default.json` at `core:default`.
+//
+// The opener plugin's own error type is not serializable either, so
+// these do what the window commands do and cross as a message. Failure
+// is a change from the Electron tree, where three of the four are
+// `ipcRenderer.send` and cannot report anything; the call sites already
+// handle a rejection (`docs/platform-shim.md`).
+
+/// The opener plugin's failures, as the renderer can use them.
+fn opener_failed(err: tauri_plugin_opener::Error) -> String {
+    err.to_string()
+}
+
+/// `shell.openExternal`: a URL in the user's default browser.
+#[tauri::command]
+async fn open_external(app: AppHandle, url: String) -> Result<(), String> {
+    // `None` is "whichever application the OS associates with it",
+    // which is the whole of what Electron's `openExternal` does.
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(opener_failed)
+}
+
+/// `shell.openPath`: a file in whichever application the OS associates
+/// with it.
+#[tauri::command]
+async fn open_path(app: AppHandle, path: String) -> Result<(), String> {
+    app.opener()
+        .open_path(path, None::<&str>)
+        .map_err(opener_failed)
+}
+
+/// `shell.showItemInFolder`: reveal the item in the file manager,
+/// selected where the platform can select it.
+#[tauri::command]
+async fn show_item_in_folder(app: AppHandle, path: String) -> Result<(), String> {
+    app.opener().reveal_item_in_dir(path).map_err(opener_failed)
+}
+
+/// `shell.moveItemToTrash`. The decision -- including what to do about
+/// a path that is already gone -- is [`shell::to_trash`].
+#[tauri::command]
+async fn move_item_to_trash(path: String) -> Result<(), String> {
+    shell::to_trash(&path)
+}
+
+/// `clipboard.readText`. Empty is `''`, not a failure; see
+/// [`clipboard::read_outcome`].
+///
+/// `async` deliberately: the plugin's `read_text` is `arboard`'s, which
+/// deadlocks on Linux if it runs on the main thread while reading
+/// something the webview itself copied. A non-`async` command would.
+#[tauri::command]
+async fn clipboard_read_text(app: AppHandle) -> Result<String, String> {
+    clipboard::read_outcome(app.clipboard().read_text().map_err(|err| err.to_string()))
+}
+
+/// `clipboard.writeText`.
+#[tauri::command]
+async fn clipboard_write_text(app: AppHandle, text: String) -> Result<(), String> {
+    app.clipboard()
+        .write_text(text)
+        .map_err(|err| err.to_string())
+}
+
 /// Open the window where the last session left it.
 ///
 /// The order matters: the minimum size is set before the size, so a
@@ -461,6 +537,13 @@ fn main() {
         // in `capabilities/default.json`, and nothing above the shim
         // should want them (ADR-005).
         .plugin(tauri_plugin_dialog::init())
+        // Same arrangement as the dialog plugin: `open_external`,
+        // `open_path`, `show_item_in_folder` and the clipboard commands
+        // below use these plugins' Rust APIs, and the renderer cannot
+        // reach the plugins' own commands because they are not in
+        // `capabilities/default.json`.
+        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
         .setup(|app| {
             // `download_dir` is the one path Tauri resolves better than
             // this crate can: on Linux it reads the XDG user-dirs
@@ -497,7 +580,13 @@ fn main() {
             toggle_full_screen,
             show,
             show_open_dialog,
-            show_save_dialog
+            show_save_dialog,
+            open_external,
+            open_path,
+            show_item_in_folder,
+            move_item_to_trash,
+            clipboard_read_text,
+            clipboard_write_text
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the WebTorrent Desktop window");

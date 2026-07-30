@@ -80,6 +80,14 @@ Consequences for anything done in this directory:
   on `ipcRenderer.send` rather than calling `shell` directly:
   `moveItemToTrash` is main-process-only in Electron, and the main
   handlers already exist. Only `openExternal` runs in the renderer.
+  The Tauri tree makes all four host commands, which means those three
+  gain a rejection they never had: an `ipcRenderer.send` cannot report
+  anything, and a command answers. When porting an export whose
+  Electron version is fire-and-forget, check the call sites catch and
+  record the difference in `docs/platform-shim.md` -- the two trees
+  must agree on names and arities, but where they cannot agree on
+  behaviour the difference belongs in writing rather than in a
+  swallowed error.
 - **Nothing here returns a Node object.** `fs.stat` resolves to a
   plain `{ size, isDirectory, isFile }`, not a `Stats` instance; menus
   are descriptor objects, not `MenuItem` instances (FR-12). Anything

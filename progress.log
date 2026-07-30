@@ -30,6 +30,32 @@ it tight.
   `src-tauri/capabilities/default.json` grants it -- Tauri gives the
   renderer nothing without a capability, and the failure is a silent
   runtime permission error in a webview with no visible console.
+- **A Tauri plugin has two APIs and only the JS one costs a
+  capability.** Every plugin ported through the shim so far (dialog,
+  opener, clipboard-manager) is registered with `.plugin(...::init())`
+  and then reached from an app command through its **Rust** API, which
+  is what has kept `capabilities/default.json` at `core:default` for
+  three stories running. Calling the plugin's JS API from the webview
+  instead would need its `allow-*` permissions granted to the whole
+  webview. Declare such a command `async`: several plugin calls block
+  or deadlock the main event loop (the dialog crate's `blocking_*`
+  pickers, and the clipboard's `read_text`, which is `arboard`'s).
+- **Cargo's resolver does not honour `rust-version`.** It is 1.77.2
+  (ADR-014), and `cargo add` warns about a too-new dependency and then
+  the lockfile picks it anyway. A non-Tauri dependency therefore needs
+  its own MSRV checked and, if it moves, pinning exactly
+  (`trash = "=5.2.3"`, US-059) with the reason in a `Cargo.toml`
+  comment -- the next person's instinct is to unpin it.
+- **macOS TCC blocks reading protected directories even outside the
+  sandbox.** `~/.Trash` is the one hit so far: `ls` fails with
+  `Operation not permitted` unless the terminal has been granted Full
+  Disk Access, so a test asserting on what is in there is a gate that
+  passes or fails by a setting outside the repository. Check
+  readability before writing such an assertion (and check it with
+  `dangerouslyDisableSandbox` too, so the sandbox is not blamed for a
+  TCC denial); where it is protected, assert what is portable, say in
+  the test's doc comment what is deliberately *not* asserted and why,
+  and leave the observation to the manual verification story.
 - **Writing a Tauri command for the shim (US-057 onward).** Prefer an
   app command over a core API call from the webview: the behaviour
   being ported is the Electron *main* process's, and an app command
@@ -5089,4 +5115,77 @@ state file.
     a plain `String` is what crosses the boundary (ADR-007), so the
     conversion is a `Result` and the `Url` case is reported rather
     than guessed at.
+---
+## 2026-07-30 - US-059
+
+- Implemented the OS-handoff surface of the Tauri shim:
+  `tauri/shell.js` (`openExternal`, `showItemInFolder`, `openPath`,
+  `moveItemToTrash`) and `tauri/clipboard.js` (`readText`,
+  `writeText`), each export one host command. No Electron reference
+  remains in either module and no call site changed.
+- Rust host: new `src-tauri/src/shell.rs` (the already-gone decision,
+  `plan_trash`/`to_trash`) and `src-tauri/src/clipboard.rs` (the
+  empty-clipboard decision, `read_outcome`), plus the six commands in
+  `main.rs`. The shell three go through `tauri-plugin-opener`'s Rust
+  API and the clipboard two through `tauri-plugin-clipboard-manager`'s,
+  so `capabilities/default.json` stays at `core:default`.
+- Move-to-trash is the `trash` crate (`NSFileManager`'s
+  `trashItemAtURL` on macOS), not an unlink and not the opener plugin:
+  Tauri 2 has no equivalent of Electron's `shell.trashItem`. Pinned
+  `=5.2.3` because 5.2.6 onwards needs rustc 1.85, above ADR-014's
+  `rust-version`.
+- Two host differences absorbed rather than papered over, both written
+  up in `docs/platform-shim.md`: a shell failure now *rejects* where
+  the Electron tree's `ipcRenderer.send` could not report anything
+  (every call site already terminated the rejection under FR-10, so
+  nothing goes unhandled -- the user now sees an error where a failure
+  used to be silent), and `readText()` still answers `''` for an empty
+  clipboard, which `arboard` reports as `ContentNotAvailable`.
+- Files: `src/renderer/lib/platform/tauri/shell.js`,
+  `src/renderer/lib/platform/tauri/clipboard.js`,
+  `src-tauri/src/shell.rs`, `src-tauri/src/clipboard.rs`,
+  `src-tauri/src/main.rs`, `src-tauri/Cargo.toml`,
+  `src-tauri/Cargo.lock`, `test/unit/platform-shell.js`,
+  `test/unit/platform-clipboard.js`, `test/unit/platform-dialog.js`
+  (comment only), `test/unit/platform-tauri.js`,
+  `docs/platform-shim.md`, `test/AGENTS.md`, `src-tauri/AGENTS.md`,
+  `src/renderer/lib/platform/AGENTS.md`, `specs/prd.json`.
+- Verified: the JS tests were confirmed test-first by stashing both
+  shim modules and re-running -- they fail on the `NotImplementedError`
+  and on the host-failure rejections. The new Rust test
+  `a_real_file_goes_to_the_trash` was checked non-tautological by
+  mutating `to_trash`'s `trash::delete` arm to an `Err` (it fails).
+  `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and
+  `cargo test` (65 tests) pass in `src-tauri/`; `npm test` passes
+  (2250 assertions). `npm run build:tauri && cargo build`, then the
+  binary launched in the background, came up with no stderr and exited
+  on `kill`; `pgrep` clean afterwards.
+- The interactive half of the criterion (copying a magnet link,
+  revealing a folder and following an external link *from the UI*
+  under `npm run start:tauri`) needs a human at the window, so it goes
+  to the Phase 4 verification pass, US-073, where US-057's and
+  US-058's observations already are. The commands themselves are
+  proven at the unit level on both sides of the boundary and the host
+  registers them at startup without a capability error.
+- **Learnings for future iterations:**
+  - **A test that needs a macOS-protected directory is not a gate.**
+    The obvious way to satisfy "reaches the OS trash rather than
+    unlinking" is to look in `~/.Trash`, and it cannot be done: TCC
+    denies the read unless the terminal has Full Disk Access, and the
+    `trash` crate's `os_limited::list` -- the portable way to ask what
+    is in the trash -- is `#[cfg]`-gated to Windows and Linux, with
+    `trashItemAtURL`'s `resultingItemURL` discarded. The test that
+    landed exercises the real `trash::delete` end to end and says in
+    its doc comment exactly which assertion is missing and why. Now in
+    the Patterns section.
+  - **Check the call sites before writing down that they are
+    unhandled.** The first draft of the `docs/platform-shim.md` entry
+    claimed `showItemInFolder` was the one uncaught call; it has had a
+    `.catch` since FR-10, as all four do. A claim about a call site is
+    cheap to grep and expensive to leave wrong in a document the
+    librqbit implementation is written against.
+  - **`Result<(), String>` is worth asserting with `assert_eq!`
+    rather than `is_ok()`.** The mutation check above only produced a
+    useful failure message because the assertion printed the error;
+    `assert!(...is_ok())` would have said nothing about why.
 ---

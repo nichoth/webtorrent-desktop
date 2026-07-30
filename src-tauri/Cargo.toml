@@ -24,3 +24,17 @@ serde = { version = "1", features = ["derive"] }
 # of the renderer's `config.json` before the renderer exists.
 serde_json = "1"
 tauri-plugin-dialog = "2"
+# `platform/shell.js` and `platform/clipboard.js` (US-059). Both are
+# used from Rust only -- the renderer reaches the app commands in
+# `main.rs`, never these plugins -- which is what keeps
+# `capabilities/default.json` at `core:default`.
+tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
+# `shell.moveItemToTrash`: Tauri 2 has no equivalent of Electron's
+# `shell.trashItem`, and the point of the operation is that the file is
+# recoverable from the OS trash rather than unlinked.
+#
+# Pinned exactly: 5.2.6 onwards needs rustc 1.85, above the
+# `rust-version` above. Lifting the pin means raising that, which is an
+# ADR-014 decision rather than a dependency bump.
+trash = "=5.2.3"

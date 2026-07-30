@@ -81,10 +81,10 @@ The same route, at `require.resolve('@tauri-apps/api/event')` and
 build, so an unstubbed `require()` of it succeeds and the failure of a
 missed stub is a real `invoke` at call time rather than a load error.
 
-Several files stub the same subpath (`platform-dialog.js` for
-`tauri/dialog`, `platform-tauri-ipc-os.js` for `tauri/ipc-os`,
-`platform-window.js` for `tauri/window`), and each overwrites the
-previous one's `require.cache` entry. Each module keeps the `exports`
+Several files stub the same subpath -- `platform-clipboard.js`,
+`platform-dialog.js`, `platform-shell.js`, `platform-tauri-ipc-os.js`
+and `platform-window.js`, each for its own Tauri module -- and each
+overwrites the previous one's `require.cache` entry. Each module keeps the `exports`
 object that was there when *it* was first required, so the recorders do
 not collide -- but a test that swaps a stub function mid-run has to
 hold its own reference to that object rather than reaching through
@@ -93,7 +93,7 @@ in a local and having its `invoke` delegate to a swappable handler
 sidesteps the question entirely; `platform-dialog.js` does that.
 
 Glob order decides who is first, and it is the alphabetical order of
-the filenames: `platform-dialog.js` seeds the entry, the other two
+the filenames: `platform-clipboard.js` seeds the entry, the rest
 replace it, and `platform-tauri.js` requires every Tauri module inside
 its test callbacks (after all files have loaded), so every stub is in
 place by then.

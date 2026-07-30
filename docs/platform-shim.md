@@ -95,6 +95,9 @@ Ported so far:
 | `ipcOs.setTitle`, `setProgress`, `setBounds`, `setAspectRatio`, `toggleFullScreen`, `show` | US-057 | one host command each, in `src-tauri/src/main.rs` |
 | `window.isVisible`, `window.isMaximized` | US-057 | host commands, for the same reason |
 | `dialog.showOpenDialog`, `showSaveDialog` | US-058 | one host command each, over the dialog plugin's **Rust** API; the options translation is `src-tauri/src/dialog.rs` |
+| `shell.openExternal`, `openPath`, `showItemInFolder` | US-059 | one host command each, over the opener plugin's **Rust** API |
+| `shell.moveItemToTrash` | US-059 | a host command over the `trash` crate; the already-gone decision is `src-tauri/src/shell.rs` |
+| `clipboard.readText`, `writeText` | US-059 | one host command each, over the clipboard-manager plugin's **Rust** API; the empty-clipboard decision is `src-tauri/src/clipboard.rs` |
 
 The window operations are **commands rather than core window calls
 from the webview**, although `@tauri-apps/api/window` could do several
@@ -142,6 +145,40 @@ top of `src-tauri/src/dialog.rs`:
   does on Windows and Linux -- `src/main/dialog.js` writes the same
   fallback out by hand -- so the change is macOS-only, and no renderer
   call site asks for both: all three pass one property.
+
+`shell.js` and `clipboard.js` are commands for the third time and the
+same two reasons: three of the four shell operations are the Electron
+main process's already (`src/main/shell.js`, reached over IPC), and the
+JS plugins would need `opener:allow-open-url`, `opener:allow-open-path`,
+`opener:allow-reveal-item-in-dir`, `clipboard-manager:allow-read-text`
+and `allow-write-text` granted to the whole webview.
+
+Three host differences the Tauri tree absorbs:
+
+- **A shell failure rejects.** In the Electron tree
+  `showItemInFolder`, `openPath` and `moveItemToTrash` are
+  `ipcRenderer.send`, so they resolve whatever the OS made of them.
+  Under Tauri the host answers, so a real failure reaches the caller.
+  No call site needed changing: FR-10 already terminated every one of
+  these rejections, `playback-controller.js` wrapping `openPath` in
+  `reportErrors` and `torrent-list-controller.js` `.catch`ing both
+  `showItemInFolder` and `moveItemToTrash` into `dispatch('error')`. So
+  the difference is that a failure the Electron tree swallows now shows
+  the user an error, not that anything goes unhandled.
+- **`moveItemToTrash` still resolves for a path that is already gone**,
+  which is what `../shell.js` documents. The `trash` crate reports that
+  as an error, so `shell::plan_trash` checks for the entry first. It
+  uses `symlink_metadata`, so a dangling symlink is still trashed.
+- **`clipboard.readText()` answers `''` for an empty clipboard**, as
+  Electron's synchronous version does. `arboard` reports empty -- and a
+  clipboard holding an image or a file reference -- as
+  `ContentNotAvailable`, so `clipboard::read_outcome` turns that one
+  error into `''` and leaves every other clipboard failure a failure.
+
+The trash is the `trash` crate rather than anything in Tauri, which has
+no equivalent of Electron's `shell.trashItem`. It is pinned to 5.2.3 in
+`src-tauri/Cargo.toml`: later patches need rustc 1.85, above the
+`rust-version` ADR-014 fixed.
 
 A ported listener export is a `listen()` (or `once()`) from
 `@tauri-apps/api/event`, wrapped so the caller sees the payload alone

@@ -122,11 +122,12 @@ test('every dialog export is async', function (t) {
 // the host's answer is normalised into the shape callers already
 // handle -- `[]` and `null` on cancel.
 //
-// The stub is seeded at `@tauri-apps/api/core`, and this file is the
-// first of the three that stub that subpath to load, so `tauri/dialog`
-// binds this object (see test/AGENTS.md). It is held in a local
-// rather than reached for through `require.cache`, which by the time
-// the tests run belongs to whichever file loaded last.
+// The stub is seeded at `@tauri-apps/api/core`, which several files in
+// this directory do; each overwrites the previous entry and each
+// module keeps the object that was there when it was first required,
+// so `tauri/dialog` binds this one (see test/AGENTS.md). It is held in
+// a local rather than reached for through `require.cache`, which by the
+// time the tests run belongs to whichever file loaded last.
 
 const corePath = require.resolve('@tauri-apps/api/core')
 

@@ -58,7 +58,11 @@ const IMPLEMENTED = {
   // US-057: the two current-window reads.
   'window.js': ['isVisible', 'isMaximized'],
   // US-058: the file dialogs.
-  'dialog.js': ['showOpenDialog', 'showSaveDialog']
+  'dialog.js': ['showOpenDialog', 'showSaveDialog'],
+  // US-059: handing paths and URLs to the OS, and the clipboard.
+  'shell.js': ['openExternal', 'showItemInFolder', 'openPath',
+    'moveItemToTrash'],
+  'clipboard.js': ['readText', 'writeText']
 }
 
 function implemented (name) {
