@@ -9,9 +9,6 @@ const log = require('./log')
 const menu = require('./menu')
 const windows = require('./windows')
 
-// Messages from the main process, to be sent once the WebTorrent process starts
-const messageQueueMainToWebTorrent = []
-
 // Will hold modules injected from the app that will be used on fired
 // IPC events.
 const modules = {}
@@ -24,16 +21,6 @@ function init () {
   ipcMain.once('ipcReady', e => {
     app.ipcReady = true
     app.emit('ipcReady')
-  })
-
-  ipcMain.once('ipcReadyWebTorrent', e => {
-    app.ipcReadyWebTorrent = true
-    log('sending %d queued messages from the main win to the webtorrent window',
-      messageQueueMainToWebTorrent.length)
-    messageQueueMainToWebTorrent.forEach(message => {
-      windows.webtorrent.send(message.name, ...message.args)
-      log('webtorrent: sent queued %s', message.name)
-    })
   })
 
   /**
@@ -241,34 +228,9 @@ function init () {
   })
 
   /**
-   * Message passing
+   * No engine traffic passes through here (US-045, ADR-012). The UI
+   * reaches the sidecar over its own WebSocket, so `ipcMain.emit` is
+   * left as Electron shipped it and the host's only engine-related job
+   * is the endpoint reply above.
    */
-
-  const oldEmit = ipcMain.emit
-  ipcMain.emit = (name, e, ...args) => {
-    // Relay messages between the main window and the WebTorrent hidden window
-    if (name.startsWith('wt-') && !app.isQuitting) {
-      console.dir(e.sender.getTitle())
-      if (e.sender.getTitle() === 'WebTorrent Hidden Window') {
-        // Send message to main window
-        windows.main.send(name, ...args)
-        log('webtorrent: got %s', name)
-      } else if (app.ipcReadyWebTorrent) {
-        // Send message to webtorrent window
-        windows.webtorrent.send(name, ...args)
-        log('webtorrent: sent %s', name)
-      } else {
-        // Queue message for webtorrent window, it hasn't finished loading yet
-        messageQueueMainToWebTorrent.push({
-          name,
-          args
-        })
-        log('webtorrent: queueing %s', name)
-      }
-      return
-    }
-
-    // Emit all other events normally
-    oldEmit.call(ipcMain, name, e, ...args)
-  }
 }

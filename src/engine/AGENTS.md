@@ -5,13 +5,10 @@ engine here from `src/renderer/webtorrent.js` and turns it into a Node
 sidecar; US-039 landed the transport seam first and US-040 added the
 sidecar entry point.
 
-**Two engines exist until US-045, but only one is live.** US-044 moved
-the UI onto the sidecar (`src/engine/index.js`), so
-`src/renderer/webtorrent.js` in the hidden window still loads and still
-listens but nothing sends to it any more. US-040 copied rather than
-shared so the live engine stayed byte-identical through the move; now
-that the traffic has moved, a change to engine behaviour belongs in
-`src/engine/index.js` and the hidden window can be left to US-045.
+**There is exactly one engine.** US-044 moved the UI onto the sidecar
+and US-045 deleted the hidden window, the engine that ran in it and the
+`ipcMain` relay between them. Engine behaviour has a single home now:
+`src/engine/index.js`.
 
 `build:main` compiles the whole of `src` except the four Vite-owned
 paths, so a file added here is emitted to `build/engine/` with no build
@@ -35,30 +32,20 @@ shapes live in the command and event tables in
 a bug.
 
 The engine constructs its bus in exactly one place and
-`test/unit/engine-bus-electron.js` asserts that, by scanning the engine
-source for `ipcRenderer`, for stray `.send(` calls and for
-subscriptions that bypass `bus.on`. That scan is what keeps the seam
-substitutable, so keep it passing rather than relaxing it.
+`test/unit/engine-entry.js` asserts that, by scanning the engine source
+for transport APIs, for stray `.send(` calls and for subscriptions that
+bypass `bus.on`. That scan is what keeps the seam substitutable, so keep
+it passing rather than relaxing it.
 
-## `bus-electron.js`
+`bus-electron.js`, the Phase 3 transitional implementation, is gone:
+US-044 pointed the UI at `bus-websocket.js` and US-045 deleted the
+hidden window it depended on, along with its unit test.
 
-The Phase 3 transitional implementation: `ipcRenderer` in the hidden
-`BrowserWindow`, relayed by the `ipcMain.emit` override in
-`src/main/ipc.js`. It is the only file on the engine side that knows
-the engine is currently a renderer at all. US-044 pointed the UI at
-`bus-websocket.js`, so nothing drives this one now and US-045 deletes
-it.
-
-It is only reachable from `src/renderer/webtorrent.js`, so it dies with
-that file.
-
-It is outside `src/renderer/`, so it is outside both boundary
-mechanisms (`eslint-boundary.config.js` and
-`test/unit/platform-boundary.js`) -- which is why moving the engine's
-`electron` import here let those two checks drop their last
-`webtorrent.js` exemptions. US-046 extends the boundary rules to cover
-this directory; until then, do not add a host import here on the
-grounds that nothing stops you.
+This directory is outside `src/renderer/`, so it is outside both
+boundary mechanisms (`eslint-boundary.config.js` and
+`test/unit/platform-boundary.js`). US-046 extends them to cover it;
+until then, do not add a host import here on the grounds that nothing
+stops you.
 
 ## `bus-websocket.js`
 
@@ -128,8 +115,7 @@ counts its holders (US-043): `wt-start-server` is idempotent per torrent
 and always replies, `wt-stop-server` takes the info hash to release, and
 the server dies with its last holder. Poster generation and playback can
 hold servers for different torrents at once, so a single module-level
-`server` is not enough any more. This behaviour has to stay identical in
-`src/renderer/webtorrent.js` until US-045 deletes it.
+`server` is not enough any more.
 
 `config.TORRENT_PATH` and `config.POSTER_PATH` resolve under plain
 `node` because US-040 made `src/config.js` require `electron` lazily,

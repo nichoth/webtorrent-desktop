@@ -180,13 +180,6 @@ function getMenuTemplate () {
                 ? 'Alt+Command+I'
                 : 'Ctrl+Shift+I',
               click: () => windows.main.toggleDevTools()
-            },
-            {
-              label: 'Show WebTorrent Process',
-              accelerator: process.platform === 'darwin'
-                ? 'Alt+Command+P'
-                : 'Ctrl+Shift+P',
-              click: () => windows.webtorrent.toggleDevTools()
             }
           ]
         }

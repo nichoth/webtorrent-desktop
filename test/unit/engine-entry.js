@@ -130,6 +130,13 @@ test('the engine entry point names no host or browser API', function (t) {
     'no browser-only global')
   t.deepEqual(hits(/\.send\s*\(/).filter((h) => !/\bbus\.send\(/.test(h)), [],
     'every send goes through the bus')
+  // Inherited from the deleted `engine-bus-electron.js` (US-045): a
+  // subscription to a protocol channel that bypasses the bus would name
+  // the transport, which is what makes the seam substitutable.
+  const subs = hits(/\bbus\.on\s*\(|\.on\s*\(\s*['"]wt-/)
+  t.ok(subs.length > 5, 'found the engine subscriptions')
+  t.deepEqual(subs.filter((h) => !/\bbus\.on\s*\(/.test(h)), [],
+    'every subscription goes through the bus')
   t.equal(hits(/createWebSocketBus\s*\(/).length, 1,
     'the bus is constructed in exactly one place')
   t.ok(/wt-uncaught-error/.test(source) && /\bprocess\.on\(/.test(source),

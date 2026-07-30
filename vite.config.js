@@ -97,9 +97,11 @@ const rendererPath = fileURLToPath(
 //   runtime while the build reported success.
 //
 // `crypto` and `os` are deliberately absent from this list: grep confirms
-// `crypto` is used only by `src/renderer/webtorrent.js`, which FR-4
-// exempts from this build, and `os` has had no renderer importer since
-// the US-002 telemetry deletion. See docs/vite-baseline.md.
+// `crypto` is used only by the engine (`src/engine/index.js`, which runs
+// as a sidecar under plain Node and never goes through this build), and
+// `os` has had no renderer importer since the US-002 telemetry deletion.
+// Until US-045 the `crypto` importer was `src/renderer/webtorrent.js`,
+// exempt from this build for the same reason. See docs/vite-baseline.md.
 const firstPartyExternals = [
   'fs',
   'fs/promises',

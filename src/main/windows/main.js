@@ -44,7 +44,6 @@ function init (state, options) {
       nodeIntegration: true,
       contextIsolation: false,
       enableBlinkFeatures: 'AudioVideoTracks',
-      enableRemoteModule: true,
       backgroundThrottling: false
     },
     x: initialBounds.x,

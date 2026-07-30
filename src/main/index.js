@@ -86,12 +86,11 @@ function init () {
 
     menu.init()
     windows.main.init(state, { hidden })
-    windows.webtorrent.init()
 
     // The engine sidecar (US-041, ADR-012). It is supervised from here
-    // and killed on quit; the hidden window above is still the live
-    // engine until US-045 cuts the UI over to it, so a failure to start
-    // is logged rather than fatal.
+    // and killed on quit. Since US-045 it is the only engine there is,
+    // but a failure to start is still logged rather than fatal: the UI
+    // reconnects on its own once the supervisor gets a process up.
     engineProcess.init().catch((err) => {
       log.error('Engine: ' + err.message)
     })

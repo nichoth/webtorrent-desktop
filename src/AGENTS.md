@@ -12,10 +12,8 @@ Both reach Electron as CommonJS, but by two different routes, and
 - `npm run build:main` (`babel src --out-dir build`) compiles
   everything else: `src/config.js`, `src/main/**`,
   `src/shared/**` (see `src/shared/AGENTS.md`),
-  `src/engine/**` (see `src/engine/AGENTS.md`),
-  `src/renderer/webtorrent.js` (FR-4 exempts it from Vite) and
-  `src/renderer/lib/**`, which both `webtorrent.js` and
-  `src/main/index.js` require.
+  `src/engine/**` (see `src/engine/AGENTS.md`) and
+  `src/renderer/lib/**`, which `src/main/index.js` requires.
 
 `build:main` therefore passes `--ignore` for the four paths Vite now
 owns exclusively -- `src/renderer/main.js`, `components/`,
@@ -90,11 +88,10 @@ namespace would drift apart.
 
 The single-value modules (`media-extensions.js`, `state.js`) use
 `export default`. Their remaining CommonJS consumers therefore have to
-say `require('...').default`; see `src/renderer/webtorrent.js` and
-`src/main/index.js`. `torrent-poster.js` has both a default export
-(`torrentPoster`) and named ones (`generateTorrentPoster`,
-`choosePosterSource`), because US-043 gave it a job as well as an
-answer.
+say `require('...').default`; see `src/main/index.js`.
+`torrent-poster.js` has both a default export (`torrentPoster`) and
+named ones (`generateTorrentPoster`, `choosePosterSource`), because
+US-043 gave it a job as well as an answer.
 
 `state.js` is the only renderer module the **main** process consumes
 (`src/main/index.js` calls `State.load(cb)`). It is also imported by
@@ -102,11 +99,6 @@ both processes at once, so it must stay free of renderer-only globals:
 anything that needs the renderer belongs behind the
 `process.type === 'renderer'` guard in `load()`, the way `migrations.run`
 is.
-
-## `src/renderer/webtorrent.js`
-
-Exempt from all of the above (FR-4): it stays CommonJS, is never passed
-through Vite, and loads via `static/webtorrent.html`.
 
 ## Deferring a module load in the renderer
 

@@ -785,8 +785,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 45,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Hidden window, its engine (src/renderer/webtorrent.js), bus-electron.js, the ipcMain.emit relay, the messageQueueMainToWebTorrent queue, the ipcReadyWebTorrent handshake, the menu devtools item and WINDOW_WEBTORRENT are all deleted. AC-6 was met only in part, deliberately: enableRemoteModule is gone from all of src/main/ (a no-op since Electron 14), but nodeIntegration and enableBlinkFeatures: 'AudioVideoTracks' are still load-bearing on the two visible windows -- the CJS renderer bundle's require() externals need the first (ADR-004) and player-page.js:125 needs the second (the US-082 casualty). Phase 4's Tauri host removes both by construction. New test test/unit/hidden-window-removed.js (25 assertions, 16 failing before the change) covers the deletions and asserts behaviourally that ipc.init() no longer overrides ipcMain.emit. The one assertion the deleted engine-bus-electron.js carried alone moved into test/unit/engine-entry.js. npm test 1700/1700, build clean, launch check init: 818ms with the sidecar up and one window. Smoke test not run (non-interactive); the eslint-boundary webtorrent.js override is left for US-046 as its criteria ask."
     },
     {
       "id": "US-046",

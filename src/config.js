@@ -119,7 +119,6 @@ export const TORRENT_PATH = path.join(getConfigPath(), 'Torrents')
 
 export const WINDOW_ABOUT = 'file://' + path.join(DIRNAME, '..', 'static', 'about.html')
 export const WINDOW_MAIN = 'file://' + path.join(DIRNAME, '..', 'static', 'main.html')
-export const WINDOW_WEBTORRENT = 'file://' + path.join(DIRNAME, '..', 'static', 'webtorrent.html')
 
 export const WINDOW_INITIAL_BOUNDS = {
   width: 500,
@@ -171,7 +170,6 @@ export default {
 
   WINDOW_ABOUT,
   WINDOW_MAIN,
-  WINDOW_WEBTORRENT,
 
   WINDOW_INITIAL_BOUNDS,
   WINDOW_MIN_HEIGHT,
