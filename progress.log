@@ -4693,3 +4693,68 @@ afterwards, `pgrep` clean). The six-step manual smoke test was not run
     was deliberately left alone -- its Squirrel references are about
     packaging, not the runtime event handler.
 ---
+
+## 2026-07-29 - US-054
+- Added `src-tauri/src/paths.rs`: a Rust port of the path block in
+  `src/config.js` (`CONFIG_PATH`, `TORRENT_PATH`, `POSTER_PATH`, the
+  temp dir and `DEFAULT_DOWNLOAD_PATH`) plus the portable-app
+  relocation `src/main/index.js:53-60` performs with `app.setPath`.
+  Resolution is a pure function of an `Env` value; `Env::current` is
+  the only part that reads env vars, `current_exe` and the disk.
+- Wired it into `src/main.rs`: a `.setup` hook resolves the layout once
+  and `app.manage`s it, and an `app_paths` command hands it to the
+  renderer as a camelCase JSON object (`configPath`, `torrentPath`,
+  `posterPath`, `tempPath`, `defaultDownloadPath`, `isPortable`).
+  Tauri's own resolver supplies the downloads directory, because on
+  Linux it reads the XDG user-dirs config.
+- 10 new Rust tests, written first and watched fail on `todo!()`
+  stubs: the per-platform config dir (including `XDG_CONFIG_HOME` and
+  the `LOCALAPPDATA`-missing fallback), the subdirectory layout, the
+  portable relocation, the `is_portable` rules, test mode, plain-data
+  serialization, and a differential check against `src/config.js`.
+- No JS changed, so Electron path behaviour is untouched.
+- Files changed: `src-tauri/src/paths.rs` (new), `src-tauri/src/main.rs`,
+  `src-tauri/Cargo.toml` (+`serde` with `derive`), `src-tauri/Cargo.lock`,
+  `src-tauri/AGENTS.md`, `specs/prd.json`, `progress.log`.
+- **Learnings for future iterations:**
+  - **`src/config.js` can be used as a test oracle from Rust.** `node
+    --input-type=module -e "import('./src/config.js').then(...)"` run
+    with the repo root as cwd prints any export as JSON, so a Rust
+    test can assert the two hosts agree rather than freezing one
+    author's reading of the layout (the ADR-011 tactic). Verified
+    non-vacuous by mutating `Torrents` -> `Torrentz` and watching it
+    fail. `NODE_ENV` must be removed from the child env or the
+    portable test path is used, and `DEFAULT_DOWNLOAD_PATH` is `''`
+    under plain Node so it cannot be compared.
+  - **The path layout lives in two dependencies, not in `config.js`.**
+    `application-config` only appends `config.json`; the directory
+    comes from `application-config-path`, which is 30 lines:
+    `$HOME/Library/Application Support/<name>` on darwin,
+    `$XDG_CONFIG_HOME` or `$HOME/.config` on linux, `$LOCALAPPDATA` or
+    `$USERPROFILE/Local Settings/Application Data` on win32, and a
+    throw on anything else. Read those before assuming a layout.
+  - **Model platform as data, not `cfg!(target_os)`.** Making
+    `Platform` an enum field of an `Env` struct is what lets a macOS
+    `cargo test` assert the Windows portable layout -- the branch that
+    is otherwise untestable in this loop, since Phase 4 has no Windows
+    machine in it. `is_production` is `!cfg!(debug_assertions)`, so a
+    debug binary is never portable and the branch cannot be reached by
+    running the dev app anyway.
+  - **An app-defined `#[tauri::command]` needs no capability entry**
+    (confirmed: `gen/schemas/` was not regenerated and `cargo test`
+    plus a clean `clippy` still pass). Only plugin commands do.
+  - **`serde` is now a direct Cargo dependency.** `tauri` does not
+    re-export it, so anything crossing the boundary needs
+    `serde = { version = "1", features = ["derive"] }` -- already
+    added, do not add a second entry. `PathBuf` serializes as a JSON
+    string, which is what keeps ADR-007 satisfied for free.
+  - **`cargo fmt` will reflow what you wrote and it is a gate.** Run
+    `cargo fmt` (not just `--check`) before committing; rustfmt's
+    default 100-column width is not the repo's 80-column TS rule, so
+    do not hand-wrap Rust to 80 and expect it to survive.
+  - Not done here, and left to US-056/US-084: relocating the *webview's
+    own* data directory for a portable install. Tauri derives it from
+    the bundle identifier and there is no `app.setPath` equivalent, so
+    `AppPaths` reports the relocated layout but does not enforce it on
+    the WebView2/WKWebView cache.
+---

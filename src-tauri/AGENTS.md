@@ -37,6 +37,31 @@ Most of that Tauri tree throws `NotImplementedError` today, on purpose
 -- each Phase 4 story implements one module. A window that comes up and
 reports not-implemented is the expected state, not a regression.
 
+## Path resolution is a pure function of an `Env`
+
+`src/paths.rs` mirrors the path block of `src/config.js`. Keep the two
+in sync: `AppPaths::resolve` reads only the [`Env`] struct it is
+handed, never process state, so `Env::current` is the one place that
+touches env vars, `current_exe` and the disk. That is what lets a test
+assert the Windows portable layout from macOS -- follow the pattern
+when adding a host concern that varies by platform rather than
+reaching for `cfg!(target_os)` in the logic.
+
+`matches_src_config_js_on_this_platform` shells out to `node
+--input-type=module -e "import('./src/config.js')..."` from the repo
+root and compares the answers, so a layout change made on the JS side
+alone fails `cargo test`. Node loads `src/config.js` as real ESM there
+(the same path the `bin/` scripts take), and `IS_PRODUCTION` is false
+under plain Node, so it takes the non-portable branch a debug `cargo
+test` also takes. Do not add a comparison of
+`DEFAULT_DOWNLOAD_PATH`: `getPath()` in `config.js` returns `''`
+outside an Electron process.
+
+`is_production` here is `!cfg!(debug_assertions)`, the closest analogue
+of Electron's "am I a packaged binary" test. A debug build therefore
+never looks portable, which also means the portable branch cannot be
+exercised by running the dev binary -- assert it through `Env` instead.
+
 ## Gates
 
 `cargo fmt --check` and `cargo clippy -- -D warnings` are gates from

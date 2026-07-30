@@ -8,11 +8,37 @@
 //! same `static/main.html` and the same Vite output, so there is
 //! nothing here that decides what the UI is -- only where it lives.
 //! The window itself is declared in `tauri.conf.json`; every host
-//! concern the UI calls (paths, dialogs, menus, the tray) arrives in a
-//! later story.
+//! concern the UI calls (dialogs, menus, the tray) arrives in a later
+//! story. Paths landed first, in `paths`, because the rest of Phase 4
+//! is built on them.
+
+mod paths;
+
+use tauri::Manager;
+
+use paths::AppPaths;
+
+/// The renderer's one way to learn where its data lives. The layout is
+/// resolved once at startup and handed over as plain data (ADR-007),
+/// so the UI never sees a host path object and never re-derives a
+/// path itself.
+#[tauri::command]
+fn app_paths(paths: tauri::State<'_, AppPaths>) -> AppPaths {
+    paths.inner().clone()
+}
 
 fn main() {
     tauri::Builder::default()
+        .setup(|app| {
+            // `download_dir` is the one path Tauri resolves better than
+            // this crate can: on Linux it reads the XDG user-dirs
+            // config rather than assuming `~/Downloads`.
+            let env = paths::Env::current(app.path().download_dir().ok())
+                .expect("WebTorrent Desktop does not support this platform");
+            app.manage(AppPaths::resolve(&env));
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![app_paths])
         .run(tauri::generate_context!())
         .expect("failed to start the WebTorrent Desktop window");
 }
