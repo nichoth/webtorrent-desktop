@@ -88,11 +88,13 @@ every call site uses them namespace-style (`TorrentSummary.getByKey`).
 Do not reintroduce a default export object for these -- a default and a
 namespace would drift apart.
 
-The single-value modules (`media-extensions.js`, `torrent-poster.js`,
-`state.js`) use `export default`. Their remaining CommonJS consumers
-therefore have to say `require('...').default`; see
-`src/renderer/webtorrent.js`, `test/test-select-poster.js` and
-`src/main/index.js`.
+The single-value modules (`media-extensions.js`, `state.js`) use
+`export default`. Their remaining CommonJS consumers therefore have to
+say `require('...').default`; see `src/renderer/webtorrent.js` and
+`src/main/index.js`. `torrent-poster.js` has both a default export
+(`torrentPoster`) and named ones (`generateTorrentPoster`,
+`choosePosterSource`), because US-043 gave it a job as well as an
+answer.
 
 `state.js` is the only renderer module the **main** process consumes
 (`src/main/index.js` calls `State.load(cb)`). It is also imported by

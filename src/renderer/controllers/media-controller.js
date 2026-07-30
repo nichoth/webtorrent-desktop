@@ -73,7 +73,10 @@ export default class MediaController {
 
     if (state.server != null) onServerRunning()
     else {
-      reportErrors(ipcEngine.onServerRunning(onServerRunning, { once: true }))
+      // Addressed by info hash: since ADR-013 the broadcast channel can
+      // carry a server started for poster generation.
+      reportErrors(ipcEngine.onServerRunningFor(
+        state.playing.infoHash, onServerRunning, { once: true }))
     }
   }
 

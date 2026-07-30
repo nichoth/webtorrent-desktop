@@ -13,7 +13,6 @@ const WebTorrent = require('webtorrent')
 const config = require('../config')
 const { createElectronBus } = require('../engine/bus-electron')
 const { TorrentKeyNotFoundError } = require('./lib/errors')
-const torrentPoster = require('./lib/torrent-poster').default
 
 /**
  * WebTorrent version.
@@ -52,8 +51,11 @@ const bus = createElectronBus()
 // client, as explained here: https://webtorrent.io/faq
 let client = window.client = new WebTorrent({ peerId: PEER_ID })
 
-// WebTorrent-to-HTTP streaming sever
-let server = null
+// The WebTorrent-to-HTTP streaming servers, one per torrent, keyed by
+// info hash (US-043, ADR-013). Poster generation and playback can want
+// a server at the same time for different torrents, so each entry
+// counts its holders and is destroyed when the last one releases it.
+const servers = new Map()
 
 // Used for diffing, so we only send progress updates when necessary
 let prevProgress = null
@@ -73,14 +75,12 @@ function init () {
     createTorrent(torrentKey, options))
   bus.on('wt-save-torrent-file', (torrentKey) =>
     saveTorrentFile(torrentKey))
-  bus.on('wt-generate-torrent-poster', (torrentKey) =>
-    generateTorrentPoster(torrentKey))
   bus.on('wt-get-audio-metadata', (infoHash, index) =>
     getAudioMetadata(infoHash, index))
   bus.on('wt-start-server', (infoHash) =>
     startServer(infoHash))
-  bus.on('wt-stop-server', () =>
-    stopServer())
+  bus.on('wt-stop-server', (infoHash) =>
+    stopServer(infoHash))
   bus.on('wt-select-files', (infoHash, selections) =>
     selectFiles(infoHash, selections))
 
@@ -223,26 +223,6 @@ function saveTorrentFile (torrentKey) {
   })
 }
 
-// Save a JPG that represents a torrent.
-// Auto chooses either a frame from a video file, an image, etc
-function generateTorrentPoster (torrentKey) {
-  const torrent = getTorrent(torrentKey)
-  torrentPoster(torrent, (err, buf, extension) => {
-    if (err) return console.log('error generating poster: %o', err)
-    // save it for next time
-    fs.mkdir(config.POSTER_PATH, { recursive: true }, err => {
-      if (err) return console.log('error creating poster dir: %o', err)
-      const posterFileName = torrent.infoHash + extension
-      const posterFilePath = path.join(config.POSTER_PATH, posterFileName)
-      fs.writeFile(posterFilePath, buf, err => {
-        if (err) return console.log('error saving poster: %o', err)
-        // show the poster
-        bus.send('wt-poster', torrentKey, posterFileName)
-      })
-    })
-  })
-}
-
 function updateTorrentProgress () {
   const progress = getTorrentProgress()
   // TODO: diff torrent-by-torrent, not once for the whole update
@@ -303,29 +283,48 @@ function startServer (infoHash) {
 }
 
 function startServerFromReadyTorrent (torrent) {
-  if (server) return
+  const existing = servers.get(torrent.infoHash)
+  if (existing) {
+    existing.holders++
+    // `wt-start-server` always replies, even for a server that is
+    // already listening -- a caller that got silence would wait
+    // forever. A request that arrives before the first `listen`
+    // callback needs no re-send: the reply below is a broadcast and
+    // every subscriber gets it.
+    if (existing.info) sendServerRunning(torrent.infoHash, existing.info)
+    return
+  }
 
   // start the streaming torrent-to-http server
-  server = torrent.createServer()
+  const server = torrent.createServer()
+  const entry = { server, info: null, holders: 1 }
+  servers.set(torrent.infoHash, entry)
+
   server.listen(0, () => {
     const port = server.address().port
     const urlSuffix = ':' + port
-    const info = {
+    entry.info = {
       torrentKey: torrent.key,
       localURL: 'http://localhost' + urlSuffix,
       networkURL: 'http://' + networkAddress() + urlSuffix,
       networkAddress: networkAddress()
     }
 
-    bus.send('wt-server-running', info)
-    bus.send('wt-server-' + torrent.infoHash, info)
+    sendServerRunning(torrent.infoHash, entry.info)
   })
 }
 
-function stopServer () {
-  if (!server) return
-  server.destroy()
-  server = null
+function sendServerRunning (infoHash, info) {
+  bus.send('wt-server-running', info)
+  bus.send('wt-server-' + infoHash, info)
+}
+
+function stopServer (infoHash) {
+  const entry = servers.get(infoHash)
+  if (!entry) return
+  if (--entry.holders > 0) return
+  servers.delete(infoHash)
+  entry.server.destroy()
 }
 
 console.log('Initializing...')

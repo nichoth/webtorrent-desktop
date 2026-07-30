@@ -381,10 +381,9 @@ consumer.
 | `stopTorrenting(infoHash)` | `wt-stop-torrenting` | `controllers/torrent-list-controller.js:138`, `:156`, `:405`, `controllers/torrent-controller.js:23` |
 | `createTorrent(key, options)` | `wt-create-torrent` | `controllers/torrent-list-controller.js:75` |
 | `saveTorrentFile(key)` | `wt-save-torrent-file` | `controllers/torrent-controller.js:78` |
-| `generateTorrentPoster(key)` | `wt-generate-torrent-poster` | `controllers/torrent-controller.js:81` |
 | `getAudioMetadata(infoHash, index)` | `wt-get-audio-metadata` | `controllers/playback-controller.js:310` |
 | `startServer(infoHash)` | `wt-start-server` | `controllers/playback-controller.js:261` |
-| `stopServer()` | `wt-stop-server` | `controllers/playback-controller.js:365` |
+| `stopServer(infoHash)` | `wt-stop-server` | `controllers/playback-controller.js:365` |
 | `selectFiles(infoHash, selections)` | `wt-select-files` | `controllers/torrent-list-controller.js:193` |
 
 ### Events
@@ -401,17 +400,22 @@ consumer.
 | `onProgress` | `wt-progress` | `main.js:356` |
 | `onFileModtimes` | `wt-file-modtimes` | `main.js:357` |
 | `onTorrentFileSaved` | `wt-file-saved` | `main.js:358` |
-| `onPosterSaved` | `wt-poster` | `main.js:359` |
 | `onAudioMetadata` | `wt-audio-metadata` | `main.js:360` |
-| `onServerRunning` | `wt-server-running` | `main.js:361`, `controllers/playback-controller.js:262`, `controllers/media-controller.js:69` |
-| `onServerRunningFor(infoHash, ...)` | `wt-server-${infoHash}` | no UI listener today |
+| `onServerRunning` | `wt-server-running` | `main.js:361` |
+| `onServerRunningFor(infoHash, ...)` | `wt-server-${infoHash}` | `controllers/playback-controller.js:262`, `controllers/media-controller.js:76`, `lib/torrent-poster.js` |
 
-`onTorrentReady` and `onServerRunningFor` have no renderer-UI call
-site: `webtorrent.js` emits `wt-ready` and `wt-server-${infoHash}`,
-but the UI listens on `wt-ready-${infoHash}` and `wt-server-running`
-instead. They are declared because they are part of the protocol a
-replacement engine has to emit, and US-013's criteria call for both
-dynamic channels to be covered.
+`onTorrentReady` has no renderer-UI call site: `webtorrent.js` emits
+`wt-ready` but the UI listens on `wt-ready-${infoHash}` instead. It is
+declared because it is part of the protocol a replacement engine has to
+emit, and US-013's criteria call for both dynamic channels to be
+covered.
+
+`onServerRunningFor` gained its callers in US-043 (ADR-013). Poster
+generation now starts servers too, so the broadcast channel can carry a
+server for a torrent the user is not watching; anything that wants *its*
+server waits on the per-torrent channel. `main.js` still subscribes to
+the broadcast, and `torrent-controller.js` ignores an info that is not
+the playing torrent's.
 
 Two `wt-*` channels are deliberately **not** in the shim, because
 their only sender is `webtorrent.js` and their only receiver is
@@ -479,10 +483,9 @@ is "one-shot" when it triggers exactly one reply message, and
 | `wt-stop-torrenting` | `(infoHash: string)` | fire-and-forget |
 | `wt-create-torrent` | `(torrentKey: number, options: CreateOptions)` | fire-and-forget; drives the same event stream |
 | `wt-save-torrent-file` | `(torrentKey: number)` | one-shot; replies on `wt-file-saved` |
-| `wt-generate-torrent-poster` | `(torrentKey: number)` | one-shot; replies on `wt-poster` |
 | `wt-get-audio-metadata` | `(infoHash: string, index: number)` | replies 1 to 3 times on `wt-audio-metadata` (see below) |
 | `wt-start-server` | `(infoHash: string)` | one-shot; replies on `wt-server-running` and `wt-server-${infoHash}` |
-| `wt-stop-server` | `()` | fire-and-forget |
+| `wt-stop-server` | `(infoHash: string)` | fire-and-forget |
 | `wt-select-files` | `(infoHash: string, selections: boolean[])` | fire-and-forget |
 
 `torrentKey` is a **number**, not a string: it is
@@ -493,11 +496,19 @@ that torrent. Do not derive anything from it.
 `torrentID` is whatever the user supplied: a magnet URI, a path to a
 `.torrent` file, an info hash, or an HTTP URL.
 
-Three of these commands have a reply channel but **no failure reply**.
-`wt-save-torrent-file`, `wt-generate-torrent-poster` and
-`wt-get-audio-metadata` all log and return on error today rather than
-sending anything back, so the UI's `{ once: true }` listener simply
-never fires. A librqbit implementation should preserve that (silence
+`wt-start-server` and `wt-stop-server` are **per torrent**, and the
+engine counts holders (US-043, ADR-013). Poster generation and playback
+can each want a server, for different torrents, at the same time, so the
+engine keeps one server per info hash: `wt-start-server` is idempotent
+and always replies, even when the server is already listening, and
+`wt-stop-server` releases the caller's hold. The server is destroyed
+when its last holder releases it, so a caller that starts one must
+always stop it.
+
+Two of these commands have a reply channel but **no failure reply**.
+`wt-save-torrent-file` and `wt-get-audio-metadata` both log and return
+on error today rather than sending anything back, so the UI's
+`{ once: true }` listener simply never fires. A librqbit implementation should preserve that (silence
 on failure) or the UI will need new error handling; it must not send a
 malformed reply on the success channel.
 
@@ -514,9 +525,8 @@ malformed reply on the success channel.
 | `wt-progress` | `(progress: Progress)` | subscription (`main.js`) |
 | `wt-file-modtimes` | `(torrentKey: number, fileModtimes: FileModtimes)` | subscription (`main.js`) |
 | `wt-file-saved` | `(torrentKey: number, fileName: string)` | subscription (`main.js`) |
-| `wt-poster` | `(torrentKey: number, posterFileName: string)` | subscription (`main.js`) |
 | `wt-audio-metadata` | `(infoHash: string, index: number, metadata: AudioMetadata)` | subscription (`main.js`) plus a one-shot per request (`playback-controller.js:307`) |
-| `wt-server-running` | `(info: ServerInfo)` | subscription (`main.js`) plus one-shots (`playback-controller.js:262`, `media-controller.js:76`) |
+| `wt-server-running` | `(info: ServerInfo)` | subscription (`main.js`) |
 
 `torrentKey` is `null` on `wt-warning` and `wt-error` when the fault
 is client-level rather than attached to one torrent
@@ -537,12 +547,12 @@ grows at runtime:
 | Family | Payload | Kind |
 | --- | --- | --- |
 | `wt-ready-${infoHash}` | `(torrentKey: number, info: TorrentInfo)` | one-shot, per torrent (`playback-controller.js:254`, `:303`) |
-| `wt-server-${infoHash}` | `(info: ServerInfo)` | no UI listener today |
+| `wt-server-${infoHash}` | `(info: ServerInfo)` | one-shots (`playback-controller.js:262`, `media-controller.js:76`, `lib/torrent-poster.js`) |
 
 Both are emitted alongside their broadcast twin: `wt-ready` and
 `wt-ready-${infoHash}` are sent back to back with identical arguments
 (`webtorrent.js:157-158`), as are `wt-server-running` and
-`wt-server-${infoHash}` (`webtorrent.js:316-317`). The families exist
+`wt-server-${infoHash}` (`sendServerRunning()` in `webtorrent.js`). The families exist
 so a caller waiting on one specific torrent does not have to filter a
 broadcast stream.
 
@@ -611,7 +621,8 @@ object carrying the backing buffer. The single reader,
 to deliver something whose fields that borrowed method can read, not a
 `bitfield` instance.
 
-`ServerInfo` (`webtorrent.js:308-313`), sent with `wt-server-running`
+`ServerInfo` (`startServerFromReadyTorrent()` in `webtorrent.js`), sent
+with `wt-server-running`
 and `wt-server-${infoHash}`:
 
 ```

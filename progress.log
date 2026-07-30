@@ -22,6 +22,11 @@ it tight.
   an npm script. `standard-engine` sets `useEslintrc: false`, so a
   root ESLint config never leaks into a `standard` run -- but name the
   file something other than `.eslintrc.*` anyway.
+- **A quoted `wt-` string in a *comment* fails the boundary scan.**
+  `test/unit/platform-boundary.js` greps `/['"`]wt-/` over every
+  renderer source outside `lib/platform/` and cannot tell code from
+  prose -- backticks count as quotes. Write channel names bare in
+  comments there.
 - **`no-restricted-imports` sees `import` declarations only.** It does
   not see `require()`, which is the one deferral mechanism that
   actually works in this renderer (see the dynamic-`import()` entry
@@ -187,6 +192,14 @@ it tight.
   4)))))`, then launch, then `npm run build` to restore. Severity 3 in
   the first field means error. This is the only way to get real
   evidence for any "does X appear in the console" acceptance criterion.
+- **Probing a renderer *module* non-interactively:** add a
+  `window.__x = require('./lib/thing')` line to `src/renderer/main.js`,
+  `npm run build`, append the probe to `build/main/index.js` (an HTTP
+  server if the module needs one, plus a `wc.executeJavaScript(...)`
+  whose promise resolves to a result string), launch, read the string
+  off stdout, then restore the source and rebuild. Serve `Range`
+  requests -- Chromium's media loader asks for them. This is how a
+  "can the real webview decode/fetch it" criterion gets evidence.
 - **The six-step manual smoke test cannot be run in a non-interactive
   session.** Do the launch check, do whatever targeted empirical probe
   the story allows, and then say plainly in `progress.log` that the
@@ -3813,4 +3826,92 @@ Expose the engine endpoint through the shim.
   that has already died. An array of `{resolve, reject}` flushed each
   time the value arrives is the shape, and every terminal path (kill,
   give up) has to flush it too or a caller hangs forever.
+---
+
+## 2026-07-29 - US-043
+Moved poster generation out of the engine and into the UI renderer,
+exactly as ADR-013 decided, and deleted both poster channels from the
+wire.
+
+- `src/renderer/lib/torrent-poster.js` rewritten. It now reads
+  `torrentSummary.files` (the list the UI already holds from
+  `wt-metadata`), fetches file bytes from the engine's streaming server
+  by index, captures video frames through a new `lib/video-frame.js`,
+  and writes the poster itself with `platform/fs` to
+  `path.join(config.POSTER_PATH, infoHash + extension)` -- the same
+  name the engine used. New API: `choosePosterSource(files)` (pure),
+  default `torrentPoster(summary, serverURL)`, and
+  `generateTorrentPoster(summary)` (the whole job, serialized, quiet on
+  failure, 60s cap).
+- `src/renderer/lib/video-frame.js` (new): detached `<video>` plus a
+  canvas, `canvas.toBlob('image/jpeg')`. `capture-frame` dropped from
+  `package.json` -- it returned a Node `Buffer` (ADR-007).
+- `wt-generate-torrent-poster` and `wt-poster` deleted from
+  `ipc-engine.js` (`generateTorrentPoster`, `onPosterSaved`), from
+  `main.js`, from both engines, and from `docs/platform-shim.md`.
+- `wt-start-server`/`wt-stop-server` are per-torrent now, in
+  `src/engine/index.js` and `src/renderer/webtorrent.js` both: a `Map`
+  keyed by info hash, each entry counting holders, always replying, and
+  destroyed by its last release.
+- `torrent-controller.js` calls the poster module; `torrentPosterSaved`
+  stays as the recording step. `playback-controller.js` and
+  `media-controller.js` moved onto `onServerRunningFor`, and
+  `torrentServerRunning` ignores an info that is not the playing
+  torrent's.
+- Tests: new `test/unit/poster.js` (37 assertions, written first --
+  verified red against `HEAD`'s module with
+  `choosePosterSource is not a function`). Updated
+  `engine-ipc-call-sites`, `os-ipc-call-sites`, `main-ipc-call-sites`,
+  `platform-ipc-engine` and `wire` for the changed protocol, and
+  rewrote the never-registered `test/test-select-poster.js` onto the
+  selection half, which is all of it that can run under plain Node.
+- `npm test` green (1683 assertions), `npm run lint` clean.
+
+**Empirical evidence for the "video, audio and image each produce a
+poster" criterion** (the six-step manual smoke test was NOT run -- this
+session is non-interactive; the risk it carries is the end-to-end path
+from a newly added torrent, i.e. the engine actually starting a server
+on `wt-start-server` and the thumbnail appearing in the list): with a
+temporary `window.__posterProbe` in `src/renderer/main.js` and a probe
+HTTP server appended to `build/main/index.js`, one launch produced
+`PROBE-RESULT video: 3191 bytes .jpg | image: 46115 bytes .jpg |
+audio: 46115 bytes .jpg`. So a real Chromium decode of
+`test/resources/monitor-test.mp4` yielded a JPEG, and `fetch` from the
+`file://` renderer to a localhost HTTP server worked. The only
+severity-3 renderer console line was the known dormant Cast one. The
+probe was reverted and the app rebuilt; no processes left.
+
+- **Learnings for future iterations:**
+  - **A quoted `wt-` string in a *comment* fails the boundary scan.**
+    `test/unit/platform-boundary.js` greps `/['"`]wt-/` over every
+    renderer source outside the shim, and it cannot tell code from
+    prose. Write channel names bare in comments outside
+    `lib/platform/` -- backticks count as quotes.
+  - **`state.server` is the playing torrent's server, and now needs
+    filtering.** Anything that starts a server makes the engine
+    broadcast `wt-server-running`, so a second starter (poster
+    generation) would have clobbered playback's URL. The per-torrent
+    `wt-server-${infoHash}` channel existed for exactly this and had no
+    caller until now; `onServerRunningFor` is the right subscription
+    for "I want *my* server", and the broadcast is only safe for the
+    one listener that filters (`torrentServerRunning`).
+  - **A "start" command that can have two holders needs a count, not a
+    flag.** The old `if (server) return` meant a second request for a
+    different torrent never replied at all, and a naive per-torrent map
+    would let either holder's stop destroy the other's stream. Counting
+    holders, replying even when the server is already up, and
+    destroying on the last release is the shape.
+  - **`closePlayer()` resets `state.playing` before it stops the
+    server**, so any argument derived from the playing torrent has to
+    be read into a local first. Same trap for anything else that grows
+    an argument out of play state.
+  - **Probing a renderer module non-interactively:** add a
+    `window.__x = require(...)` line to `src/renderer/main.js`,
+    `npm run build`, append the probe (an HTTP server plus a
+    `wc.executeJavaScript` that returns a string) to
+    `build/main/index.js`, launch, read the resolved value off stdout,
+    then restore the source and rebuild. This is how a "does the real
+    webview decode it" criterion gets actual evidence rather than an
+    argument. Serve `Range` requests: Chromium's media loader asks for
+    them.
 ---

@@ -86,10 +86,9 @@ const SAMPLES = [
     private: true
   }]],
   ['wt-save-torrent-file', [3]],
-  ['wt-generate-torrent-poster', [3]],
   ['wt-get-audio-metadata', [INFO_HASH, 2]],
   ['wt-start-server', [INFO_HASH]],
-  ['wt-stop-server', []],
+  ['wt-stop-server', [INFO_HASH]],
   ['wt-select-files', [INFO_HASH, [true, false, true]]],
 
   // Events: engine -> UI
@@ -102,7 +101,6 @@ const SAMPLES = [
   ['wt-progress', [PROGRESS]],
   ['wt-file-modtimes', [3, { 'Some Torrent/video.mp4': 1699999999000 }]],
   ['wt-file-saved', [3, 'Some Torrent.torrent']],
-  ['wt-poster', [3, `${INFO_HASH}.jpg`]],
   ['wt-audio-metadata', [INFO_HASH, 2, {
     common: { title: 'A Song', artist: 'Someone', track: { no: 2, of: 9 } },
     format: { container: 'MPEG', duration: 210.5, lossless: false }
@@ -125,7 +123,7 @@ test('wire: exports encode and decode', (t) => {
 })
 
 test('wire: every documented channel round-trips', (t) => {
-  t.equal(SAMPLES.length, 24, '24 channels covered')
+  t.equal(SAMPLES.length, 22, '22 channels covered')
   for (const [channel, args] of SAMPLES) {
     const decoded = roundTrip(channel, args)
     t.equal(decoded.channel, channel, `${channel}: channel preserved`)

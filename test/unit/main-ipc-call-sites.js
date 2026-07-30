@@ -108,7 +108,7 @@ test('every wt-* listener main.js registered has a shim call',
     const required = [
       'onTorrentParsed', 'onTorrentMetadata', 'onTorrentDone',
       'onTorrentWarning', 'onTorrentError', 'onProgress',
-      'onFileModtimes', 'onTorrentFileSaved', 'onPosterSaved',
+      'onFileModtimes', 'onTorrentFileSaved',
       'onAudioMetadata', 'onServerRunning'
     ]
     t.deepEqual(required.filter((name) => !used.has(name)), [],

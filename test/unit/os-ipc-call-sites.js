@@ -113,8 +113,8 @@ stub(path.join(BUILT, 'lib', 'platform', 'ipc-os'), ipcOsStub)
 // glob (test/AGENTS.md).
 stub(path.join(BUILT, 'lib', 'platform', 'ipc-engine'), {
   __esModule: true,
-  async onServerRunning (listener, options) {
-    record.once.push(['onServerRunning', listener, options])
+  async onServerRunningFor (infoHash, listener, options) {
+    record.once.push(['onServerRunningFor', listener, options])
     return () => {}
   }
 })
@@ -279,7 +279,7 @@ test('with no server yet, the player waits for the engine',
     await flush()
     t.deepEqual(record.os, [], 'nothing launched yet')
     t.equal(record.once.length, 1, 'one listener was registered')
-    t.equal(record.once[0][0], 'onServerRunning', 'on the engine shim')
+    t.equal(record.once[0][0], 'onServerRunningFor', 'on the engine shim')
     t.deepEqual(record.once[0][2], { once: true }, 'as a one-shot')
     t.end()
   })

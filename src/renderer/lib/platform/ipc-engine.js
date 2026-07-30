@@ -19,10 +19,13 @@
  * site now goes through here. The protocol itself is documented in
  * US-033. See docs/platform-shim.md.
  *
- * `onServerRunningFor` has no caller in the renderer UI: the engine
- * sends `wt-server-${infoHash}` but nothing subscribes to it. It is
- * kept because the channel is part of the protocol a librqbit
- * implementation has to satisfy.
+ * US-043 deleted `generateTorrentPoster` and `onPosterSaved` from this
+ * surface: poster generation runs in the UI renderer now (ADR-013), so
+ * there is nothing left for `wt-generate-torrent-poster` or `wt-poster`
+ * to carry. `startServer` and `stopServer` became per-torrent in the
+ * same story, and `onServerRunningFor` gained its first caller --
+ * poster generation and playback can each hold a server, for different
+ * torrents, at the same time.
  */
 
 import { ipcRenderer } from 'electron'
@@ -116,17 +119,6 @@ export async function saveTorrentFile (torrentKey) {
 }
 
 /**
- * Ask the engine to generate a poster image. The reply arrives on
- * `onPosterSaved`.
- *
- * @param {number} torrentKey
- * @returns {Promise<void>}
- */
-export async function generateTorrentPoster (torrentKey) {
-  ipcRenderer.send('wt-generate-torrent-poster', torrentKey)
-}
-
-/**
  * Ask the engine for a file's audio metadata. The reply arrives on
  * `onAudioMetadata`.
  *
@@ -139,8 +131,10 @@ export async function getAudioMetadata (infoHash, index) {
 }
 
 /**
- * Start the local streaming HTTP server for a torrent. The reply
- * arrives on `onServerRunning`.
+ * Start the local streaming HTTP server for one torrent. Idempotent
+ * per torrent, and it always replies -- on `onServerRunning` and on
+ * `onServerRunningFor` -- whether or not a server was already up.
+ * Every caller that starts a server must release it with `stopServer`.
  *
  * @param {string} infoHash
  * @returns {Promise<void>}
@@ -150,12 +144,14 @@ export async function startServer (infoHash) {
 }
 
 /**
- * Stop the local streaming HTTP server.
+ * Release this caller's hold on one torrent's streaming server. The
+ * server is destroyed once its last holder releases it.
  *
+ * @param {string} infoHash
  * @returns {Promise<void>}
  */
-export async function stopServer () {
-  ipcRenderer.send('wt-stop-server')
+export async function stopServer (infoHash) {
+  ipcRenderer.send('wt-stop-server', infoHash)
 }
 
 /**
@@ -283,18 +279,6 @@ export async function onFileModtimes (listener, options) {
  */
 export async function onTorrentFileSaved (listener, options) {
   return listen('wt-file-saved', listener, options)
-}
-
-/**
- * A poster image was written to disk.
- *
- * @param {(torrentKey: number, posterFileName: string) => void}
- *   listener
- * @param {ListenOptions} [options]
- * @returns {Promise<Unsubscribe>}
- */
-export async function onPosterSaved (listener, options) {
-  return listen('wt-poster', listener, options)
 }
 
 /**

@@ -99,15 +99,16 @@ Differences from the hidden-window engine, all deliberate:
 
 - No `ipcReadyWebTorrent`. Readiness is the port line plus an accepted
   socket.
-- No `wt-generate-torrent-poster` and no `wt-poster`. Both need a DOM;
-  ADR-013 moves poster generation into the UI renderer and deletes them
-  from the wire (US-043).
+- No `wt-generate-torrent-poster` and no `wt-poster`. Both needed a DOM;
+  US-043 deleted them from the wire and poster generation now runs in the
+  UI renderer (`src/renderer/lib/torrent-poster.js`, ADR-013). The engine
+  handles no media at all -- do not add a media dependency back to it.
 - No `window.client` and no `window.testOfflineMode`.
 - Uncaught errors come from `process.on('uncaughtException')` and
   `process.on('unhandledRejection')` rather than a `window` error
   listener, and still go out on `wt-uncaught-error`.
-- `SIGTERM` and `SIGINT` destroy the client and close the server, so a
-  quit does not leave the download directory held open.
+- `SIGTERM` and `SIGINT` destroy the client and close every streaming
+  server, so a quit does not leave the download directory held open.
 - With `WEBTORRENT_ENGINE_PARENT_PIPE` set, stdin ending shuts the
   process down the same way. That is the orphan backstop for a host
   that dies without running its `before-quit`, and it is gated behind
@@ -117,6 +118,14 @@ Differences from the hidden-window engine, all deliberate:
   `TorrentKeyNotFoundError` produced. The class lives in
   `src/renderer/lib/errors.js`, only its message ever crossed the wire,
   and the sidecar does not import renderer code.
+
+The streaming servers are a `Map` keyed by info hash, and each entry
+counts its holders (US-043): `wt-start-server` is idempotent per torrent
+and always replies, `wt-stop-server` takes the info hash to release, and
+the server dies with its last holder. Poster generation and playback can
+hold servers for different torrents at once, so a single module-level
+`server` is not enough any more. This behaviour has to stay identical in
+`src/renderer/webtorrent.js` until US-045 deletes it.
 
 `config.TORRENT_PATH` and `config.POSTER_PATH` resolve under plain
 `node` because US-040 made `src/config.js` require `electron` lazily,

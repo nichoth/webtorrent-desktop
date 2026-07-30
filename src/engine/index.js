@@ -17,9 +17,9 @@
 //
 // - `ipcReadyWebTorrent`, the `ipcMain` relay's handshake. Readiness is
 //   now the port line plus an accepted socket.
-// - `wt-generate-torrent-poster` and `wt-poster`, which need a DOM.
-//   ADR-013 moves poster generation into the UI renderer and deletes
-//   both from the wire; US-043 does that work.
+// - `wt-generate-torrent-poster` and `wt-poster`, which needed a DOM.
+//   US-043 deleted both from the wire: poster generation runs in the UI
+//   renderer now (ADR-013), and the engine handles no media at all.
 
 import crypto from 'crypto'
 import fs from 'fs'
@@ -74,7 +74,11 @@ const bus = createWebSocketBus({
 const client = new WebTorrent({ peerId: PEER_ID })
 
 // WebTorrent-to-HTTP streaming sever
-let server = null
+// The WebTorrent-to-HTTP streaming servers, one per torrent, keyed by
+// info hash (US-043, ADR-013). Poster generation and playback can want
+// a server at the same time for different torrents, so each entry
+// counts its holders and is destroyed when the last one releases it.
+const servers = new Map()
 
 // Used for diffing, so we only send progress updates when necessary
 let prevProgress = null
@@ -98,8 +102,8 @@ function init () {
     getAudioMetadata(infoHash, index))
   bus.on('wt-start-server', (infoHash) =>
     startServer(infoHash))
-  bus.on('wt-stop-server', () =>
-    stopServer())
+  bus.on('wt-stop-server', (infoHash) =>
+    stopServer(infoHash))
   bus.on('wt-select-files', (infoHash, selections) =>
     selectFiles(infoHash, selections))
 
@@ -149,7 +153,7 @@ function onUncaughtError (err) {
 }
 
 function shutdown () {
-  stopServer()
+  stopAllServers()
   client.destroy(() => {
     bus.close().then(() => process.exit(0), () => process.exit(0))
   })
@@ -344,29 +348,53 @@ function startServer (infoHash) {
 }
 
 function startServerFromReadyTorrent (torrent) {
-  if (server) return
+  const existing = servers.get(torrent.infoHash)
+  if (existing) {
+    existing.holders++
+    // `wt-start-server` always replies, even for a server that is
+    // already listening -- a caller that got silence would wait
+    // forever. A request that arrives before the first `listen`
+    // callback needs no re-send: the reply below is a broadcast and
+    // every subscriber gets it.
+    if (existing.info) sendServerRunning(torrent.infoHash, existing.info)
+    return
+  }
 
   // start the streaming torrent-to-http server
-  server = torrent.createServer()
+  const server = torrent.createServer()
+  const entry = { server, info: null, holders: 1 }
+  servers.set(torrent.infoHash, entry)
+
   server.listen(0, () => {
     const port = server.address().port
     const urlSuffix = ':' + port
-    const info = {
+    entry.info = {
       torrentKey: torrent.key,
       localURL: 'http://localhost' + urlSuffix,
       networkURL: 'http://' + networkAddress() + urlSuffix,
       networkAddress: networkAddress()
     }
 
-    bus.send('wt-server-running', info)
-    bus.send('wt-server-' + torrent.infoHash, info)
+    sendServerRunning(torrent.infoHash, entry.info)
   })
 }
 
-function stopServer () {
-  if (!server) return
-  server.destroy()
-  server = null
+function sendServerRunning (infoHash, info) {
+  bus.send('wt-server-running', info)
+  bus.send('wt-server-' + infoHash, info)
+}
+
+function stopServer (infoHash) {
+  const entry = servers.get(infoHash)
+  if (!entry) return
+  if (--entry.holders > 0) return
+  servers.delete(infoHash)
+  entry.server.destroy()
+}
+
+function stopAllServers () {
+  for (const entry of servers.values()) entry.server.destroy()
+  servers.clear()
 }
 
 console.log('Initializing...')

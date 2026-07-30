@@ -260,9 +260,14 @@ export default class PlaybackController {
     }
 
     function onTorrentReady () {
+      // Addressed by info hash: since ADR-013 poster generation starts
+      // servers too, so the broadcast channel can carry a server for a
+      // torrent the user is not watching.
+      reportErrors(ipcEngine.onServerRunningFor(
+        torrentSummary.infoHash,
+        () => { state.playing.isReady = true },
+        { once: true }))
       reportErrors(ipcEngine.startServer(torrentSummary.infoHash))
-      reportErrors(ipcEngine.onServerRunning(
-        () => { state.playing.isReady = true }, { once: true }))
     }
   }
 
@@ -357,6 +362,10 @@ export default class PlaybackController {
     // Save volume (this session only, not in state.saved)
     state.previousVolume = state.playing.volume
 
+    // wt-stop-server is per-torrent since ADR-013, so the info hash
+    // has to be read before the play state is reset below.
+    const playingInfoHash = state.playing.infoHash
+
     // Reset the window contents back to the home screen
     state.playing = State.getDefaultPlayState()
     state.server = null
@@ -367,8 +376,8 @@ export default class PlaybackController {
     }
     restoreBounds(state)
 
-    // Tell the WebTorrent process to kill the torrent-to-HTTP server
-    reportErrors(ipcEngine.stopServer())
+    // Release our hold on the torrent-to-HTTP server
+    reportErrors(ipcEngine.stopServer(playingInfoHash))
 
     reportErrors(ipcOs.notifyPlayerClose())
 

@@ -373,7 +373,6 @@ async function setupIpc () {
     ipcEngine.onProgress((...args) => tc.torrentProgress(...args)),
     ipcEngine.onFileModtimes((...args) => tc.torrentFileModtimes(...args)),
     ipcEngine.onTorrentFileSaved((...args) => tc.torrentFileSaved(...args)),
-    ipcEngine.onPosterSaved((...args) => tc.torrentPosterSaved(...args)),
     ipcEngine.onAudioMetadata((...args) => tc.torrentAudioMetadata(...args)),
     ipcEngine.onServerRunning((...args) => tc.torrentServerRunning(...args))
   ])

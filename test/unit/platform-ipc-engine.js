@@ -115,10 +115,12 @@ test('startTorrenting sends every argument through', async function (t) {
   t.end()
 })
 
-test('stopServer sends with no arguments', async function (t) {
+// Per-torrent since US-043: the argument names the torrent whose
+// server this caller is releasing.
+test('stopServer names the torrent to release', async function (t) {
   reset()
-  await ipcEngine.stopServer()
-  t.deepEqual(ipc.sent, [{ channel: 'wt-stop-server', args: [] }])
+  await ipcEngine.stopServer('abc')
+  t.deepEqual(ipc.sent, [{ channel: 'wt-stop-server', args: ['abc'] }])
   t.end()
 })
 
