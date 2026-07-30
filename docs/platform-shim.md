@@ -77,12 +77,28 @@ one, and **exactly one of the two is in a given bundle**. Everything
 this document says about a module's arguments, return values and
 error behaviour is the contract both trees are written against.
 
-The Tauri tree is stubs today: every export is `async`, takes the same
-arguments, and throws a `NotImplementedError` carrying
+The Tauri tree is mostly stubs: an unported export is `async`, takes
+the same arguments, and throws a `NotImplementedError` carrying
 `code: 'WT_TAURI_NOT_IMPLEMENTED'` naming the module and the export.
 Each Phase 4 story turns one module's throws into working calls;
 `test/unit/platform-tauri.js` keeps the two trees exporting the same
-names with the same arities in the meantime.
+names with the same arities in the meantime, and holds the register of
+which exports are ported (`IMPLEMENTED`) so the not-implemented sweep
+skips exactly those and no more.
+
+Ported so far:
+
+| Export | Story | Backed by |
+| --- | --- | --- |
+| `ipcOs.onWindowBoundsChanged` | US-056 | a Tauri event, emitted by `src-tauri/src/window.rs` |
+
+A ported listener export is a `listen()` (or `once()`) from
+`@tauri-apps/api/event`, wrapped so the caller sees the payload alone
+and gets the unsubscribe function back -- the same contract the
+Electron tree's private `listen()` provides over `ipcRenderer`. The
+host emits on the **Electron channel name unchanged**
+(`windowBoundsChanged`), because the renderer above the shim is the
+same renderer.
 
 `tauri/ipc-engine.js` is the one exception, and re-exports the sibling
 rather than stubbing it. That module has been host-free since US-044 --
@@ -869,6 +885,11 @@ Overrides, in order:
 
 `lib/cast.js` is the only override that switches the rule off for a
 single file, and `test/unit/lint-boundary.js` asserts that stays true.
+
+US-056 adds `@tauri-apps/api` and its subpaths to the same `patterns`
+list: it is the second host's `electron`, so only the shim may name it,
+and the `ipc-engine.js` override bans it there too -- that module is
+meant to need no host at all under either host.
 
 On top of the specifier list, US-052 adds one `patterns` entry:
 `**/platform/tauri` and `**/platform/tauri/**` are banned under

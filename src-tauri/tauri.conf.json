@@ -11,6 +11,7 @@
         "label": "main",
         "title": "WebTorrent",
         "url": "static/main.html",
+        "visible": false,
         "width": 500,
         "height": 638,
         "minWidth": 425,

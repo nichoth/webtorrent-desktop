@@ -77,6 +77,44 @@ test('the Tauri window loads static/main.html and the Vite output',
     t.end()
   })
 
+// US-056: where the window opens is a runtime decision -- the saved
+// rectangle, the maximized flag and the `--hidden` launch are all read
+// in `src-tauri/src/window.rs`. A window declared visible would come
+// up at the default size before any of that was applied, and would
+// ignore `--hidden` outright, so the declaration has to stay hidden
+// and the host has to be the thing that shows it.
+test('the Tauri window is opened by the host, not by the config',
+  function (t) {
+    const main = readConf().app.windows[0]
+    t.equal(main.visible, false, 'the declared window starts hidden')
+
+    const host = fs.readFileSync(
+      path.join(TAURI_DIR, 'src', 'main.rs'), 'utf8'
+    )
+    t.ok(/\.show\(\)/.test(host), 'the host shows the window itself')
+    t.ok(/is_hidden/.test(host), 'and honours a --hidden launch')
+    t.ok(
+      /single_instance/.test(host),
+      'a second launch signals the first rather than opening a window'
+    )
+    t.end()
+  })
+
+// The renderer subscribes to `windowBoundsChanged` through
+// `@tauri-apps/api`, which needs the core event permission. Tauri
+// grants nothing without a capability file, so a missing one is a
+// window that silently stops saving where it is.
+test('the renderer is allowed to listen for host events', function (t) {
+  const capability = JSON.parse(fs.readFileSync(
+    path.join(TAURI_DIR, 'capabilities', 'default.json'), 'utf8'
+  ))
+  t.ok(capability.permissions.includes('core:default'),
+    'the core permission set, which includes the event API')
+  t.ok(capability.windows.includes(readConf().app.windows[0].label),
+    'granted to the main window')
+  t.end()
+})
+
 test('both hosts stay launchable side by side', function (t) {
   t.equal(
     pkg.scripts.start,

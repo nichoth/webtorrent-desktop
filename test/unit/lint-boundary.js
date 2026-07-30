@@ -142,6 +142,48 @@ test('the boundary config rejects a direct Tauri-tree import',
     t.end()
   })
 
+// US-056: the Tauri API package is the second host's `electron`, and
+// it is reached by subpath, so every subpath has to be caught.
+test('the boundary config rejects a direct Tauri API import',
+  async function (t) {
+    const specifiers = [
+      '@tauri-apps/api',
+      '@tauri-apps/api/event',
+      '@tauri-apps/api/core',
+      '@tauri-apps/api/window'
+    ]
+    for (const specifier of specifiers) {
+      const messages = await lintAs(
+        "import x from '" + specifier + "'\nexport default x\n",
+        'src/renderer/probe.js'
+      )
+      const restricted = messages
+        .filter((m) => m.ruleId === 'no-restricted-imports')
+      t.equal(restricted.length, 1, specifier + ' is rejected')
+      t.ok(/platform/.test(restricted[0].message || ''),
+        specifier + ' is pointed at the shim')
+    }
+
+    // ...and the shim is where it is allowed, except in the one file
+    // that is meant to need no host at all.
+    const inShim = await lintAs(
+      "import { listen } from '@tauri-apps/api/event'\nexport { listen }\n",
+      'src/renderer/lib/platform/tauri/ipc-os.js'
+    )
+    t.deepEqual(
+      inShim.filter((m) => m.ruleId === 'no-restricted-imports'), [],
+      'the Tauri shim tree may import it')
+
+    const inEngine = await lintAs(
+      "import { listen } from '@tauri-apps/api/event'\nexport { listen }\n",
+      'src/renderer/lib/platform/ipc-engine.js'
+    )
+    t.equal(
+      inEngine.filter((m) => m.ruleId === 'no-restricted-imports').length, 1,
+      'the engine shim stays host-free under both hosts')
+    t.end()
+  })
+
 test('the shim itself may still reach both trees', async function (t) {
   const inside = [
     'src/renderer/lib/platform/tauri/index.js',

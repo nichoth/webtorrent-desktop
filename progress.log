@@ -18,6 +18,31 @@ it tight.
   a stub. Nothing outside the shim may name `platform/tauri`.
   `npm run build:renderer:tauri` is the Tauri bundle;
   `npm run build:renderer` is unchanged.
+- **Porting a Tauri shim export (US-056 onward) has four steps.**
+  Implement it in `src/renderer/lib/platform/tauri/<mod>.js` over
+  `@tauri-apps/api` (banned everywhere else, by
+  `eslint-boundary.config.js` and `test/unit/platform-boundary.js`);
+  add it to the `IMPLEMENTED` register in
+  `test/unit/platform-tauri.js` or the not-implemented sweep fails on
+  it; give it a test file that stubs the API through `require.cache`
+  at `require.resolve('@tauri-apps/api/event')`; and if it uses a core
+  API rather than an app command, check
+  `src-tauri/capabilities/default.json` grants it -- Tauri gives the
+  renderer nothing without a capability, and the failure is a silent
+  runtime permission error in a webview with no visible console.
+- **Tauri reports physical pixels, Electron logical ones.** Any
+  geometry crossing the shim divides by `scale_factor()` first
+  (`logical_bounds` in `src-tauri/src/window.rs`), or a retina window
+  doubles on every restart. The window is declared
+  `"visible": false` in `tauri.conf.json` and shown from `setup()`
+  once the runtime geometry is applied.
+- **The Tauri binary is checkable non-interactively.**
+  `npm run build:tauri && (cd src-tauri && cargo build)`, then run
+  `src-tauri/target/debug/webtorrent-desktop` in the background. It is
+  one process, not an Electron-style tree, so `kill $PID` lands; a
+  second foreground launch returning immediately is the single-instance
+  check. `cargo` has network access, and the first
+  `clippy`/`build` after a new crate recompiles the tree (~2.5 min).
 - **A Vite `resolveId` plugin must set `enforce: 'pre'`.** Vite puts
   `vite:resolve` ahead of *normal* user plugins, so a plugin without
   it never sees a resolution Vite can answer -- which is all of them.
@@ -4859,4 +4884,73 @@ state file.
   longer loads that copy: `test/unit/*.js` is CommonJS and requires
   `build/`. Do not "clean up" by adding it to the `build:main`
   `--ignore` list.
+---
+
+## 2026-07-29 - US-056
+- Created and restored the main window from Rust. `src-tauri/src/window.rs`
+  is new: the initial geometry (`WindowLayout::resolve`, mirroring
+  `Object.assign(WINDOW_INITIAL_BOUNDS, state.saved.bounds)`), a
+  tolerant reader for the renderer's `config.json` bounds, the
+  `--hidden` flag, the physical->logical rectangle conversion and a
+  trailing-edge `Debounce`. `main.rs` applies all of it before showing
+  the window, watches move/resize and emits `windowBoundsChanged`
+  debounced by 1s, and registers `tauri-plugin-single-instance` unless
+  the install is portable.
+- `tauri.conf.json` now declares the window `"visible": false` so the
+  host decides where and whether it appears;
+  `src-tauri/capabilities/default.json` grants `core:default` to the
+  main window, without which the renderer cannot subscribe to an event.
+- Renderer half: `tauri/ipc-os.onWindowBoundsChanged` is the first
+  ported export in that tree -- a `listen()`/`once()` over
+  `@tauri-apps/api/event` (new dependency) behind a private
+  `subscribe()` that unwraps `event.payload` and returns the
+  unsubscribe function, matching the Electron sibling's contract.
+- Interpretation note: `src/main/windows/main.js` never persists a
+  maximized flag (`state.window.wasMaximized` is runtime-only), so
+  "applies the maximized flag" is implemented as: restore it when the
+  saved bounds carry one, default false. Nothing writes one today.
+- Files: `src-tauri/src/window.rs` (new), `src-tauri/src/main.rs`,
+  `src-tauri/Cargo.toml`, `src-tauri/tauri.conf.json`,
+  `src-tauri/capabilities/default.json` (new), `src-tauri/AGENTS.md`,
+  `src/renderer/lib/platform/tauri/ipc-os.js`,
+  `src/renderer/lib/platform/AGENTS.md`, `eslint-boundary.config.js`,
+  `docs/platform-shim.md`, `package.json`,
+  `test/unit/platform-tauri-ipc-os.js` (new), `test/unit/platform-tauri.js`,
+  `test/unit/platform-boundary.js`, `test/unit/lint-boundary.js`,
+  `test/unit/tauri-host.js`.
+- Verified: `cargo fmt --check`, `cargo clippy --all-targets -- -D
+  warnings`, `cargo test` (30 tests) and `npm test` (2177) all pass. The
+  JS tests were confirmed red first by stashing the shim and config
+  changes and rebuilding. Single instance was checked against the real
+  binary: the first launch stays up, a second exits 0 immediately, and
+  a `--hidden` launch runs without a crash. Whether the window is
+  *visually* where it was left is for the US-073 verification pass.
+- **Learnings for future iterations:**
+  - **Tauri grants the renderer nothing without a capability file.**
+    App-defined `#[tauri::command]`s are exempt, but any core API the
+    renderer reaches through `@tauri-apps/api` -- `event.listen`
+    included -- needs `src-tauri/capabilities/default.json`. The
+    failure is a runtime permission error in a webview whose console
+    does not reach stdout, so it looks like nothing happened.
+  - **Tauri reports physical pixels; Electron's `getBounds()` is
+    logical.** Anything that crosses the shim carrying a rectangle has
+    to be divided by `scale_factor()` first, or a retina window
+    doubles in size on every restart.
+  - **A window declared in `tauri.conf.json` is created before
+    `setup()` runs**, so runtime geometry means declaring it
+    `"visible": false` and calling `show()` yourself -- the same shape
+    as Electron's `show: false` plus `ready-to-show`. There is no need
+    to build the window in Rust to control where it opens.
+  - **The not-implemented sweep in `test/unit/platform-tauri.js` now
+    has an `IMPLEMENTED` register.** Porting a Tauri shim export means
+    adding it there (and giving it a test file), or the sweep fails on
+    the export that no longer throws.
+  - **`cargo` has network access here**, so a new crate is fine; the
+    first `clippy`/`build` after one recompiles the tree (~2.5 min).
+  - **The Tauri binary can be exercised non-interactively.**
+    `npm run build:tauri && cargo build`, then run
+    `src-tauri/target/debug/webtorrent-desktop` in the background: it
+    is a single process (no Electron-style tree), `kill $PID` lands,
+    and a second foreground launch returning immediately is exactly
+    the single-instance assertion.
 ---

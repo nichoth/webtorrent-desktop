@@ -37,6 +37,20 @@ const HELPERS = ['not-implemented.js']
 // host-free since US-044. Its exports are therefore not called below.
 const REEXPORTED = 'ipc-engine'
 
+// The exports a Phase 4 story has already implemented, module by
+// module. They are the ones that must NOT throw, so they are skipped
+// by the not-implemented sweep below and checked for the opposite
+// instead. Each has its own test file; this list is the register that
+// keeps the sweep honest as the tree fills in.
+const IMPLEMENTED = {
+  // US-056: the window restore loop's renderer half.
+  'ipc-os.js': ['onWindowBoundsChanged']
+}
+
+function implemented (name) {
+  return IMPLEMENTED[name] || []
+}
+
 function modules (dir) {
   return fs.readdirSync(dir)
     .filter((name) => name.endsWith('.js') && !HELPERS.includes(name))
@@ -136,10 +150,11 @@ for (const name of electronModules) {
   const stem = name.replace(/\.js$/, '')
   if (stem === REEXPORTED || stem === 'index') continue
 
-  test(`every tauri/${name} export rejects as not implemented`,
+  test(`every unported tauri/${name} export rejects as not implemented`,
     async function (t) {
       const tauri = load(TAURI, name)
       for (const key of Object.keys(tauri)) {
+        if (implemented(name).includes(key)) continue
         const result = tauri[key]()
         t.ok(result instanceof Promise, `${key}() returns a promise`)
         try {
@@ -152,6 +167,24 @@ for (const name of electronModules) {
       }
     })
 }
+
+test('the implemented exports are implemented, not still stubs',
+  function (t) {
+    for (const [name, names] of Object.entries(IMPLEMENTED)) {
+      const source = fs.readFileSync(path.join(SRC_TAURI, name), 'utf8')
+      for (const key of names) {
+        const body = source.split(`export async function ${key} `)[1]
+        t.ok(body, `tauri/${name} still exports ${key}`)
+        // The sweep above skips these, so a story that regressed one
+        // back to a stub would otherwise go unnoticed.
+        t.notOk(
+          /^[\s\S]*?\n}/.exec(body)[0].includes('notImplemented('),
+          `${key} calls the host rather than failing`
+        )
+      }
+    }
+    t.end()
+  })
 
 test('the Tauri engine shim is the Electron one, not a fork',
   function (t) {

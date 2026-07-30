@@ -47,10 +47,21 @@ const HOST = [
   banned('original-fs', ELECTRON)
 ]
 
-// The Electron half of the renderer ban on its own, for the one shim
-// file that is exempt from the Node half but not from this one:
+// US-056: the second host's API package is a host module like any
+// other, and it arrives with subpaths (`@tauri-apps/api/event`,
+// `/core`, ...), so it is a pattern rather than a path. Same rule as
+// `electron`: only the shim may name it, and only in the tree the
+// build selects.
+const TAURI_API = [{
+  group: ['@tauri-apps/api', '@tauri-apps/api/**'],
+  message: 'The renderer must not reach Tauri directly. Import ' +
+    SHIM + ' instead (FR-11).'
+}]
+
+// The host half of the renderer ban on its own, for the one shim file
+// that is exempt from the Node half but not from this one:
 // `ipc-engine.js` below.
-const ELECTRON_ONLY = ['error', { paths: HOST }]
+const ELECTRON_ONLY = ['error', { paths: HOST, patterns: TAURI_API }]
 
 // The same specifiers for the sidecar, which is not a renderer and has
 // no shim to be pointed at -- it simply has no Electron.
@@ -91,7 +102,7 @@ const TAURI_TREE = [{
 }]
 
 const RESTRICTED = ['error', {
-  patterns: TAURI_TREE,
+  patterns: [...TAURI_TREE, ...TAURI_API],
   paths: [
     ...HOST,
 

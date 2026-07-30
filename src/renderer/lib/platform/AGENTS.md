@@ -32,6 +32,23 @@ Consequences for anything done in this directory:
   `NotImplementedError` with `code: 'WT_TAURI_NOT_IMPLEMENTED'`. A
   Phase 4 story replaces one module's throws with real calls and
   leaves the rest alone.
+- **Porting an export means registering it.** `test/unit/platform-tauri.js`
+  sweeps every Tauri export expecting a not-implemented throw, so a
+  newly ported one has to go in that file's `IMPLEMENTED` map or the
+  sweep fails. The map is also what keeps a ported export from
+  silently regressing to a stub, and each entry is meant to have a
+  test file of its own (`platform-tauri-ipc-os.js` is the first).
+- **The Tauri host arrives through `@tauri-apps/api`**, and it is
+  banned outside this directory exactly as `electron` is -- by
+  `eslint-boundary.config.js` (as a `patterns` entry, because it is
+  reached by subpath) and by the source scan in
+  `test/unit/platform-boundary.js`. In a unit test it is stubbed
+  through `require.cache` at `require.resolve('@tauri-apps/api/event')`,
+  the same route `electron` uses.
+- **A host *event* needs a Tauri capability.** Listener exports are
+  `listen()`/`once()` from `@tauri-apps/api/event`, which the core
+  permission set covers -- `src-tauri/capabilities/default.json`. A
+  missing grant is a runtime permission error, not a build failure.
 - **`tauri/ipc-engine.js` is a re-export, not a stub**, because the
   module has been host-free since US-044. Do not "finish" it.
 - **Nothing outside this directory may name `platform/tauri`.** Both

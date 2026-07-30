@@ -19,7 +19,28 @@
  * being written against.
  */
 
+import { listen, once } from '@tauri-apps/api/event'
 import { notImplemented } from './not-implemented'
+
+/**
+ * Register a listener on a host event, hiding both the Tauri event
+ * envelope and the unsubscribe bookkeeping from the caller.
+ *
+ * The Electron sibling's `listen()` drops an event object and spreads
+ * the rest of the arguments; a Tauri event carries exactly one
+ * payload, so the wrapper unwraps `event.payload` instead. Both hand
+ * the caller the same thing: the value the host sent, and a function
+ * that stops the subscription.
+ *
+ * @param {string} event
+ * @param {(payload: any) => void} listener
+ * @param {{ once?: boolean }} [options]
+ * @returns {Promise<() => void>}
+ */
+function subscribe (event, listener, options) {
+  const register = options && options.once ? once : listen
+  return register(event, (received) => listener(received.payload))
+}
 
 export async function setTitle (title) {
   notImplemented('ipc-os', 'setTitle')
@@ -141,6 +162,18 @@ export async function onFullscreenChanged (listener, options) {
   notImplemented('ipc-os', 'onFullscreenChanged')
 }
 
+/**
+ * The window was moved or resized (US-056).
+ *
+ * The host emits this on the same name the Electron main process
+ * sends it on, already debounced and already in logical pixels, so
+ * the payload is the `{ x, y, width, height }` the caller saves
+ * either way.
+ *
+ * @param {(bounds: object) => void} listener
+ * @param {{ once?: boolean }} [options]
+ * @returns {Promise<() => void>}
+ */
 export async function onWindowBoundsChanged (listener, options) {
-  notImplemented('ipc-os', 'onWindowBoundsChanged')
+  return subscribe('windowBoundsChanged', listener, options)
 }

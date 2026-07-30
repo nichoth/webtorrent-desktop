@@ -272,6 +272,27 @@ test('nothing outside the shim imports electron',
     t.end()
   })
 
+// US-056: the same rule for the second host. `@tauri-apps/api` is
+// Tauri's `electron` -- a package the shim may hold and nothing above
+// it may, in either spelling and at any subpath. Without this a UI
+// file could reach the Tauri host directly and the bundle would build
+// for one host only, which is exactly what ADR-014 keeps out.
+test('nothing outside the shim imports the Tauri API',
+  function (t) {
+    const patterns = [
+      /from\s*['"]@tauri-apps\/api(\/[\w-]+)*['"]/,
+      /require\s*\(\s*['"]@tauri-apps\/api(\/[\w-]+)*['"]\s*\)/
+    ]
+    const importers = rendererSources()
+      .filter((file) => patterns.some((re) =>
+        re.test(fs.readFileSync(file, 'utf8'))))
+      .map((file) => path.relative(RENDERER, file).split(path.sep).join('/'))
+      .sort()
+    t.deepEqual(importers, [],
+      'no renderer module outside the shim imports Tauri')
+    t.end()
+  })
+
 // US-042 AC-4: the sidecar endpoint reaches the renderer over the shim
 // and nowhere else. The two tempting shortcuts are the environment the
 // host happened to spawn the window with and a global the host poked
