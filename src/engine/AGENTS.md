@@ -41,11 +41,15 @@ it passing rather than relaxing it.
 US-044 pointed the UI at `bus-websocket.js` and US-045 deleted the
 hidden window it depended on, along with its unit test.
 
-This directory is outside `src/renderer/`, so it is outside both
-boundary mechanisms (`eslint-boundary.config.js` and
-`test/unit/platform-boundary.js`). US-046 extends them to cover it;
-until then, do not add a host import here on the grounds that nothing
-stops you.
+This directory is outside `src/renderer/`, so the renderer's Node bans
+do not apply: the sidecar is a Node process and uses `fs`, `crypto`
+and friends directly. Since US-046 both boundary mechanisms cover it
+for the **opposite** mistake instead. `eslint-boundary.config.js` has
+an `src/engine/**` override banning `electron`, `@electron/remote` and
+`original-fs` plus every DOM global, and `npm run lint:boundary` lints
+this tree as well as the renderer;
+`test/unit/platform-boundary.js` scans the same two things in source,
+which is what catches the `require()` spellings ESLint cannot see.
 
 ## `bus-websocket.js`
 

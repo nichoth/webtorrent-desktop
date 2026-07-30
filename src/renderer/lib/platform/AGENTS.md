@@ -123,11 +123,17 @@ engine seam be reimplemented without touching `ipc-os.js`.
   `npm run lint:boundary` inside `npm run lint`) exempts this
   directory. It is the only place a direct `electron`,
   `@electron/remote`, `fs`, `os`, `crypto` or `http` import is
-  allowed, alongside the two deferred casualties `webtorrent.js` and
+  allowed, alongside the one remaining deferred casualty
   `lib/cast.js`. The exemption is a directory glob, so a new module
   here needs no config change -- but adding a **new** host module to
   the shim means adding its specifier to the ban list, or the next
   file to reach for it directly will pass lint.
+- **`ipc-engine.js` is the exception to that glob.** Since US-046 it
+  is banned from importing Electron like any non-shim file, because
+  US-044 turned it into a WebSocket client of the sidecar and it needs
+  no host module at all. The Node half of the ban stays off for it.
+  If a shim module ever stops needing a host import, do the same
+  rather than leaving it covered by the directory exemption.
 - A **request/response export** (`checkForExternalPlayer`,
   `getEngineEndpoint`) is a `send` plus an `ipcRenderer.once` on the
   same channel name, and it never resolves without a main-process

@@ -14,6 +14,15 @@ const babel = require('@babel/core')
 // hand-built channel string, and that a rejected shim promise reaches
 // `dispatch('error', ...)` rather than floating.
 //
+// US-044 replaced the transport under that shim -- `ipcRenderer` became
+// a WebSocket client of the sidecar -- without changing one export
+// name, argument or return type. This file therefore still describes
+// exactly what it described before, and US-046 kept it: the stubs below
+// stand in for `ipc-engine.js` itself, so no assertion here ever named
+// a transport. What proves the transport swap is
+// `test/unit/platform-ipc-engine.js` (the shim against a fake socket)
+// and `test/unit/engine-bus-websocket.js` (the sidecar's own end).
+//
 // Controllers are excluded from `build:main`, so each one under test is
 // compiled here with the repo's own Babel config and emitted into
 // `build/renderer/controllers/`, where its `../lib/...` imports resolve

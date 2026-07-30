@@ -20,7 +20,7 @@
     "test": "npm run lint && depcheck --ignores=standard,eslint,@babel/eslint-parser,madr --ignore-dirs=build,build-vite,dist && npm run test-unit",
     "test-unit": "npm run build:main && tape test/unit/*.js",
     "lint": "standard && npm run lint:boundary",
-    "lint:boundary": "eslint --no-eslintrc -c eslint-boundary.config.js src/renderer",
+    "lint:boundary": "eslint --no-eslintrc -c eslint-boundary.config.js src/renderer src/engine",
     "test-integration": "npm run build && node ./test",
     "update-authors": "./bin/update-authors.sh",
     "watch": "nodemon --exec \"npm run start\" --ext js,css --ignore build/ --ignore build-vite/ --ignore dist/"

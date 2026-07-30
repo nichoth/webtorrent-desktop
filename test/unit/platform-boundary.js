@@ -21,19 +21,21 @@ const path = require('path')
 // bundler, and `build/` does not contain `components/` or
 // `controllers/` at all.
 
-const RENDERER = path.join(__dirname, '..', '..', 'src', 'renderer')
+const SRC = path.join(__dirname, '..', '..', 'src')
+const RENDERER = path.join(SRC, 'renderer')
+const ENGINE = path.join(SRC, 'engine')
 const SHIM = path.join(RENDERER, 'lib', 'platform')
 
-// FR-4 exempts the hidden WebTorrent window from the shim: it is a
-// Node process by design and keeps its own `require('fs')`.
-const EXEMPT = new Set([path.join(RENDERER, 'webtorrent.js')])
+// US-046: `src/renderer/webtorrent.js` used to be exempt from the shim
+// under FR-4 -- it was a Node process by design and kept its own
+// `require('fs')`. US-045 deleted the file, so nothing under
+// `src/renderer/` is exempt from the Node bans any more and the two
+// exemption sets below are empty of it.
+const EXEMPT = new Set()
 
-// The two deferred casualties, matching the per-file overrides in
-// `eslint-boundary.config.js`.
-const DEFERRED = new Set([
-  path.join(RENDERER, 'webtorrent.js'),
-  path.join(RENDERER, 'lib', 'cast.js')
-])
+// The one remaining deferred casualty, matching the per-file override
+// in `eslint-boundary.config.js`.
+const DEFERRED = new Set([path.join(RENDERER, 'lib', 'cast.js')])
 
 function rendererSources () {
   const out = []
@@ -281,3 +283,85 @@ test('no renderer file reads the engine endpoint from env or a global',
     }
     t.end()
   })
+
+// -- US-046: the sidecar side of the boundary -------------------------
+
+function engineSources () {
+  return fs.readdirSync(ENGINE)
+    .filter((name) => name.endsWith('.js'))
+    .map((name) => path.join(ENGINE, name))
+}
+
+// Comment lines are dropped before every match below: these files
+// explain at length what they must not do, and a scan cannot tell code
+// from prose (see test/AGENTS.md).
+function codeLines (file) {
+  return fs.readFileSync(file, 'utf8').split('\n')
+    .map((line, i) => ({ line, n: i + 1 }))
+    .filter(({ line }) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+}
+
+function hitsIn (file, patterns) {
+  return codeLines(file)
+    .filter(({ line }) => patterns.some((re) => re.test(line)))
+    .map(({ line, n }) => n + ': ' + line.trim())
+}
+
+// AC-2: `ipc-engine.js` spoke the `wt-*` protocol over `ipcRenderer`
+// until US-044 made it a WebSocket client. It is inside the shim, so
+// every check above skips it; this one names it. The `require()`
+// spelling is here because `no-restricted-imports` cannot see it.
+test('the engine shim reaches no Electron API', function (t) {
+  const file = path.join(SHIM, 'ipc-engine.js')
+  const patterns = [
+    /from\s*['"](electron|@electron\/remote|original-fs)['"]/,
+    /require\s*\(\s*['"](electron|@electron\/remote|original-fs)['"]\s*\)/,
+    /\bipcRenderer\s*\./
+  ]
+  t.deepEqual(hitsIn(file, patterns), [],
+    'ipc-engine.js talks to the sidecar, not to Electron')
+  t.end()
+})
+
+// AC-4: the opposite mistake. The sidecar runs under
+// ELECTRON_RUN_AS_NODE, where `require('electron')` yields no `app`,
+// and a packaged sidecar has no `node_modules/electron` to resolve at
+// all -- so an Electron import there fails at load rather than
+// degrading. It has no DOM either.
+test('no engine source imports Electron', function (t) {
+  const files = engineSources()
+  t.ok(files.length > 1, 'walked the engine sources')
+  const patterns = [
+    /from\s*['"](electron|@electron\/remote|original-fs)['"]/,
+    /require\s*\(\s*['"](electron|@electron\/remote|original-fs)['"]\s*\)/
+  ]
+  for (const file of files) {
+    t.deepEqual(hitsIn(file, patterns), [],
+      path.basename(file) + ' imports no Electron module')
+  }
+  t.end()
+})
+
+test('no engine source touches a DOM global', function (t) {
+  const files = engineSources()
+  t.ok(files.length > 1, 'walked the engine sources')
+  const patterns = [
+    /\b(window|document|navigator|localStorage|sessionStorage)\s*\./,
+    /\bnew\s+(Image|Audio|XMLHttpRequest)\b/
+  ]
+  for (const file of files) {
+    t.deepEqual(hitsIn(file, patterns), [],
+      path.basename(file) + ' uses no DOM global')
+  }
+  t.end()
+})
+
+// The engine is exempt from the renderer's Node bans, and the walk
+// above must not quietly grow into policing them. Asserting the
+// sidecar does use a Node builtin keeps that explicit.
+test('the engine uses Node builtins freely', function (t) {
+  const source = fs.readFileSync(path.join(ENGINE, 'index.js'), 'utf8')
+  t.ok(/from\s*['"]fs['"]/.test(source),
+    'src/engine/index.js imports fs directly, as a Node process may')
+  t.end()
+})

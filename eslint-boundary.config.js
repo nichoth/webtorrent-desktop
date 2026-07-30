@@ -11,6 +11,16 @@
 // through `src/renderer/lib/platform/`, so a new direct import is
 // always the decoupling eroding rather than a legitimate need.
 //
+// US-046 added the other side of the same seam. `src/engine/` is the
+// torrent sidecar (ADR-012): a plain Node process, so it is exempt
+// from the renderer's Node bans and may use `fs`, `os`, `crypto` and
+// `http` freely. What it may not do is the mirror-image mistake --
+// reach for Electron or for a DOM. It runs under
+// `ELECTRON_RUN_AS_NODE`, where `require('electron')` returns no
+// `app`, and a packaged sidecar has no `node_modules/electron` to
+// resolve at all, so an Electron import there fails at load rather
+// than degrading. There is no `window` either. Both are banned below.
+//
 // Scope note: `no-restricted-imports` sees `import` declarations only,
 // not `require()`. The `require()` spellings of the same specifiers
 // are covered by the source scan in `test/unit/platform-boundary.js`,
@@ -31,19 +41,52 @@ function banned (name, why) {
 const ELECTRON = 'The renderer must not reach Electron directly.'
 const NODE = 'The renderer must not reach Node builtins directly.'
 
+const HOST = [
+  banned('electron', ELECTRON),
+  banned('@electron/remote', ELECTRON),
+  banned('original-fs', ELECTRON)
+]
+
+// The Electron half of the renderer ban on its own, for the one shim
+// file that is exempt from the Node half but not from this one:
+// `ipc-engine.js` below.
+const ELECTRON_ONLY = ['error', { paths: HOST }]
+
+// The same specifiers for the sidecar, which is not a renderer and has
+// no shim to be pointed at -- it simply has no Electron.
+const ENGINE_ELECTRON = ['error', {
+  paths: HOST.map(({ name }) => ({
+    name,
+    message: 'The engine sidecar is a plain Node process: it runs ' +
+      'under ELECTRON_RUN_AS_NODE and a packaged sidecar has no ' +
+      'node_modules/electron to resolve (ADR-012).'
+  }))
+}]
+
+// The DOM globals a Node process cannot have. `no-restricted-globals`
+// catches both a real global and an unresolved reference, which is
+// what a stray `window.x` in the sidecar would be.
+const NO_DOM = ['error',
+  { name: 'window', message: 'The engine is a Node process, not a DOM.' },
+  { name: 'document', message: 'The engine is a Node process, not a DOM.' },
+  { name: 'navigator', message: 'The engine is a Node process, not a DOM.' },
+  { name: 'localStorage', message: 'The engine has no web storage.' },
+  { name: 'sessionStorage', message: 'The engine has no web storage.' },
+  { name: 'XMLHttpRequest', message: 'The engine is a Node process.' }
+]
+
 const RESTRICTED = ['error', {
   paths: [
-    banned('electron', ELECTRON),
-    banned('@electron/remote', ELECTRON),
+    ...HOST,
 
     // `fs` is behind `lib/platform/fs.js` since US-028. The
-    // `fs/promises`, `node:` and Electron `original-fs` spellings are
-    // listed so the ban cannot be sidestepped by renaming the import.
+    // `fs/promises` and `node:` spellings are listed so the ban cannot
+    // be sidestepped by renaming the import; Electron's `original-fs`
+    // is in HOST above, with the other host modules.
     banned('fs', NODE),
     banned('fs/promises', NODE),
     banned('node:fs', NODE),
     banned('node:fs/promises', NODE),
-    banned('original-fs', ELECTRON),
 
     // `os` and `crypto` are preventive: no renderer file has used
     // either since the US-002 telemetry deletion, and neither has a
@@ -86,11 +129,15 @@ module.exports = {
       rules: { 'no-restricted-imports': 'off' }
     },
     {
-      // Deferred casualty (FR-4): the hidden WebTorrent window is a
-      // Node process by design and is slated for replacement by
-      // librqbit rather than migration to the shim.
-      files: ['src/renderer/webtorrent.js'],
-      rules: { 'no-restricted-imports': 'off' }
+      // ...with one exception. `ipc-engine.js` needed `ipcRenderer`
+      // while the `wt-*` protocol rode Electron IPC; since US-044 it
+      // is a WebSocket client of the sidecar and needs no host module
+      // at all. The blanket shim exemption would let that quietly
+      // regress, so the Electron ban goes back on for this one file.
+      // The Node half stays off: it is still a shim module, and the
+      // next thing it needs may legitimately be a builtin.
+      files: [SHIM + 'ipc-engine.js'],
+      rules: { 'no-restricted-imports': ELECTRON_ONLY }
     },
     {
       // Deferred casualty: `lib/cast.js` runs an http server inside
@@ -98,6 +145,17 @@ module.exports = {
       // the shim by the same decision that exempted it in US-013.
       files: ['src/renderer/lib/cast.js'],
       rules: { 'no-restricted-imports': 'off' }
+    },
+    {
+      // The sidecar (US-046). Exempt from the renderer rules by not
+      // matching them, and policed for the opposite mistake instead:
+      // no Electron module, no DOM global. Node builtins are its
+      // native surface and are deliberately unrestricted here.
+      files: ['src/engine/**/*.js'],
+      rules: {
+        'no-restricted-imports': ENGINE_ELECTRON,
+        'no-restricted-globals': NO_DOM
+      }
     }
   ]
 }

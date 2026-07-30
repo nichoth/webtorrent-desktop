@@ -377,6 +377,20 @@ it tight.
   code, and a file that *explains* what it no longer uses will fail its
   own check. Filter `/^\s*(\/\/|\*|\/\*)/` before matching -- see
   `test/unit/engine-entry.js`.
+- **The boundary config tightens as well as exempts, and covers two
+  trees.** Since US-046 `eslint-boundary.config.js` runs over
+  `src/renderer` *and* `src/engine` (the `lint:boundary` script names
+  both), and a later `overrides` entry can turn a narrower rule back
+  *on* inside an earlier exemption glob -- that is how
+  `lib/platform/ipc-engine.js` is banned from Electron while the rest
+  of the shim is not. So "is this file exempt?" cannot be answered
+  from the first matching entry; read to the end of the list.
+- **Deleting a source file leaves live lint exemptions behind.** A
+  glob matching no file fails nothing, and `lint-boundary.js` lints
+  *synthetic* text at a path, so a stale per-file override stays green
+  forever. Whenever a story deletes a file, grep
+  `eslint-boundary.config.js` and `test/unit/*boundary*.js` for its
+  path.
 
 ---
 
@@ -4119,4 +4133,90 @@ changes.
   part that is real, assert that part in the test, and write down which
   part was refused and why -- not to widen the deletion or to quietly
   skip the criterion.
+---
+
+## 2026-07-29 - US-046
+
+Extend the boundary rules to cover the sidecar.
+
+**What was implemented**
+
+Failing tests first, in `test/unit/lint-boundary.js` (11 failures
+against the old config) and `test/unit/platform-boundary.js`, then the
+config.
+
+- `eslint-boundary.config.js`: dropped the `src/renderer/webtorrent.js`
+  override (US-045 deleted the file, so the exemption was pointing at
+  nothing and would have silently exempted a file recreated at that
+  path). `lib/cast.js` is the only exemption left.
+- Split the ban list: `HOST` (`electron`, `@electron/remote`,
+  `original-fs`) is now shared between the full renderer `RESTRICTED`
+  set and two narrower ones.
+- `lib/platform/ipc-engine.js` gets a per-file override that re-enables
+  the Electron ban inside the otherwise-exempt shim glob. US-044 made
+  it a WebSocket client, so it needs no host module; the Node half of
+  the ban stays off because it is still a shim module.
+- `src/engine/**/*.js` gets an override banning Electron and every DOM
+  global (`no-restricted-globals`: window, document, navigator,
+  localStorage, sessionStorage, XMLHttpRequest) while leaving Node
+  builtins entirely alone. The engine's Electron message is its own --
+  the renderer's "import it from lib/platform instead" is nonsense
+  advice for a process with no shim -- and a test asserts that.
+- `npm run lint:boundary` now lints `src/renderer src/engine`. A config
+  override the script never runs over is decorative, so a test asserts
+  the script still names both trees.
+- `test/unit/platform-boundary.js`: the source-scan counterpart. Scans
+  `src/engine/*.js` for Electron imports (both `import` and
+  `require()`) and DOM globals, and scans `ipc-engine.js` explicitly,
+  since every renderer walk in that file skips the shim directory.
+- `test/unit/engine-ipc-call-sites.js` was **kept**, not deleted (AC-6
+  allows either). It stubs `ipc-engine.js` itself, so no assertion in
+  it ever named a transport, and it still describes exactly what it
+  described before: which shim export each controller reaches with
+  which arguments. Its header now says so and points at the two files
+  that do cover the WebSocket transport.
+- AGENTS.md updated in `src/engine/`, `src/renderer/lib/platform/` and
+  `test/`.
+
+**Files changed**
+
+`eslint-boundary.config.js`, `package.json`,
+`test/unit/lint-boundary.js`, `test/unit/platform-boundary.js`,
+`test/unit/engine-ipc-call-sites.js`, `src/engine/AGENTS.md`,
+`src/renderer/lib/platform/AGENTS.md`, `test/AGENTS.md`,
+`specs/prd.json`.
+
+Verified: `npm run lint` clean, `npm test` 1736/1736 pass. No app
+launch was needed -- this story changes no shipped code.
+
+**Learnings for future iterations:**
+
+- **An ESLint `overrides` entry can tighten, not just exempt.** The
+  shim's directory glob turns `no-restricted-imports` off wholesale; a
+  later, more specific entry for one file inside it turns a narrower
+  version back on. That is how a shim module that has *stopped*
+  needing a host import gets held to it. Order matters -- the
+  tightening entry has to come after the glob.
+- **A per-file override list is not the same as an exemption list.**
+  `lint-boundary.js` used to count per-file overrides and assert there
+  were exactly two. With `ipc-engine.js` added that count is
+  meaningless; the assertion now filters on
+  `rules['no-restricted-imports'] === 'off'`. Any future "how many
+  carve-outs are there" test should do the same.
+- **`no-restricted-globals` works with no `env` set.** It matches
+  references that resolve to the global scope *and* unresolved ones,
+  which is exactly what a stray `window.x` in a Node file is. No
+  `env: { browser: true }` is needed to make it fire, and adding one
+  would be wrong here.
+- **Verify a lint rule through the npm script too, not only the Node
+  API.** `lintText()` proves the config; it cannot prove the script
+  passes the directory to ESLint. Drop a throwaway violating file into
+  the tree, run the real script, read the two errors, delete it. That
+  is how the missing `src/engine` argument in `lint:boundary` surfaced.
+- **A deleted file leaves a live exemption behind.** The
+  `src/renderer/webtorrent.js` override survived US-045 because
+  nothing fails when a glob matches no file -- and `lint-boundary.js`
+  lints synthetic text at that path, so both checks stayed green.
+  When a story deletes a file, grep the lint config and the boundary
+  tests for its path.
 ---

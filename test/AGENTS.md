@@ -131,9 +131,15 @@ repoint it at `build/`.
 covered by `test/unit/lint-boundary.js`) bans the import
 **specifiers** -- `electron`, `@electron/remote`, `fs`, `os`,
 `crypto`, `http` -- under `src/renderer/`, with
-`src/renderer/lib/platform/` exempt by directory glob and exactly two
-per-file overrides for the deferred casualties `webtorrent.js` and
-`lib/cast.js`. It catches a brand new file reaching for a host module,
+`src/renderer/lib/platform/` exempt by directory glob and one per-file
+override for the deferred casualty `lib/cast.js`. (US-046 dropped the
+`webtorrent.js` override with the file, and added two per-file rules
+that *tighten* rather than exempt: `lib/platform/ipc-engine.js` is
+banned from Electron again, and `src/engine/**` -- the sidecar -- is
+banned from Electron and from every DOM global while keeping Node
+builtins. `npm run lint:boundary` lints both trees; a test asserts the
+script still names both.) It catches a brand new file reaching for a
+host module,
 which the concern-based checks here would miss. It cannot see
 `ipcRenderer.` member reads, `wt-` channel strings, `new remote.Menu`,
 or any `require()` call, which is what this file is for. Add a new
@@ -148,17 +154,22 @@ throwaway file under `src/`. Do not rewrite it to write probe files:
 a crashed run would leave them behind for `standard` to trip over.
 
 The OS-IPC check walked a hand-maintained file list while the
-migration was partial. Since US-031 it walks the whole renderer minus
-`webtorrent.js`, and since US-032 -- with both IPC concerns migrated --
-the OS and `wt-*` checks collapsed into one: no `ipcRenderer` and no
-`wt-` string literal anywhere outside `lib/platform/`, plus an exact
-assertion on which renderer files still import `electron` at all (only
-`webtorrent.js`). There is no "left alone for a later story"
-counterpart any more, because there is nothing left.
+migration was partial. Since US-031 it walks the whole renderer, and
+since US-032 -- with both IPC concerns migrated -- the OS and `wt-*`
+checks collapsed into one: no `ipcRenderer` and no `wt-` string
+literal anywhere outside `lib/platform/`, plus an exact assertion on
+which renderer files still import `electron` at all (since US-039,
+none). There is no "left alone for a later story" counterpart any
+more, because there is nothing left.
 
 The `fs` check is the one exception to the rule below: `fs` is a Node
 builtin with a single concern behind it, so it bans the specifier
-outright, with `src/renderer/webtorrent.js` exempted by FR-4.
+outright, with no exemption since US-045 deleted `webtorrent.js`.
+
+Since US-046 this file also scans `src/engine/` for the mirror-image
+mistake -- an Electron import or a DOM global in the sidecar -- and
+scans `lib/platform/ipc-engine.js`, which every renderer walk here
+skips because it is inside the shim.
 
 The checks name **concerns, not module specifiers**. Add a pattern for
 what your story actually migrated, not for the import it happens to sit
