@@ -98,6 +98,7 @@ Ported so far:
 | `shell.openExternal`, `openPath`, `showItemInFolder` | US-059 | one host command each, over the opener plugin's **Rust** API |
 | `shell.moveItemToTrash` | US-059 | a host command over the `trash` crate; the already-gone decision is `src-tauri/src/shell.rs` |
 | `clipboard.readText`, `writeText` | US-059 | one host command each, over the clipboard-manager plugin's **Rust** API; the empty-clipboard decision is `src-tauri/src/clipboard.rs` |
+| all nine `fs.js` exports | US-060 | one host command each, over `std::fs`; the directory allowlist is `src-tauri/src/fs.rs` |
 
 The window operations are **commands rather than core window calls
 from the webview**, although `@tauri-apps/api/window` could do several
@@ -179,6 +180,52 @@ The trash is the `trash` crate rather than anything in Tauri, which has
 no equivalent of Electron's `shell.trashItem`. It is pinned to 5.2.3 in
 `src-tauri/Cargo.toml`: later patches need rustc 1.85, above the
 `rust-version` ADR-014 fixed.
+
+`fs.js` is nine commands over `std::fs`, and the fourth module to skip
+the plugin -- but for a reason the other three did not have. The `fs`
+plugin's JS API is scoped by a glob list written into
+`capabilities/default.json`, and that list cannot name the config
+directory (which is different on each platform, and different again for
+a portable install) or the download folder the user picked in the
+preferences pane a moment ago. The host knows both. So the allowlist is
+`src-tauri/src/fs.rs`, and the renderer still holds no `fs:` permission
+of its own.
+
+What it grants at startup, and why each root is needed:
+
+| Root | Access | Needed by |
+| --- | --- | --- |
+| `configPath` | write | `lib/state.js`'s `config.json`, and `Torrents/` and `Posters/` |
+| `tempPath` | write | a streamed torrent's data, which `torrent-list-controller.js` stats and deletes |
+| `defaultDownloadPath` | write | where torrents land before the user changes it |
+| `prefs.downloadPath` | write | where they land after; read out of the saved state, because a restart does not re-pick it |
+| `torrents[].path` | write | a torrent saved under a download folder the user has since changed |
+| the resource directory | read | the five default torrents and posters `lib/state.js` copies into a fresh profile |
+
+Plus, at runtime, whatever the user picks in a host dialog -- a folder
+for writing, a file for reading, which is exactly what this app asks
+each picker for. That pairing is what the `fs` plugin gets from the
+dialog plugin automatically; here `show_open_dialog` and
+`show_save_dialog` do it explicitly, and more narrowly.
+
+Four things follow that the Electron tree has no equivalent of:
+
+- **A path outside the allowlist rejects**, with a message naming the
+  path and saying whether it was a read or a write. `exists` is the one
+  export that does not surface it: its contract is the
+  `try { statSync() } catch {}` probes in `lib/migrations.js`, so every
+  failure, refusals included, is `false`.
+- **`..` and symlinks cannot climb out of a root.** The path is
+  normalized textually first (so a `..` in a not-yet-existing tail
+  cannot survive), then its deepest existing ancestor is canonicalized,
+  and the command operates on that resolved path rather than on the
+  string it was handed.
+- **The app's own resource directory is read-only**, which is the whole
+  reason a root carries an access level at all.
+- **A file dropped onto the window is not covered.** Under Electron the
+  renderer reads `file.path` off the drop event; a Tauri webview has no
+  such property, so dropped paths have to arrive from the host -- and
+  US-065, which delivers them, is the story that should grant them.
 
 A ported listener export is a `listen()` (or `once()`) from
 `@tauri-apps/api/event`, wrapped so the caller sees the payload alone

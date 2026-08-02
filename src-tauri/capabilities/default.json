@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "What the renderer may reach in the host. `core:default` is the built-in set, of which this app needs the event API: the shim's listener exports (onWindowBoundsChanged, US-056) are Tauri event subscriptions. App-defined commands need no entry here.",
+  "description": "What the renderer may reach in the host. `core:default` is the built-in set, of which this app needs the event API: the shim's listener exports (onWindowBoundsChanged, US-056) are Tauri event subscriptions. App-defined commands need no entry here. That is deliberate for file access in particular (US-060): the renderer gets no `fs:` permission, so it has no file access of its own, and the directories the shim may use are an allowlist the host holds and extends when the user picks a path in a dialog -- `src-tauri/src/fs.rs`, which documents why each root is required. A glob scope written here could not name the config directory per platform, nor a folder the user chose a moment ago.",
   "windows": ["main"],
   "permissions": ["core:default"]
 }

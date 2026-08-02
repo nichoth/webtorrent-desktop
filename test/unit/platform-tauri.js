@@ -62,7 +62,10 @@ const IMPLEMENTED = {
   // US-059: handing paths and URLs to the OS, and the clipboard.
   'shell.js': ['openExternal', 'showItemInFolder', 'openPath',
     'moveItemToTrash'],
-  'clipboard.js': ['readText', 'writeText']
+  'clipboard.js': ['readText', 'writeText'],
+  // US-060: file access, against the host's directory allowlist.
+  'fs.js': ['readFile', 'writeFile', 'copyFile', 'mkdir', 'rename',
+    'unlink', 'readdir', 'stat', 'exists']
 }
 
 function implemented (name) {

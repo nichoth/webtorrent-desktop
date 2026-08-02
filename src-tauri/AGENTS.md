@@ -107,6 +107,28 @@ for the `blocking_*` pickers: the clipboard plugin's `read_text` is
 `arboard`'s, which deadlocks on Linux if it runs on the main thread
 while reading something the webview itself copied.
 
+## File access is a host allowlist, not a capability scope
+
+`src/fs.rs` holds the directories the renderer may reach, and every
+`fs_*` command in `main.rs` starts by resolving its path through it.
+Three things to keep true when touching it:
+
+- **A command operates on what `Allowlist::resolve` returns**, never on
+  the string it was given. The returned path has had `..` taken out and
+  its existing ancestors canonicalized; using the original would leave
+  the check and the operation looking at different files.
+- **A new root needs its reason written down** in the table at the top
+  of `src/fs.rs` and in `docs/platform-shim.md`. "Exactly the
+  directories the shim needs" is a claim the two documents make on the
+  code's behalf.
+- **A host concern that learns a path the user chose should grant it.**
+  The dialog commands do (a folder for writing, a file for reading);
+  the drag-and-drop delivery in US-065 will have to.
+
+`capabilities/default.json` stays at `core:default` through all of
+this, which is the point: the webview has no file access of its own to
+misuse.
+
 ## An ordinary crate can outrun the declared MSRV
 
 `rust-version` is 1.77.2 (ADR-014), and Cargo's resolver does not

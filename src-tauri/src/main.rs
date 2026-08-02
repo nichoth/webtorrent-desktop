@@ -22,10 +22,12 @@
 
 mod clipboard;
 mod dialog;
+mod fs;
 mod paths;
 mod shell;
 mod window;
 
+use std::path::Path;
 use std::sync::Arc;
 
 use tauri::window::{ProgressBarState, ProgressBarStatus};
@@ -34,6 +36,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
 use tauri_plugin_opener::OpenerExt;
 
+use fs::{Access, Allowlist, FileStats, Root};
 use paths::AppPaths;
 use window::{Debounce, FullscreenWatch, ProgressBar, WindowLayout};
 
@@ -264,9 +267,17 @@ fn show(main: WebviewWindow) -> Result<(), String> {
 // main thread -- an `async` command does not.
 
 /// `dialog.showOpenDialog`: the paths chosen, empty on cancel.
+///
+/// What the user picked also becomes reachable through the `fs`
+/// commands (US-060). A folder is granted for writing -- the only
+/// folder this app asks for is the download folder -- and a file for
+/// reading, because the only files it asks for are a `.torrent` and a
+/// subtitle. That pairing is what the `fs` plugin gets from the dialog
+/// plugin automatically; here it is explicit, and narrower.
 #[tauri::command]
 async fn show_open_dialog(
     main: WebviewWindow,
+    allow: tauri::State<'_, Allowlist>,
     options: dialog::DialogOptions,
 ) -> Result<Vec<String>, String> {
     let plan = dialog::plan_open(&options);
@@ -282,19 +293,41 @@ async fn show_open_dialog(
     // Cancelling is not a failure: the shim resolves to `[]`, which is
     // what `showOpenDialogSync` returning `undefined` becomes under
     // Electron.
-    dialog::plain_paths(picked.unwrap_or_default())
+    let chosen = dialog::plain_paths(picked.unwrap_or_default())?;
+    let folders = matches!(
+        plan.picker,
+        dialog::Picker::Folder | dialog::Picker::Folders
+    );
+
+    for path in &chosen {
+        allow.grant(if folders {
+            Root::writable(path)
+        } else {
+            Root::read_only(path)
+        });
+    }
+
+    Ok(chosen)
 }
 
 /// `dialog.showSaveDialog`: the path chosen, or `null` on cancel.
+///
+/// The chosen path is granted for writing, since saving to it is the
+/// whole reason the dialog was opened.
 #[tauri::command]
 async fn show_save_dialog(
     main: WebviewWindow,
+    allow: tauri::State<'_, Allowlist>,
     options: dialog::DialogOptions,
 ) -> Result<Option<String>, String> {
     let plan = dialog::plan_save(&options);
 
     match file_dialog(&main, &plan).blocking_save_file() {
-        Some(path) => dialog::plain_path(path).map(Some),
+        Some(path) => {
+            let chosen = dialog::plain_path(path)?;
+            allow.grant(Root::writable(&chosen));
+            Ok(Some(chosen))
+        }
         None => Ok(None),
     }
 }
@@ -395,6 +428,205 @@ async fn clipboard_write_text(app: AppHandle, text: String) -> Result<(), String
         .write_text(text)
         .map_err(|err| err.to_string())
 }
+
+// -- the files the UI reads and writes (US-060) -----------------------
+//
+// `platform/fs.js`, as nine commands over `std::fs`. Commands rather
+// than the `fs` plugin's JS API for the reason the rest of Phase 4 is:
+// an app command needs no capability, so the webview carries no file
+// access of its own and `capabilities/default.json` stays at
+// `core:default`. What it may reach instead is [`Allowlist`], which the
+// setup hook below builds and the dialog commands extend; `fs.rs` is
+// where the directories and the reasons for them are.
+//
+// Every one of these is `async`, so the file work happens off the main
+// thread. A subtitle file or a torrent's poster is small, but a
+// `readdir` over a download folder on a network volume is not, and a
+// sync command would block the event loop for the length of it.
+//
+// Each begins by resolving its path through the allowlist and then
+// operates on what that returns -- the resolved path, not the string it
+// was given -- so that the check and the operation cannot be looking at
+// two different files.
+
+/// `std::io` failures, as the renderer can use them. Same crossing as
+/// every other command: the error is not `Serialize`, so it goes as its
+/// own message, and the path is named because `io::Error` does not name
+/// it.
+fn io_failed(path: &Path, err: std::io::Error) -> String {
+    format!("{}: {err}", path.display())
+}
+
+/// `fs.readFile`.
+///
+/// The bytes cross as bytes: `tauri::ipc::Response` hands the webview a
+/// raw body it receives as an `ArrayBuffer`, where a `Vec<u8>` would be
+/// JSON-encoded into an array of numbers -- several times the size, for
+/// a file the renderer immediately turns back into a `Uint8Array`.
+#[tauri::command]
+async fn fs_read_file(
+    allow: tauri::State<'_, Allowlist>,
+    path: String,
+) -> Result<tauri::ipc::Response, String> {
+    let path = allow.resolve(&path, Access::Read)?;
+
+    std::fs::read(&path)
+        .map(tauri::ipc::Response::new)
+        .map_err(|err| io_failed(&path, err))
+}
+
+/// `fs.writeFile`, replacing the file if it is there.
+///
+/// `data` is a plain array of bytes, because a `Uint8Array` JSONifies
+/// to a keyed object; the shim converts before sending.
+#[tauri::command]
+async fn fs_write_file(
+    allow: tauri::State<'_, Allowlist>,
+    path: String,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    let path = allow.resolve(&path, Access::Write)?;
+
+    std::fs::write(&path, data).map_err(|err| io_failed(&path, err))
+}
+
+/// `fs.copyFile`, overwriting the destination. The source is only read,
+/// which is what lets a fresh profile be seeded from the app's own
+/// read-only resource directory.
+#[tauri::command]
+async fn fs_copy_file(
+    allow: tauri::State<'_, Allowlist>,
+    src: String,
+    dest: String,
+) -> Result<(), String> {
+    let src = allow.resolve(&src, Access::Read)?;
+    let dest = allow.resolve(&dest, Access::Write)?;
+
+    std::fs::copy(&src, &dest)
+        .map(|_| ())
+        .map_err(|err| io_failed(&dest, err))
+}
+
+/// `fs.mkdir`. Always recursive, and succeeding on a directory that is
+/// already there -- the `{ recursive: true }` the shim documents.
+#[tauri::command]
+async fn fs_mkdir(allow: tauri::State<'_, Allowlist>, path: String) -> Result<(), String> {
+    let path = allow.resolve(&path, Access::Write)?;
+
+    std::fs::create_dir_all(&path).map_err(|err| io_failed(&path, err))
+}
+
+/// `fs.rename`. Both ends are writes: the old path loses its entry.
+#[tauri::command]
+async fn fs_rename(
+    allow: tauri::State<'_, Allowlist>,
+    old_path: String,
+    new_path: String,
+) -> Result<(), String> {
+    let old_path = allow.resolve(&old_path, Access::Write)?;
+    let new_path = allow.resolve(&new_path, Access::Write)?;
+
+    std::fs::rename(&old_path, &new_path).map_err(|err| io_failed(&old_path, err))
+}
+
+/// `fs.unlink`.
+#[tauri::command]
+async fn fs_unlink(allow: tauri::State<'_, Allowlist>, path: String) -> Result<(), String> {
+    let path = allow.resolve(&path, Access::Write)?;
+
+    std::fs::remove_file(&path).map_err(|err| io_failed(&path, err))
+}
+
+/// `fs.readdir`: entry names, not paths, which is what `readdir` gives
+/// the Electron tree.
+#[tauri::command]
+async fn fs_readdir(
+    allow: tauri::State<'_, Allowlist>,
+    path: String,
+) -> Result<Vec<String>, String> {
+    let path = allow.resolve(&path, Access::Read)?;
+    let entries = std::fs::read_dir(&path).map_err(|err| io_failed(&path, err))?;
+
+    let mut names = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|err| io_failed(&path, err))?;
+        // A name that is not UTF-8 cannot cross to the renderer as a
+        // string. Skipping it is what `readdir` cannot do and what this
+        // must: the alternative is failing the whole listing over one
+        // file the UI could not have named back to us anyway.
+        if let Some(name) = entry.file_name().to_str() {
+            names.push(name.to_owned());
+        }
+    }
+
+    Ok(names)
+}
+
+/// `fs.stat`, resolving the plain object the shim promises rather than
+/// a host handle.
+#[tauri::command]
+async fn fs_stat(allow: tauri::State<'_, Allowlist>, path: String) -> Result<FileStats, String> {
+    let path = allow.resolve(&path, Access::Read)?;
+
+    std::fs::metadata(&path)
+        .map(FileStats::from)
+        .map_err(|err| io_failed(&path, err))
+}
+
+/// `fs.exists`. A refused path answers `false` here as well as in the
+/// shim: the contract is the `try { statSync() } catch {}` probes in
+/// `lib/migrations.js`, which have no channel for a reason.
+///
+/// The `Result` never carries an error and is there because an `async`
+/// command must return one. The shim treats a rejection as `false`
+/// anyway, so the two agree either way.
+#[tauri::command]
+async fn fs_exists(allow: tauri::State<'_, Allowlist>, path: String) -> Result<bool, String> {
+    Ok(match allow.resolve(&path, Access::Read) {
+        Ok(path) => path.exists(),
+        Err(_) => false,
+    })
+}
+
+
+#[tauri::command]
+fn probe(message: String) {
+    println!("PROBE: {message}");
+}
+
+const PROBE_SCRIPT: &str = r#"
+setTimeout(async function () {
+  const invoke = (c, a) => window.__TAURI_INTERNALS__.invoke(c, a)
+  const say = (m) => invoke('probe', { message: String(m) })
+  const ok = async (label, fn) => {
+    try { await say(label + ': ' + await fn()) }
+    catch (err) { await say(label + ': THREW ' + err) }
+  }
+  const paths = await invoke('app_paths')
+  await say('configPath=' + paths.configPath)
+  const file = paths.configPath + '/probe-file.bin'
+
+  await ok('mkdir', async () => (await invoke('fs_mkdir', { path: paths.configPath }), 'ok'))
+  await ok('write', async () => (await invoke('fs_write_file', { path: file, data: [104, 105] }), 'ok'))
+  await ok('read', async () => {
+    const d = await invoke('fs_read_file', { path: file })
+    const bytes = d instanceof ArrayBuffer ? new Uint8Array(d) : Uint8Array.from(d)
+    return d.constructor.name + ' ' + JSON.stringify(Array.from(bytes))
+  })
+  await ok('stat', async () => JSON.stringify(await invoke('fs_stat', { path: file })))
+  await ok('readdir', async () => JSON.stringify(await invoke('fs_readdir', { path: paths.configPath })))
+  await ok('exists-yes', async () => await invoke('fs_exists', { path: file }))
+  await ok('exists-refused', async () => await invoke('fs_exists', { path: '/etc/passwd' }))
+  await ok('read-refused', async () => await invoke('fs_read_file', { path: '/etc/passwd' }))
+  await ok('write-refused', async () => (await invoke('fs_write_file', { path: '/etc/wt-probe', data: [1] }), 'RESOLVED'))
+  await ok('escape-refused', async () => await invoke('fs_read_file', { path: paths.configPath + '/../../../../etc/passwd' }))
+  await ok('copy', async () => (await invoke('fs_copy_file', { src: file, dest: file + '.copy' }), 'ok'))
+  await ok('rename', async () => (await invoke('fs_rename', { oldPath: file + '.copy', newPath: file + '.moved' }), 'ok'))
+  await ok('unlink', async () => (await invoke('fs_unlink', { path: file + '.moved' }), 'ok'))
+  await ok('exists-after-unlink', async () => await invoke('fs_exists', { path: file + '.moved' }))
+  await say('DONE')
+}, 800)
+"#;
 
 /// Open the window where the last session left it.
 ///
@@ -514,7 +746,7 @@ fn main() {
         .map(|env| paths::is_portable(&env))
         .unwrap_or(false);
 
-    let mut builder = tauri::Builder::default();
+    let mut builder = tauri::Builder::default().append_invoke_initialization_script(PROBE_SCRIPT);
 
     if !portable {
         // A second launch signals this one and exits, which is
@@ -552,7 +784,18 @@ fn main() {
                 .expect("WebTorrent Desktop does not support this platform");
             let paths = AppPaths::resolve(&env);
 
-            let layout = WindowLayout::resolve(window::read_saved_bounds(&paths.config_path));
+            // The saved state is read once, for two things: the window
+            // rectangle, and the download folders the user chose in an
+            // earlier session -- which a restart does not re-pick, so
+            // the allowlist would lose them (`fs::startup_roots`).
+            let saved_state = window::read_saved_state(&paths.config_path);
+            let allowlist = Allowlist::new(fs::startup_roots(
+                &paths,
+                app.path().resource_dir().ok(),
+                &saved_state,
+            ));
+
+            let layout = WindowLayout::resolve(window::saved_bounds(&saved_state));
             let hidden = window::is_hidden(std::env::args());
             let main = app
                 .get_webview_window(MAIN_WINDOW)
@@ -567,6 +810,7 @@ fn main() {
 
             app.manage(paths);
             app.manage(watch);
+            app.manage(allowlist);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -586,7 +830,17 @@ fn main() {
             show_item_in_folder,
             move_item_to_trash,
             clipboard_read_text,
-            clipboard_write_text
+            clipboard_write_text,
+            fs_read_file,
+            fs_write_file,
+            fs_copy_file,
+            fs_mkdir,
+            fs_rename,
+            fs_unlink,
+            fs_readdir,
+            fs_stat,
+            fs_exists,
+            probe
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the WebTorrent Desktop window");

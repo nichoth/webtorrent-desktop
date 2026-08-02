@@ -120,11 +120,15 @@ pub fn saved_bounds(document: &str) -> Option<SavedBounds> {
     serde_json::from_str::<SavedState>(document).ok()?.bounds
 }
 
-/// [`saved_bounds`] against the real file, given the config directory
-/// [`crate::paths`] resolved.
-pub fn read_saved_bounds(config_path: &Path) -> Option<SavedBounds> {
-    let document = std::fs::read_to_string(config_path.join(STATE_FILE)).ok()?;
-    saved_bounds(&document)
+/// The renderer's `config.json`, given the config directory
+/// [`crate::paths`] resolved, or `""` when there is not one to read.
+///
+/// The document rather than the bounds, because the startup path reads
+/// two different things out of it -- the window rectangle here and the
+/// download folders in [`crate::fs::saved_roots`] -- and reading the
+/// file once means the two cannot disagree about what was in it.
+pub fn read_saved_state(config_path: &Path) -> String {
+    std::fs::read_to_string(config_path.join(STATE_FILE)).unwrap_or_default()
 }
 
 /// Whether this launch should come up without showing the window.
@@ -472,7 +476,8 @@ mod tests {
     #[test]
     fn a_missing_state_file_restores_nothing() {
         let nowhere = Path::new("/no/such/webtorrent/profile");
-        assert_eq!(read_saved_bounds(nowhere), None);
+        assert_eq!(read_saved_state(nowhere), "");
+        assert_eq!(saved_bounds(&read_saved_state(nowhere)), None);
     }
 
     #[test]
@@ -482,7 +487,7 @@ mod tests {
         std::fs::write(dir.join(STATE_FILE), r#"{"bounds":{"width":640}}"#)
             .expect("could not write a temp profile");
 
-        let bounds = read_saved_bounds(&dir).expect("no bounds were read");
+        let bounds = saved_bounds(&read_saved_state(&dir)).expect("no bounds were read");
         assert_eq!(bounds.width, Some(640.0));
 
         std::fs::remove_dir_all(&dir).ok();
