@@ -96,6 +96,21 @@ it tight.
   item (`menu bar 2`). The same shape works for anything gated on
   `Platform::current()`: force it, drive it, revert the hatch and grep
   for it before committing.
+- **Where Tauri exposes no API, call the platform one through
+  `objc2-*` (US-063).** `app.dock.downloadFinished` is a
+  `com.apple.DownloadFileFinished` distributed notification and
+  nothing else, and Tauri has nothing for it, so `src/dock.rs` posts
+  it through `objc2-foundation`. Three things make this cheap rather
+  than a new dependency problem: put the crate under a
+  `[target.'cfg(target_os = "macos")'.dependencies]` table so no other
+  platform sees it; pick a version already in the tree beneath Tauri's
+  own macOS backend and enable only the `NS*` features actually named,
+  so the build does not grow; and check its MSRV against ADR-014's
+  1.77.2, because the resolver will not (see the `rust-version` entry
+  above). AppKit wants the main thread, so the command body is
+  `app.run_on_main_thread(move || ...)`, and the `cfg` stays inside
+  the module -- a `#[cfg(not(target_os = "macos"))]` no-op twin keeps
+  every caller free of it.
 - **A host command is checkable in the real webview without a UI.**
   `tauri::Builder::append_invoke_initialization_script` injects a
   script that runs with the real allowlist and capabilities, so a few
@@ -5465,4 +5480,55 @@ clean; the Rust gates were re-run after the revert).
     `osascript` on `menu bar 2` exercised the whole thing. Recipe in
     `src-tauri/AGENTS.md`. Grep the hatch out before committing, the
     same way US-060's probe command had to be.
+---
+
+## 2026-08-04 - US-063
+- Ported `src/main/dock.js` to Rust. New `src-tauri/src/dock.rs` holds
+  the two per-platform decisions as pure functions over plain values --
+  `badge(Platform, f64) -> Badge` and
+  `download_notice(Platform) -> DownloadNotice` -- plus the AppKit call
+  that posts `com.apple.DownloadFileFinished` so the Dock bounces the
+  Downloads stack. Two new commands in `main.rs`, `set_badge` and
+  `download_finished`, are the thin shells over those decisions;
+  `set_progress` was already there from US-057 and is untouched, since
+  Tauri hangs the progress bar off the window rather than off the app.
+  `platform/tauri/ipc-os.js` routes `setBadge` and
+  `notifyDownloadFinished` to the two commands and stops throwing
+  `NotImplementedError`.
+- Platform split, made explicit and asserted for all three platforms in
+  one `cargo test` run: badge on macOS and Linux, no badge on Windows
+  (Electron's `app.badgeCount` is documented macOS/Linux-only, and the
+  Windows taskbar overlay icon is a different feature with a different
+  input, so it is deliberately not a fallback); Downloads stack on
+  macOS alone, a documented no-op on Windows and Linux. Two departures
+  from the Electron original are recorded in `dock.rs`'s doc comments:
+  Linux is not gated on `app.isUnityRunning()`, because
+  `set_badge_count` already does nothing where no Unity launcher is
+  listening; and a count that is not a usable number (NaN, infinite,
+  negative) clears the badge instead of being passed through, since
+  nothing re-sends an unchanged count and a bad badge would otherwise
+  stay up for the session.
+- Files: `src-tauri/src/dock.rs` (new), `src-tauri/src/main.rs`,
+  `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`,
+  `src-tauri/AGENTS.md`, `src/renderer/lib/platform/tauri/ipc-os.js`,
+  `test/unit/platform-tauri-ipc-os.js`, `test/unit/platform-tauri.js`,
+  `specs/prd.json`.
+- Gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D
+  warnings`, `cargo test` (106 pass, 5 of them `dock::`), `cargo build`
+  and one background launch to prove the new dependency links and the
+  host still starts, and `npm test` (2325 pass).
+- **Learnings for future iterations:**
+  - **`app.dock.setMenu` has no Tauri 2 equivalent, and this port
+    drops it.** The dock's right-click menu would mean implementing
+    `applicationDockMenu:` on the AppKit delegate. It is out of scope
+    for this story's acceptance criteria, and all three of its items
+    are already in the application menu US-061 ported, so the only
+    loss is on macOS to a user who right-clicks the dock icon.
+    Recorded in `dock.rs`'s module doc, not just here, so whoever
+    picks it up finds it.
+  - **The renderer sends `state.dock.badge || 0`, so zero is the
+    "clear it" signal**, not a count to draw. Electron takes zero down
+    rather than drawing a `0`; `Badge::Clear` is that behaviour, and
+    the shim deliberately forwards the zero rather than skipping the
+    call.
 ---

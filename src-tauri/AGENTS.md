@@ -213,6 +213,39 @@ a bare `;`) and the same script works. When a probe prints nothing,
 suspect this before suspecting the window, the capabilities or the
 sandbox.
 
+**Invoking at the top of the script is too early; invoking from a
+`setTimeout` is not.** With the leading `;` in place, a bare
+`window.__TAURI_INTERNALS__.invoke(...)` as the script's first
+statement still produced nothing at all -- no command call, and no
+throw the surrounding `try` could see. The same call inside
+`setTimeout(..., 2000)` ran every time. Wrap the whole probe in one
+delayed callback.
+
+**Webview timers are throttled once the window loses focus**, which it
+does immediately in a headless run. A probe that schedules a *second*
+step -- "set it, then clear it six seconds later" -- will hang on that
+second step indefinitely while the first has plainly worked. Do not
+chase it: make each launch do one thing, and get the before/after
+comparison from two launches instead.
+
+## The dock badge is readable with `osascript`
+
+The Dock is an AX application process, so the badge a `set_badge_count`
+put on the icon can be read without a human:
+
+```
+osascript -e 'tell application "System Events" to tell process "Dock" \
+  to get value of attribute "AXStatusLabel" of (first UI element of \
+  list 1 whose name is "webtorrent-desktop")'
+```
+
+It answers with the badge text (`3`) or `missing value` when there is
+none, and unlike the menu-item attribute reads above it was not stale
+-- but keep the same discipline anyway and compare two launches rather
+than trusting one read. The item's `name` is the *binary's* name in a
+`cargo build` run, not `WebTorrent`; `get name of every UI element of
+list 1` lists what is there.
+
 ## Both menus are built in `src/menu.rs`
 
 The application menu is the host's own, as it is the Electron main

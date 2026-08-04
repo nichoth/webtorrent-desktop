@@ -43,6 +43,21 @@ tauri-plugin-clipboard-manager = "2"
 # ADR-014 decision rather than a dependency bump.
 trash = "=5.2.3"
 
+# The dock's Downloads-stack bounce (US-063). Electron's
+# `app.dock.downloadFinished` is a `com.apple.DownloadFileFinished`
+# distributed notification and nothing else; Tauri has no API for it,
+# so `src/dock.rs` posts it directly. Both crates are already in the
+# tree underneath Tauri's own macOS backend at these versions, so this
+# adds nothing to the build beyond the two extra Foundation features.
+# Their MSRV is 1.71, below the `rust-version` above.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSDistributedNotificationCenter",
+    "NSNotification",
+    "NSString",
+] }
+
 [dev-dependencies]
 # The accelerator parser behind `MenuItem::with_id`, which drops an
 # accelerator it cannot parse rather than failing (US-061). Tauri does

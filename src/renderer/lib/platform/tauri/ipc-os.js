@@ -80,8 +80,19 @@ export async function setProgress (progress) {
   return invoke('set_progress', { progress })
 }
 
+/**
+ * Set the dock badge to a download count, or clear it with `0`
+ * (US-063).
+ *
+ * The count crosses as the caller computed it and the host decides
+ * what it means: on macOS and Linux it is drawn, on Windows there is
+ * no badge and the command does nothing. See `src-tauri/src/dock.rs`.
+ *
+ * @param {number} count
+ * @returns {Promise<void>}
+ */
 export async function setBadge (count) {
-  notImplemented('ipc-os', 'setBadge')
+  return invoke('set_badge', { count })
 }
 
 /**
@@ -234,8 +245,18 @@ export async function notifyPlayerClose () {
   return invoke('notify_player_close')
 }
 
+/**
+ * A torrent finished downloading to `path`, which bounces the macOS
+ * Downloads stack if that is where it landed (US-063).
+ *
+ * A no-op on Windows and Linux, neither of which has a Downloads
+ * stack -- the same platforms `src/main/dock.js` returns early on.
+ *
+ * @param {string} path
+ * @returns {Promise<void>}
+ */
 export async function notifyDownloadFinished (path) {
-  notImplemented('ipc-os', 'notifyDownloadFinished')
+  return invoke('download_finished', { path })
 }
 
 export async function getEngineEndpoint () {

@@ -22,6 +22,7 @@
 
 mod clipboard;
 mod dialog;
+mod dock;
 mod fs;
 mod menu;
 mod paths;
@@ -40,6 +41,7 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
 use tauri_plugin_opener::OpenerExt;
 
+use dock::{Badge, DownloadNotice};
 use fs::{Access, Allowlist, FileStats, Root};
 use menu::{Action, AppMenu, ContextMenus, Platform};
 use paths::AppPaths;
@@ -98,8 +100,10 @@ fn set_title(main: WebviewWindow, title: String) -> Result<(), String> {
 
 /// `ipcOs.setProgress`: the taskbar bar, in Electron's units.
 ///
-/// The dock badge and the rest of `src/main/dock.js` are US-063; this
-/// is `win.setProgressBar` alone, which is the window's own.
+/// This is `win.setProgressBar` alone, which is the window's own --
+/// Tauri hangs the progress bar off the window rather than off the
+/// app, the way `src/main/windows/main.js` does. The dock badge and
+/// the Downloads stack are [`crate::dock`] (US-063).
 #[tauri::command]
 fn set_progress(main: WebviewWindow, progress: f64) -> Result<(), String> {
     let state = match window::progress_bar(progress) {
@@ -454,6 +458,41 @@ fn notify_player_update(
 ) {
     app_menu.set_enabled(menu::SKIP_NEXT, has_next);
     app_menu.set_enabled(menu::SKIP_PREVIOUS, has_previous);
+}
+
+// -- the dock and the taskbar (US-063) -------------------------------
+//
+// `src/main/dock.js`, minus the progress bar, which is the window's
+// own and sits with the other window commands above. Which of these
+// does anything is a per-platform decision, made in [`crate::dock`]
+// and asserted for all three platforms there; what is left here is the
+// call each decision leads to.
+
+/// `ipcOs.setBadge`: the download counter on the dock icon.
+#[tauri::command]
+fn set_badge(main: WebviewWindow, count: f64) -> Result<(), String> {
+    match dock::badge(Platform::current(), count) {
+        Badge::Show(count) => main.set_badge_count(Some(count)).map_err(failed),
+        Badge::Clear => main.set_badge_count(None).map_err(failed),
+        Badge::Unsupported => Ok(()),
+    }
+}
+
+/// `ipcOs.notifyDownloadFinished`: bounce the Downloads stack if the
+/// file landed in it.
+///
+/// The Dock decides whether the path is somewhere it draws a stack
+/// for, exactly as it does under Electron -- all that is sent is the
+/// path. Posting the notification is AppKit, so it goes to the main
+/// thread rather than running on the command's worker thread.
+#[tauri::command]
+fn download_finished(app: AppHandle, path: String) -> Result<(), String> {
+    if dock::download_notice(Platform::current()) == DownloadNotice::Unsupported {
+        return Ok(());
+    }
+
+    app.run_on_main_thread(move || dock::bounce_downloads_stack(&path))
+        .map_err(failed)
 }
 
 /// A menu item was chosen, in either menu.
@@ -1251,6 +1290,8 @@ fn main() {
             notify_player_open,
             notify_player_close,
             notify_player_update,
+            set_badge,
+            download_finished,
             open_external,
             open_path,
             show_item_in_folder,

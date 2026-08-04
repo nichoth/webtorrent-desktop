@@ -47,10 +47,13 @@ const IMPLEMENTED = {
   // US-057: the window controls, and the fullscreen event.
   // US-061: the application menu's renderer half -- the calls that
   // enable and disable items, and the event a click arrives on.
+  // US-063: the dock badge and the Downloads stack.
   'ipc-os.js': [
     'onWindowBoundsChanged',
     'setTitle',
     'setProgress',
+    'setBadge',
+    'notifyDownloadFinished',
     'setBounds',
     'setAspectRatio',
     'toggleFullScreen',

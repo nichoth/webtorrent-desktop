@@ -343,3 +343,57 @@ test('onDispatch honours { once: true }', async function (t) {
   t.equal(calls[0].name, 'dispatch', 'on the same event')
   t.end()
 })
+
+// -- the dock and the taskbar (US-063) --------------------------------
+//
+// `setProgress` above is the third of the three, and was already the
+// window's own. These two are `src/main/dock.js`. What the host does
+// with either -- which platforms draw a badge, what a zero means, which
+// have a Downloads stack -- is decided and asserted in
+// `src-tauri/src/dock.rs`; the contract here is that the value crosses
+// unchanged, so that the decision is made in exactly one place.
+
+test('setBadge sends the count to the host', async function (t) {
+  reset()
+  await ipcOs.setBadge(3)
+  await ipcOs.setBadge(0)
+
+  t.deepEqual(invocations, [
+    { command: 'set_badge', args: { count: 3 } },
+    { command: 'set_badge', args: { count: 0 } }
+  ], 'one command per call, and zero is sent rather than skipped')
+  t.end()
+})
+
+test('notifyDownloadFinished sends the path to the host',
+  async function (t) {
+    reset()
+    await ipcOs.notifyDownloadFinished('/Users/me/Downloads/movie.mp4')
+
+    t.deepEqual(invocations, [{
+      command: 'download_finished',
+      args: { path: '/Users/me/Downloads/movie.mp4' }
+    }], 'the path alone -- the Dock decides whether it is in a stack')
+    t.end()
+  })
+
+test('neither dock command swallows a host failure', async function (t) {
+  reset()
+  const real = core.invoke
+  core.invoke = async () => { throw new Error('no dock') }
+
+  for (const call of [
+    () => ipcOs.setBadge(1),
+    () => ipcOs.notifyDownloadFinished('/tmp/x')
+  ]) {
+    try {
+      await call()
+      t.fail('resolved over a host failure')
+    } catch (err) {
+      t.equal(err.message, 'no dock', 'the host error reaches the caller')
+    }
+  }
+
+  core.invoke = real
+  t.end()
+})
