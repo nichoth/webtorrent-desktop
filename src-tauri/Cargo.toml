@@ -38,3 +38,14 @@ tauri-plugin-clipboard-manager = "2"
 # `rust-version` above. Lifting the pin means raising that, which is an
 # ADR-014 decision rather than a dependency bump.
 trash = "=5.2.3"
+
+[dev-dependencies]
+# The accelerator parser behind `MenuItem::with_id`, which drops an
+# accelerator it cannot parse rather than failing (US-061). Tauri does
+# not re-export it, so the menu's test parses the strings through the
+# crate directly.
+#
+# Pinned to the version Tauri already resolves, so this adds nothing to
+# the build and cannot drift ahead of the `rust-version` above on its
+# own.
+muda = "=0.19.3"

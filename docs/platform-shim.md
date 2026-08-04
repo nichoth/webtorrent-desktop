@@ -99,6 +99,9 @@ Ported so far:
 | `shell.moveItemToTrash` | US-059 | a host command over the `trash` crate; the already-gone decision is `src-tauri/src/shell.rs` |
 | `clipboard.readText`, `writeText` | US-059 | one host command each, over the clipboard-manager plugin's **Rust** API; the empty-clipboard decision is `src-tauri/src/clipboard.rs` |
 | all nine `fs.js` exports | US-060 | one host command each, over `std::fs`; the directory allowlist is `src-tauri/src/fs.rs` |
+| `menu.showContextMenu` | US-061 | descriptors to a host command, the choice back on an event; built in `src-tauri/src/menu.rs` |
+| `ipcOs.setAllowNav`, `notifyPlayerOpen`, `notifyPlayerUpdate`, `notifyPlayerClose` | US-061 | one host command each; they enable and disable items of the host's own application menu |
+| `ipcOs.onDispatch` | US-061 | a Tauri event, emitted by every application-menu item that is not a role |
 
 The window operations are **commands rather than core window calls
 from the webview**, although `@tauri-apps/api/window` could do several
@@ -437,6 +440,35 @@ rest of the shim follows.
 The existing menu is therefore expressible as-is. US-029 does the
 rewrite; it builds ten descriptors when `torrentSummary.files` is set
 (seven items and three separators) and eight when it is not.
+
+### Under Tauri the descriptors genuinely cross a boundary (US-061)
+
+The Electron shim hands the descriptors to `@electron/remote` in the
+same process; the Tauri one sends them to the host as JSON. The
+contract above does not change, but two things about it start being
+load-bearing rather than merely tidy.
+
+A `click` cannot be sent, so it stays in the renderer. The shim gives
+each menu a serial number, sends `{ menu, items }`, and the host
+answers on a `contextMenuClick` event with `{ menu, item }` -- which
+menu, and the index of the item chosen. The serial number is what
+makes a late click safe: a menu dismissed without a choice reports
+nothing, so there is no event that says "forget these", and a click
+naming a menu that is no longer open is ignored rather than run
+against whatever is open now.
+
+Descriptors are validated on **both** sides. The shim rejects a
+missing label and an unknown type before anything is sent, and
+`menu::context_template` rejects them again on arrival. The second
+check is the boundary refusing to trust its input, not a duplicate
+anyone relies on.
+
+The **application** menu is not in this module under either host. It
+is the Electron main process's (`src/main/menu.js`) and the Rust
+host's (`src-tauri/src/menu.rs`), built from descriptors of the same
+shape that never cross. What the renderer keeps of it is
+`ipcOs.setAllowNav`, the three player notifications, and
+`ipcOs.onDispatch` -- the event every non-role item fires.
 
 ## `fs.js`
 

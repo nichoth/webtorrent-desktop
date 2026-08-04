@@ -98,6 +98,18 @@ it tight.
   and their refusals that way). It is also a registered command that
   would ship: grep the probe's name out of `main.rs` before
   committing.
+- **The OS side of a host feature is checkable with `osascript`, but
+  only behaviourally.** System Events drives the real menu bar with no
+  human and no UI work: enumerate `menu bar item`s, `click menu item
+  ...`, `keystroke "u" using command down`. Its **attribute reads are
+  stale**, though -- `enabled` and `name` on a menu item kept
+  reporting build-time values after the host had demonstrably changed
+  them, and two reads seconds apart disagreed about an untouched item.
+  So assert on what the state *does* (a disabled item's accelerator
+  dispatches nothing; the same keypress either side of the call is a
+  controlled comparison), never on what the attribute says. Recipe in
+  `src-tauri/AGENTS.md`. Suspect this any time an AX read contradicts
+  a `println!` from inside the host.
 - **An inline env var in an npm script is POSIX-only.**
   `FOO=bar vite build` fails on Windows, which Phase 4 targets. Set it
   from a small Node wrapper that then calls the tool's JS API
@@ -5273,4 +5285,110 @@ state file.
     components in the unresolved tail, and the result still starts
     with `/granted`. `fs::real_path` takes them out textually and only
     then canonicalizes, which is also what closes the symlink escape.
+---
+
+## 2026-08-04 - US-061
+
+- The application menu is built in Rust from descriptors, and the
+  renderer's context menu is built by the host from descriptors it
+  sends. Both live in the new `src-tauri/src/menu.rs`, because they are
+  the same problem: a menu described as data, built by whichever host
+  is running (ADR-007).
+- `template(Platform)` returns the whole application menu as `Item`
+  values and `action(id)` says what clicking one does, so all three
+  platforms' menus are asserted from a `cargo test` run on any one of
+  them -- the same shape `window.rs` and `paths.rs` already use. A menu
+  event carries an id and nothing else, so `on_menu_click` in `main.rs`
+  is the entire click surface for both menus.
+- Renderer side: `tauri/menu.js` sends `{ menu, items }` and keeps the
+  `click` callbacks, and `tauri/ipc-os.js` gains `setAllowNav`, the
+  three player notifications and `onDispatch`. No host object crosses
+  in either direction.
+- Files: `src-tauri/src/menu.rs` (new), `src-tauri/src/main.rs`,
+  `src-tauri/Cargo.toml`, `src/renderer/lib/platform/tauri/menu.js`,
+  `src/renderer/lib/platform/tauri/ipc-os.js`,
+  `test/unit/platform-menu.js`, `test/unit/platform-tauri-ipc-os.js`,
+  `test/unit/platform-tauri.js`, `docs/platform-shim.md`,
+  `src-tauri/AGENTS.md`, `src/renderer/lib/platform/AGENTS.md`,
+  `test/AGENTS.md`, `specs/prd.json`.
+- Gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D
+  warnings` and `cargo test` (94 tests) pass; `npm test` passes (2323
+  assertions).
+
+### Two items of `src/main/menu.js` are deliberately absent
+
+Both are macOS Edit-menu entries with no Tauri equivalent: **Delete**
+(Electron's `delete` role) and the **Speech** submenu (`startspeaking`
+/ `stopspeaking`). `muda`'s `PredefinedMenuItemType` has no variant for
+either, and a normal item cannot stand in because there is nothing for
+it to call. Cmd+Backspace still deletes in a text field; the menu entry
+is what is missing. Windows and Linux Help > About opened a second
+Electron window (`windows.about`), and there is no second window under
+Tauri, so the About **role** stands in -- it shows the same name,
+version and licence. All three are recorded in the module comment at
+the top of `menu.rs`.
+
+### Runtime evidence, taken with `osascript`
+
+The "under `npm run start:tauri`" criterion did not have to wait for a
+human. macOS accessibility scripting drives the real menu bar, so the
+whole path was exercised from four background launches and the probe
+was removed afterwards (`grep PROBE` over `main.rs` and `menu.rs` is
+clean; the Rust gates were re-run after the revert).
+
+- The menu bar renders as `getMenuTemplate` leaves it: WebTorrent,
+  File, Edit, View, Playback, Transfers, Window, Help -- the macOS
+  order, with Window between Transfers and Help. Accelerators are
+  attached (Cmd+N, Cmd+O, Cmd+U, Ctrl+Cmd+F, Alt+Cmd+I and the rest).
+- Accelerators fire the right action: Cmd+U -> `openTorrentAddress`
+  (File), Cmd+, -> `preferences` (app menu), Esc -> `escapeBack`
+  (View), Space -> `playPause` and N -> `nextTrack` (Playback).
+  Transfers and Help have no accelerators in the Electron template
+  either; Transfers was checked by clicking Pause All ->
+  `pauseAllTorrents`. Edit and Window are roles, which the OS performs.
+- `setAllowNav` and the player notifications were checked by their
+  effect rather than by reading the menu: with `setAllowNav(false)` in
+  force Cmd+, dispatched nothing, and after `setAllowNav(true)` the
+  same keypress dispatched `preferences`. Space dispatched nothing
+  before `notifyPlayerOpen()`, `playPause` after it, and nothing again
+  after `notifyPlayerClose()`. After
+  `notifyPlayerUpdate(hasNext: true, hasPrevious: false)`, N
+  dispatched `nextTrack` and P dispatched nothing.
+- The context menu round-trips: descriptors sent from the webview, a
+  real popup on screen, and picking its first item came back as
+  `contextMenuClick` with `{"menu":7,"item":0}` -- the serial number
+  the shim sent, and the index it needs to find the callback it kept.
+  `show_context_menu` returned immediately rather than blocking for the
+  choice, which is the contract `Menu.popup({ window })` has under
+  Electron.
+- Not exercised: the Help items, which would open five URLs in the
+  user's browser. `shell.openExternal` is already proven (US-059) and
+  `the_help_items_open_the_configured_urls` pins the five URLs to
+  `src/config.js`.
+
+- **Learnings for future iterations:**
+  - **An accessibility read is not evidence; an accessibility
+    *action* is.** Most of this session went into a bug that was not
+    there: System Events reported the Playback items `enabled=false`
+    after the host had enabled them, so `set_enabled` looked broken,
+    and reading muda's and Tauri's source for the mechanism that could
+    silently drop the update found nothing because nothing was
+    dropping it. What settled it was pressing the accelerator: the
+    disabled item dispatched nothing and the enabled one dispatched.
+    The attribute was stale, and so was `name` -- a renamed item kept
+    its old title. Now in the Patterns section.
+  - **Check the previous session's working tree before starting.**
+    This story's code was already written and uncommitted, with every
+    gate passing. Reviewing and verifying it -- which is what turned
+    up the missing `docs/platform-shim.md` rows -- was the work.
+    Second time this has happened; it is in the patterns from US-060
+    as "check the previous session's commit" and it applies to
+    uncommitted changes just as much.
+  - **A menu is the first host concern whose acceptance criterion the
+    Rust tests genuinely cannot reach.** `template()` proves the
+    descriptors and `action()` proves the mapping, but "is it in the
+    menu bar and does the shortcut fire" is the OS's answer, and the
+    two can disagree (an accelerator that fails to parse is dropped
+    silently, which is exactly this shape of bug). Budget a real
+    launch for it rather than treating the unit tests as the gate.
 ---

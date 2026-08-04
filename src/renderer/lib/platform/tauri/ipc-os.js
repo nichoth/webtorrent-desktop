@@ -150,8 +150,17 @@ export async function openFilesDialog () {
   notImplemented('ipc-os', 'openFilesDialog')
 }
 
+/**
+ * Allow or block opening another screen on top of the current one,
+ * which is the File and Preferences items of the host's menu
+ * (US-061). The menu is the host's, so this is a command rather than
+ * anything the renderer can do itself.
+ *
+ * @param {boolean} allow
+ * @returns {Promise<void>}
+ */
 export async function setAllowNav (allow) {
-  notImplemented('ipc-os', 'setAllowNav')
+  return invoke('set_allow_nav', { allow })
 }
 
 export async function setDefaultFileHandler (isFileHandler) {
@@ -190,16 +199,39 @@ export async function notifyPlayerPause () {
   notImplemented('ipc-os', 'notifyPlayerPause')
 }
 
+/**
+ * The player opened, so the Playback menu applies to something
+ * (US-061).
+ *
+ * Electron's handler also starts the power save blocker and the media
+ * keys; those land on the same command as they are ported (US-066,
+ * US-067), so the renderer's side of it does not change again.
+ *
+ * @returns {Promise<void>}
+ */
 export async function notifyPlayerOpen () {
-  notImplemented('ipc-os', 'notifyPlayerOpen')
+  return invoke('notify_player_open')
 }
 
+/**
+ * Which playlist controls apply: Skip Next and Skip Previous follow
+ * these two flags (US-061).
+ *
+ * @param {boolean} hasNext
+ * @param {boolean} hasPrevious
+ * @returns {Promise<void>}
+ */
 export async function notifyPlayerUpdate (hasNext, hasPrevious) {
-  notImplemented('ipc-os', 'notifyPlayerUpdate')
+  return invoke('notify_player_update', { hasNext, hasPrevious })
 }
 
+/**
+ * The player closed: nothing in the Playback menu applies (US-061).
+ *
+ * @returns {Promise<void>}
+ */
 export async function notifyPlayerClose () {
-  notImplemented('ipc-os', 'notifyPlayerClose')
+  return invoke('notify_player_close')
 }
 
 export async function notifyDownloadFinished (path) {
@@ -218,8 +250,21 @@ export async function onError (listener, options) {
   notImplemented('ipc-os', 'onError')
 }
 
+/**
+ * Actions the host wants the renderer to dispatch, which is what every
+ * application-menu item that is not a role does (US-061).
+ *
+ * A Tauri event carries one payload where Electron's `send` carries an
+ * argument list, so the host sends the list as an array and it is
+ * spread here: the caller's signature is `(action, ...args)` against
+ * either host.
+ *
+ * @param {(action: string, ...args: any[]) => void} listener
+ * @param {{ once?: boolean }} [options]
+ * @returns {Promise<() => void>}
+ */
 export async function onDispatch (listener, options) {
-  notImplemented('ipc-os', 'onDispatch')
+  return subscribe('dispatch', (args) => listener(...args), options)
 }
 
 /**

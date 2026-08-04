@@ -98,6 +98,15 @@ replace it, and `platform-tauri.js` requires every Tauri module inside
 its test callbacks (after all files have loaded), so every stub is in
 place by then.
 
+A shim that subscribes to a host event **once for the life of the
+page** (`tauri/menu.js` does, and any module that keeps a standing
+listener behind a `let subscription` will) needs its recorded listeners
+kept across a per-test reset. Clearing them leaves every test after the
+first delivering events to nobody, and the failure reads as "the
+callback did not run" rather than as a broken stub. Reset the call
+records and leave the listener list alone; `platform-menu.js` says so
+where it does it.
+
 ### Stubbing a Node builtin (`fs/promises`) in a unit test
 
 The `require.cache` route does **not** work for builtins -- Node never

@@ -45,6 +45,8 @@ const REEXPORTED = 'ipc-engine'
 const IMPLEMENTED = {
   // US-056: the window restore loop's renderer half.
   // US-057: the window controls, and the fullscreen event.
+  // US-061: the application menu's renderer half -- the calls that
+  // enable and disable items, and the event a click arrives on.
   'ipc-os.js': [
     'onWindowBoundsChanged',
     'setTitle',
@@ -53,7 +55,12 @@ const IMPLEMENTED = {
     'setAspectRatio',
     'toggleFullScreen',
     'show',
-    'onFullscreenChanged'
+    'onFullscreenChanged',
+    'setAllowNav',
+    'notifyPlayerOpen',
+    'notifyPlayerUpdate',
+    'notifyPlayerClose',
+    'onDispatch'
   ],
   // US-057: the two current-window reads.
   'window.js': ['isVisible', 'isMaximized'],
@@ -65,7 +72,9 @@ const IMPLEMENTED = {
   'clipboard.js': ['readText', 'writeText'],
   // US-060: file access, against the host's directory allowlist.
   'fs.js': ['readFile', 'writeFile', 'copyFile', 'mkdir', 'rename',
-    'unlink', 'readdir', 'stat', 'exists']
+    'unlink', 'readdir', 'stat', 'exists'],
+  // US-061: the context menu, built by the host from descriptors.
+  'menu.js': ['showContextMenu']
 }
 
 function implemented (name) {

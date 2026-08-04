@@ -261,3 +261,85 @@ test('onFullscreenChanged honours { once: true }', async function (t) {
   t.equal(calls[0].api, 'once', 'a one-shot subscription')
   t.end()
 })
+
+// -- the application menu's renderer half (US-061) --------------------
+//
+// The menu itself is the host's, built in `src-tauri/src/menu.rs` from
+// descriptors that never cross the boundary. What the renderer keeps
+// is these four commands -- the calls that enable and disable items --
+// and the event the host reports a click on. The menu's own contents
+// are asserted in Rust; what is asserted here is the boundary.
+
+test('setAllowNav sends the flag to the host', async function (t) {
+  reset()
+  await ipcOs.setAllowNav(false)
+  await ipcOs.setAllowNav(true)
+
+  t.deepEqual(invocations, [
+    { command: 'set_allow_nav', args: { allow: false } },
+    { command: 'set_allow_nav', args: { allow: true } }
+  ], 'one command per call, carrying the flag')
+  t.end()
+})
+
+test('the player open and close notifications take no arguments',
+  async function (t) {
+    reset()
+    await ipcOs.notifyPlayerOpen()
+    await ipcOs.notifyPlayerClose()
+
+    t.deepEqual(invocations.map(c => c.command),
+      ['notify_player_open', 'notify_player_close'],
+      'the two commands that turn the Playback items on and off')
+    t.deepEqual(invocations.map(c => c.args), [undefined, undefined],
+      'neither carries anything')
+    t.end()
+  })
+
+test('notifyPlayerUpdate carries both playlist flags', async function (t) {
+  reset()
+  await ipcOs.notifyPlayerUpdate(true, false)
+
+  t.deepEqual(invocations, [{
+    command: 'notify_player_update',
+    args: { hasNext: true, hasPrevious: false }
+  }], 'camelCase keys, which is how the host reads its snake_case ones')
+  t.end()
+})
+
+test('onDispatch subscribes to the host event', async function (t) {
+  reset()
+  const stop = await ipcOs.onDispatch(() => {})
+
+  t.equal(calls.length, 1, 'registered once')
+  t.equal(calls[0].api, 'listen', 'a standing subscription by default')
+  t.equal(calls[0].name, 'dispatch',
+    'the same event name the Electron host sends')
+  t.equal(typeof stop, 'function', 'resolved to an unsubscribe')
+  t.end()
+})
+
+test('onDispatch spreads the action and its arguments', async function (t) {
+  reset()
+  const received = []
+  await ipcOs.onDispatch((...args) => received.push(args))
+
+  // A Tauri event carries one payload, so the host sends the whole
+  // argument list as an array; the caller's signature is Electron's
+  // `(action, ...args)` either way.
+  calls[0].handler({ event: 'dispatch', payload: ['changeVolume', 0.1] })
+  calls[0].handler({ event: 'dispatch', payload: ['playPause'] })
+
+  t.deepEqual(received, [['changeVolume', 0.1], ['playPause']],
+    'the action first, then whatever the menu item passes')
+  t.end()
+})
+
+test('onDispatch honours { once: true }', async function (t) {
+  reset()
+  await ipcOs.onDispatch(() => {}, { once: true })
+
+  t.equal(calls[0].api, 'once', 'a one-shot subscription')
+  t.equal(calls[0].name, 'dispatch', 'on the same event')
+  t.end()
+})

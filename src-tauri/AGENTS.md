@@ -155,3 +155,75 @@ the window is a throwaway probe build of `main.rs`: a
 `window.addEventListener('error', ...)` and `console.error` and invokes
 it. An app-defined command needs no capability entry. Revert `main.rs`
 afterwards -- unlike `build/`, it is source-controlled.
+
+**The appended script is concatenated onto Tauri's own, so it must not
+begin with `(` or `[`.** An init script that opens with
+`(async () => { ... })()` is parsed as a call on whatever the previous
+statement evaluated to, the whole init script throws, and the symptom
+is total silence: no output, no error, and the page still loads and
+reports `Finished` from `on_page_load`. Start it with a statement (or
+a bare `;`) and the same script works. When a probe prints nothing,
+suspect this before suspecting the window, the capabilities or the
+sandbox.
+
+## Both menus are built in `src/menu.rs`
+
+The application menu is the host's own, as it is the Electron main
+process's; the renderer's context menu arrives as descriptors and its
+choice goes back as an index (ADR-007). `template(Platform)` returns
+the whole application menu as `Item` values and `action(id)` says what
+clicking one does, so all three platforms' menus are asserted from a
+`cargo test` run on any one of them -- the same shape as `window.rs`.
+Four things about the Tauri side are worth knowing before changing it:
+
+- **`Menu::get` only searches the top level**, so items are indexed by
+  id into `AppMenu` as they are built. Everything that enables, checks
+  or disables an item afterwards goes through that index.
+- **An accelerator that does not parse is dropped, not reported.**
+  `MenuItem::with_id` swallows it, and the item then has no shortcut
+  and no error. `every_accelerator_parses` runs all of them through
+  `muda`'s parser, which is why `muda` is pinned as a dev-dependency
+  at the version Tauri already resolves.
+- **A `Menu` dropped while the OS is showing it takes the popup with
+  it**, so `ContextMenus` holds the current one until the next
+  replaces it.
+- **Tauri has no "is it always on top" getter**, so the Float on Top
+  check item is where that state lives -- which is where Electron
+  keeps it too.
+
+An item id is what a menu event carries and the only thing it carries.
+Adding an item therefore means adding its id to `action`, or it is a
+dead item; `every_item_has_an_action` fails if it is missed.
+
+## Driving a real menu without a human (macOS)
+
+A menu is the one host concern a `cargo test` cannot reach: the
+template is asserted as data, but "is it in the menu bar, and does the
+shortcut fire" is the OS's answer. On macOS `osascript` gives it, with
+no UI work and no human, provided the terminal has Accessibility
+permission (this machine has it):
+
+```
+osascript -e 'tell application "System Events" to tell process \
+  "webtorrent-desktop" to get name of every menu bar item of menu bar 1'
+```
+
+The process name is the executable's, and it takes a second or two to
+appear -- poll `exists process "..."` rather than sleeping a fixed
+time. `keystroke "u" using command down` and `key code 49` (space)
+fire real accelerators once the app is frontmost, and
+`click menu item "Pause All" of menu 1 of menu bar item "Transfers" of
+menu bar 1` clicks an item that has none. Pair either with a temporary
+`println!` in the host's `dispatch` and the whole path is visible.
+
+**Do not assert on the `enabled` attribute of a menu item.** System
+Events reports a stale value for it: after `notify_player_open` had
+demonstrably enabled the Playback items, every read still said
+`enabled=false`, and reads taken seconds apart disagreed with each
+other about the same untouched item. `name` is stale the same way -- a
+renamed item kept its old title. The reliable assertion is
+**behavioural**: press the accelerator and see whether the dispatch
+arrives. A disabled item's accelerator does nothing, which makes
+"enabled" observable without reading the attribute, and makes the
+comparison a controlled one when the same key is pressed either side
+of the call.

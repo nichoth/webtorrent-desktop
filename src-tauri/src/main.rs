@@ -23,6 +23,7 @@
 mod clipboard;
 mod dialog;
 mod fs;
+mod menu;
 mod paths;
 mod shell;
 mod window;
@@ -30,13 +31,15 @@ mod window;
 use std::path::Path;
 use std::sync::Arc;
 
+use serde_json::{json, Value};
 use tauri::window::{ProgressBarState, ProgressBarStatus};
-use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow};
+use tauri::{AppHandle, Emitter, LogicalPosition, LogicalSize, Manager, WebviewWindow, Wry};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
 use tauri_plugin_opener::OpenerExt;
 
 use fs::{Access, Allowlist, FileStats, Root};
+use menu::{Action, AppMenu, ContextMenus, Platform};
 use paths::AppPaths;
 use window::{Debounce, FullscreenWatch, ProgressBar, WindowLayout};
 
@@ -227,6 +230,16 @@ fn toggle_full_screen(
     watch: tauri::State<'_, Arc<FullscreenWatch>>,
     set_to: Option<bool>,
 ) -> Result<(), String> {
+    full_screen(&main, &watch, set_to)
+}
+
+/// The body of [`toggle_full_screen`], reachable without a command:
+/// the View menu's Full Screen item toggles the same thing (US-061).
+fn full_screen(
+    main: &WebviewWindow,
+    watch: &FullscreenWatch,
+    set_to: Option<bool>,
+) -> Result<(), String> {
     // A hidden window cannot go fullscreen; Electron returns here too.
     if !main.is_visible().map_err(failed)? {
         return Ok(());
@@ -243,7 +256,7 @@ fn toggle_full_screen(
     // state right by the time the call resolves. The watch is
     // edge-triggered, so whichever gets there first is the only one
     // the renderer hears.
-    report_fullscreen(&main, &watch);
+    report_fullscreen(main, watch);
     Ok(())
 }
 
@@ -294,20 +307,26 @@ async fn show_open_dialog(
     // what `showOpenDialogSync` returning `undefined` becomes under
     // Electron.
     let chosen = dialog::plain_paths(picked.unwrap_or_default())?;
-    let folders = matches!(
-        plan.picker,
-        dialog::Picker::Folder | dialog::Picker::Folders
-    );
+    grant_picked(&allow, plan.picker, &chosen);
 
-    for path in &chosen {
+    Ok(chosen)
+}
+
+/// Let the renderer reach what the user just picked.
+///
+/// A folder is granted for writing -- the only folder this app asks
+/// for is a download folder -- and a file for reading. Shared with the
+/// menu's own dialogs (US-061), which pick the same two kinds of thing.
+fn grant_picked(allow: &Allowlist, picker: dialog::Picker, chosen: &[String]) {
+    let folders = matches!(picker, dialog::Picker::Folder | dialog::Picker::Folders);
+
+    for path in chosen {
         allow.grant(if folders {
             Root::writable(path)
         } else {
             Root::read_only(path)
         });
     }
-
-    Ok(chosen)
 }
 
 /// `dialog.showSaveDialog`: the path chosen, or `null` on cancel.
@@ -356,6 +375,298 @@ fn file_dialog(main: &WebviewWindow, plan: &dialog::DialogPlan) -> FileDialogBui
     }
 
     builder
+}
+
+// -- the menus (US-061) -----------------------------------------------
+//
+// Two menus, one module. The application menu is this host's own, as
+// it is the Electron main process's (`src/main/menu.js`): the
+// descriptors are built in `menu::template` and never cross the
+// boundary. The context menu is the renderer's, and its descriptors do
+// cross -- plain objects in, the index of what was chosen back
+// (ADR-007). Neither direction carries a `MenuItem`.
+//
+// A menu event carries an id and nothing else, so `on_menu_click`
+// below is the whole click surface for both menus: `menu::action`
+// turns an id into an [`Action`], and `perform` is the only place that
+// touches the world.
+
+/// The event the renderer hears menu-driven actions on. It is
+/// Electron's channel name, because it is the same renderer listening
+/// (`ipcOs.onDispatch`, `windows.main.dispatch` in
+/// `src/main/windows/main.js`).
+const DISPATCH_EVENT: &str = "dispatch";
+
+/// `menu.showContextMenu(items)`: the descriptors the renderer sent,
+/// built and popped up at the pointer.
+///
+/// The popup does not wait for a choice, exactly as
+/// `Menu.popup({ window })` does not under Electron. What the user
+/// picks comes back through [`menu::CONTEXT_MENU_CLICK_EVENT`], and
+/// the shim calls the `click` it kept.
+#[tauri::command]
+fn show_context_menu(
+    main: WebviewWindow,
+    menus: tauri::State<'_, ContextMenus<Wry>>,
+    menu: u64,
+    items: Vec<menu::ContextItem>,
+) -> Result<(), String> {
+    let template = menu::context_template(menu, &items)?;
+    let built = menu::build_context(&main, &template).map_err(failed)?;
+
+    main.popup_menu(&built).map_err(failed)?;
+    menus.hold(built);
+    Ok(())
+}
+
+/// `ipcOs.setAllowNav`: "disallow opening more screens on top of the
+/// current one", which is `menu.setAllowNav` under Electron.
+#[tauri::command]
+fn set_allow_nav(app_menu: tauri::State<'_, AppMenu<Wry>>, allow: bool) {
+    app_menu.set_group_enabled(menu::nav_items(Platform::current()), allow);
+}
+
+/// `ipcOs.notifyPlayerOpen`: the Playback items act on something now.
+///
+/// Electron's handler also starts the power save blocker and the media
+/// keys (US-066, US-067), which land on this command as they are
+/// ported. The menu half is here.
+#[tauri::command]
+fn notify_player_open(app_menu: tauri::State<'_, AppMenu<Wry>>) {
+    app_menu.set_group_enabled(menu::PLAYBACK_ITEMS, true);
+}
+
+/// `ipcOs.notifyPlayerClose`: nothing is playing, so nothing in the
+/// Playback menu applies.
+#[tauri::command]
+fn notify_player_close(app_menu: tauri::State<'_, AppMenu<Wry>>) {
+    app_menu.set_group_enabled(menu::PLAYBACK_ITEMS, false);
+}
+
+/// `ipcOs.notifyPlayerUpdate`: whether there is a next or previous
+/// track to skip to, which is `menu.onPlayerUpdate`.
+#[tauri::command]
+fn notify_player_update(
+    app_menu: tauri::State<'_, AppMenu<Wry>>,
+    has_next: bool,
+    has_previous: bool,
+) {
+    app_menu.set_enabled(menu::SKIP_NEXT, has_next);
+    app_menu.set_enabled(menu::SKIP_PREVIOUS, has_previous);
+}
+
+/// A menu item was chosen, in either menu.
+fn on_menu_click(app: &AppHandle, id: &str) {
+    // A context menu's item is the renderer's to act on: it kept the
+    // `click` callbacks, and all that crosses back is which one.
+    if let Some((serial, index)) = menu::context_choice(id) {
+        let payload = json!({ "menu": serial, "item": index });
+        if let Err(err) = app.emit(menu::CONTEXT_MENU_CLICK_EVENT, payload) {
+            eprintln!("contextMenuClick: {err}");
+        }
+        return;
+    }
+
+    // Roles have no action: the OS performs them.
+    if let Some(action) = menu::action(id) {
+        perform(app, action);
+    }
+}
+
+/// Do what an application-menu item says to do.
+fn perform(app: &AppHandle, action: Action) {
+    match action {
+        Action::Dispatch(name, args) => dispatch(app, name, args),
+        Action::OpenSeedFile => open_menu_dialog(app.clone(), MenuDialog::SeedFile),
+        Action::OpenSeedDirectory => open_menu_dialog(app.clone(), MenuDialog::SeedDirectory),
+        Action::OpenTorrentFile => open_menu_dialog(app.clone(), MenuDialog::TorrentFile),
+        Action::OpenExternal(url) => {
+            if let Err(err) = app.opener().open_url(url, None::<&str>) {
+                eprintln!("menu openExternal: {err}");
+            }
+        }
+        Action::ToggleFullScreen => {
+            if let Some(main) = app.get_webview_window(MAIN_WINDOW) {
+                let watch = app.state::<Arc<FullscreenWatch>>();
+                if let Err(err) = full_screen(&main, &watch, None) {
+                    eprintln!("menu toggleFullScreen: {err}");
+                }
+            }
+        }
+        Action::ToggleAlwaysOnTop => toggle_always_on_top(app),
+        Action::ToggleDevTools => toggle_dev_tools(app),
+        Action::Quit => app.exit(0),
+    }
+}
+
+/// `windows.main.dispatch(name, ...args)`: the renderer's own action,
+/// on the channel `ipcOs.onDispatch` listens to. The payload is the
+/// argument list, so that the shim can spread it the way Electron's
+/// multi-argument `send` arrives.
+fn dispatch(app: &AppHandle, name: &str, args: Vec<Value>) {
+    let mut payload = vec![json!(name)];
+    payload.extend(args);
+
+    if let Err(err) = app.emit(DISPATCH_EVENT, payload) {
+        eprintln!("dispatch {name}: {err}");
+    }
+}
+
+/// `windows.main.toggleAlwaysOnTop()`.
+///
+/// Tauri has no "is it on top" getter, so the menu's own checkbox is
+/// where the flag lives -- which is where Electron keeps it too, by
+/// way of `menu.onToggleAlwaysOnTop`.
+fn toggle_always_on_top(app: &AppHandle) {
+    let Some(main) = app.get_webview_window(MAIN_WINDOW) else {
+        return;
+    };
+    let app_menu = app.state::<AppMenu<Wry>>();
+    let on_top = !app_menu.is_checked(menu::FLOAT_ON_TOP);
+
+    match main.set_always_on_top(on_top) {
+        Ok(()) => app_menu.set_checked(menu::FLOAT_ON_TOP, on_top),
+        Err(err) => eprintln!("menu toggleAlwaysOnTop: {err}"),
+    }
+}
+
+/// `windows.main.toggleDevTools()`. The devtools are compiled in for
+/// debug builds only, which is Tauri's default and matches what a
+/// packaged Electron build offers.
+fn toggle_dev_tools(app: &AppHandle) {
+    let Some(main) = app.get_webview_window(MAIN_WINDOW) else {
+        return;
+    };
+
+    #[cfg(debug_assertions)]
+    if main.is_devtools_open() {
+        main.close_devtools();
+    } else {
+        main.open_devtools();
+    }
+
+    #[cfg(not(debug_assertions))]
+    let _ = main;
+}
+
+/// The three dialogs the File menu opens, which are
+/// `src/main/dialog.js` minus the two the renderer already reaches
+/// through `platform/dialog.js`.
+#[derive(Debug, Clone, Copy)]
+enum MenuDialog {
+    SeedFile,
+    SeedDirectory,
+    TorrentFile,
+}
+
+impl MenuDialog {
+    /// The Electron options, verbatim, so that `dialog::plan_open`
+    /// makes the same decision it makes for the renderer's dialogs --
+    /// including "`openDirectory` wins over `openFile`", which is what
+    /// the macOS file-or-folder seed dialog becomes here.
+    fn options(self) -> dialog::DialogOptions {
+        let (title, properties, filters) = match self {
+            MenuDialog::SeedFile => ("Select a file for the torrent.", vec!["openFile"], vec![]),
+            MenuDialog::SeedDirectory => {
+                if Platform::current() == Platform::Mac {
+                    (
+                        "Select a file or folder for the torrent.",
+                        vec!["openFile", "openDirectory"],
+                        vec![],
+                    )
+                } else {
+                    (
+                        "Select a folder for the torrent.",
+                        vec!["openDirectory"],
+                        vec![],
+                    )
+                }
+            }
+            MenuDialog::TorrentFile => (
+                "Select a .torrent file.",
+                vec!["openFile", "multiSelections"],
+                vec![dialog::Filter {
+                    name: "Torrent Files".to_string(),
+                    extensions: vec!["torrent".to_string()],
+                }],
+            ),
+        };
+
+        dialog::DialogOptions {
+            title: Some(title.to_string()),
+            default_path: None,
+            filters,
+            properties: properties.into_iter().map(String::from).collect(),
+        }
+    }
+
+    /// What the renderer is told about what was picked.
+    fn dispatch(self, app: &AppHandle, chosen: Vec<String>) {
+        match self {
+            MenuDialog::SeedFile | MenuDialog::SeedDirectory => {
+                dispatch(app, "showCreateTorrent", vec![json!(chosen)])
+            }
+            // One dispatch per file, as `openTorrentFile` sends one.
+            MenuDialog::TorrentFile => {
+                for path in chosen {
+                    dispatch(app, "addTorrent", vec![json!(path)]);
+                }
+            }
+        }
+    }
+}
+
+/// Open one of the File menu's dialogs, and tell the renderer what
+/// came back.
+///
+/// On its own thread because the pickers are the plugin's blocking
+/// ones, and a menu event is delivered on the main thread -- which is
+/// the thread they would deadlock (see the dialog commands above).
+fn open_menu_dialog(app: AppHandle, which: MenuDialog) {
+    std::thread::spawn(move || {
+        let Some(main) = app.get_webview_window(MAIN_WINDOW) else {
+            return;
+        };
+
+        let options = which.options();
+        let plan = dialog::plan_open(&options);
+
+        // "Dialogs do not show a title on Mac, so the window title is
+        // used instead" -- and the renderer owns the title, so it is
+        // asked to change it and change it back.
+        let titled = Platform::current() == Platform::Mac;
+        if titled {
+            if let Some(title) = &plan.dialog.title {
+                dispatch(&app, "setTitle", vec![json!(title)]);
+            }
+        }
+
+        let picker = file_dialog(&main, &plan.dialog);
+        let picked = match plan.picker {
+            dialog::Picker::File => picker.blocking_pick_file().map(|path| vec![path]),
+            dialog::Picker::Files => picker.blocking_pick_files(),
+            dialog::Picker::Folder => picker.blocking_pick_folder().map(|path| vec![path]),
+            dialog::Picker::Folders => picker.blocking_pick_folders(),
+        };
+
+        if titled {
+            dispatch(&app, "resetTitle", vec![]);
+        }
+
+        // Cancelling dispatches nothing, exactly as the `Array.isArray`
+        // guard in `src/main/dialog.js` returns early.
+        let chosen = match dialog::plain_paths(picked.unwrap_or_default()) {
+            Ok(chosen) if !chosen.is_empty() => chosen,
+            Ok(_) => return,
+            Err(err) => {
+                eprintln!("menu dialog: {err}");
+                return;
+            }
+        };
+
+        grant_picked(&app.state::<Allowlist>(), plan.picker, &chosen);
+        which.dispatch(&app, chosen);
+    });
 }
 
 // -- the OS, and the clipboard (US-059) -------------------------------
@@ -658,6 +969,12 @@ fn report_fullscreen(main: &WebviewWindow, watch: &FullscreenWatch) {
     let report = || -> tauri::Result<()> {
         let fullscreen = main.is_fullscreen()?;
         if watch.changed(fullscreen) {
+            // `menu.onToggleFullScreen`: the View menu's checkbox
+            // follows the window, however the window got there
+            // (US-061).
+            if let Some(app_menu) = main.try_state::<AppMenu<Wry>>() {
+                app_menu.set_checked(menu::FULL_SCREEN, fullscreen);
+            }
             main.emit(window::FULLSCREEN_CHANGED_EVENT, fullscreen)?;
         }
         Ok(())
@@ -666,6 +983,22 @@ fn report_fullscreen(main: &WebviewWindow, watch: &FullscreenWatch) {
     if let Err(err) = report() {
         eprintln!("fullscreenChanged: {err}");
     }
+}
+
+/// `menu.setWindowFocus`: the two View items that act on the window
+/// are disabled while it is not the focused window, exactly as
+/// `onWindowFocus` and `onWindowBlur` do in
+/// `src/main/windows/main.js`.
+fn watch_focus(main: &WebviewWindow) {
+    let watched = main.clone();
+
+    main.on_window_event(move |event| {
+        if let tauri::WindowEvent::Focused(focused) = event {
+            if let Some(app_menu) = watched.try_state::<AppMenu<Wry>>() {
+                app_menu.set_group_enabled(menu::WINDOW_FOCUS_ITEMS, *focused);
+            }
+        }
+    });
 }
 
 /// Report every move and resize to the renderer: the rectangle
@@ -768,9 +1101,25 @@ fn main() {
             let watch = Arc::new(FullscreenWatch::new());
             watch_bounds(&main, Arc::clone(&watch));
 
+            // The application menu, and the index of the items that
+            // change afterwards (US-061). It is set as the *app* menu
+            // rather than the window's: on macOS there is only the one
+            // menu bar, and on Windows and Linux Tauri gives it to
+            // every window, which is the one window here.
+            let (menu, app_menu) = menu::build(app.handle(), Platform::current())?;
+            menu.set_as_app_menu()?;
+            watch_focus(&main);
+
             app.manage(paths);
             app.manage(watch);
             app.manage(allowlist);
+            app.manage(app_menu);
+            app.manage(ContextMenus::<Wry>::default());
+
+            // Both menus arrive here: an application item's id maps to
+            // an action, a context item's to the choice the renderer is
+            // waiting for.
+            app.on_menu_event(|app, event| on_menu_click(app, event.id().as_ref()));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -785,6 +1134,11 @@ fn main() {
             show,
             show_open_dialog,
             show_save_dialog,
+            show_context_menu,
+            set_allow_nav,
+            notify_player_open,
+            notify_player_close,
+            notify_player_update,
             open_external,
             open_path,
             show_item_in_folder,

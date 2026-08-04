@@ -207,6 +207,13 @@ engine seam be reimplemented without touching `ipc-os.js`.
   no host module at all. The Node half of the ban stays off for it.
   If a shim module ever stops needing a host import, do the same
   rather than leaving it covered by the directory exemption.
+- A **Tauri event carries one payload where Electron's `send` carries
+  an argument list.** An inbound export whose listener takes more than
+  one argument (`onDispatch`, and `onLog`/`onError` when they land)
+  therefore has the host send the whole list as an array and the Tauri
+  shim spread it, so both trees hand the caller the same
+  `(first, ...rest)`. The parity test only checks arity, so a shim
+  that forgets to spread passes it and hands the caller one array.
 - A **request/response export** (`checkForExternalPlayer`,
   `getEngineEndpoint`) is a `send` plus an `ipcRenderer.once` on the
   same channel name, and it never resolves without a main-process
