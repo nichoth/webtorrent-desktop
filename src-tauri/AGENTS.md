@@ -307,3 +307,22 @@ arrives. A disabled item's accelerator does nothing, which makes
 "enabled" observable without reading the attribute, and makes the
 comparison a controlled one when the same key is pressed either side
 of the call.
+
+## A power assertion is readable with `pmset` (macOS)
+
+`pmset -g assertions` lists every held assertion with the pid and the
+name it was created with, so the power save blocker in `src/power.rs`
+is observable end to end from one background launch:
+
+```
+pmset -g assertions | grep -i webtorrent
+```
+
+It prints a `PreventUserIdleDisplaySleep named: "..."` line while the
+block is held and nothing once it is released, which is a real read of
+kernel state rather than an AX attribute -- none of the staleness the
+menu reads above have. Two things to plan for: the block has to be
+held for the whole window the check runs in (drive it with a probe
+that pauses tens of seconds later, not one or two), and a *count* of
+assertion lines is what proves the idempotence guard, since open plus
+play must still leave exactly one.

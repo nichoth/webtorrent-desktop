@@ -296,6 +296,23 @@ test('the player open and close notifications take no arguments',
     t.end()
   })
 
+// US-066: the two the power save blocker is the whole content of.
+// `notifyPlayerOpen` and `notifyPlayerClose` reach commands that do the
+// same thing among others, which is how `src/main/ipc.js` has it.
+test('the play and pause notifications take no arguments either',
+  async function (t) {
+    reset()
+    await ipcOs.notifyPlayerPlay()
+    await ipcOs.notifyPlayerPause()
+
+    t.deepEqual(invocations.map(c => c.command),
+      ['notify_player_play', 'notify_player_pause'],
+      'the two commands that hold the display awake and let it go')
+    t.deepEqual(invocations.map(c => c.args), [undefined, undefined],
+      'neither carries anything')
+    t.end()
+  })
+
 test('notifyPlayerUpdate carries both playlist flags', async function (t) {
   reset()
   await ipcOs.notifyPlayerUpdate(true, false)

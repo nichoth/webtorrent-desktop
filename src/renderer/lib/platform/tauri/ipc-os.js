@@ -6,10 +6,9 @@
  *
  * This is the widest module in the tree, and many Phase 4 stories
  * fill it in rather than one: window state (US-056, US-057), dock
- * and taskbar progress (US-063), file and magnet open events
- * (US-065), the power save blocker (US-066), the folder watcher
- * (US-068), launch-on-login (US-069) and the sidecar endpoint
- * (US-070).
+ * and taskbar progress (US-063), the power save blocker (US-066),
+ * file and magnet open events (US-065), the folder watcher (US-068),
+ * launch-on-login (US-069) and the sidecar endpoint (US-070).
  *
  * One of the two interchangeable shim trees ADR-014 describes. Exactly
  * one of them is in a given bundle: `WT_HOST=tauri` selects this one,
@@ -202,21 +201,33 @@ export async function quitExternalPlayer () {
   notImplemented('ipc-os', 'quitExternalPlayer')
 }
 
+/**
+ * Playback started: hold the display awake until it stops (US-066).
+ *
+ * @returns {Promise<void>}
+ */
 export async function notifyPlayerPlay () {
-  notImplemented('ipc-os', 'notifyPlayerPlay')
+  return invoke('notify_player_play')
 }
 
+/**
+ * Playback paused: let the display sleep again. The player is still
+ * open, which is what makes this different from `notifyPlayerClose`
+ * (US-066).
+ *
+ * @returns {Promise<void>}
+ */
 export async function notifyPlayerPause () {
-  notImplemented('ipc-os', 'notifyPlayerPause')
+  return invoke('notify_player_pause')
 }
 
 /**
  * The player opened, so the Playback menu applies to something
- * (US-061).
+ * (US-061) and the display is to stay awake (US-066).
  *
- * Electron's handler also starts the power save blocker and the media
- * keys; those land on the same command as they are ported (US-066,
- * US-067), so the renderer's side of it does not change again.
+ * Electron's handler also starts the media keys; those land on the
+ * same command when they are ported (US-067), so the renderer's side
+ * of it does not change again.
  *
  * @returns {Promise<void>}
  */
@@ -237,7 +248,8 @@ export async function notifyPlayerUpdate (hasNext, hasPrevious) {
 }
 
 /**
- * The player closed: nothing in the Playback menu applies (US-061).
+ * The player closed: nothing in the Playback menu applies (US-061)
+ * and the display may sleep (US-066).
  *
  * @returns {Promise<void>}
  */

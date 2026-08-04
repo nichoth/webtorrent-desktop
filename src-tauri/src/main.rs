@@ -26,6 +26,7 @@ mod dock;
 mod fs;
 mod menu;
 mod paths;
+mod power;
 mod shell;
 mod tray;
 mod window;
@@ -45,6 +46,7 @@ use dock::{Badge, DownloadNotice};
 use fs::{Access, Allowlist, FileStats, Root};
 use menu::{Action, AppMenu, ContextMenus, Platform};
 use paths::AppPaths;
+use power::PowerSaveBlocker;
 use window::{Debounce, FullscreenWatch, ProgressBar, WindowLayout};
 
 /// The label of the one window, as `tauri.conf.json` declares it.
@@ -431,21 +433,48 @@ fn set_allow_nav(app_menu: tauri::State<'_, AppMenu<Wry>>, allow: bool) {
     app_menu.set_group_enabled(menu::nav_items(Platform::current()), allow);
 }
 
-/// `ipcOs.notifyPlayerOpen`: the Playback items act on something now.
+/// `ipcOs.notifyPlayerOpen`: the Playback items act on something now,
+/// and the display is to stay awake.
 ///
-/// Electron's handler also starts the power save blocker and the media
-/// keys (US-066, US-067), which land on this command as they are
-/// ported. The menu half is here.
+/// The two halves are the two things `src/main/ipc.js` does on
+/// `onPlayerOpen`, minus the media keys (US-067), which land on this
+/// command when they are ported.
 #[tauri::command]
-fn notify_player_open(app_menu: tauri::State<'_, AppMenu<Wry>>) {
+fn notify_player_open(
+    app_menu: tauri::State<'_, AppMenu<Wry>>,
+    power: tauri::State<'_, PowerSaveBlocker>,
+) {
     app_menu.set_group_enabled(menu::PLAYBACK_ITEMS, true);
+    power.enable();
 }
 
 /// `ipcOs.notifyPlayerClose`: nothing is playing, so nothing in the
-/// Playback menu applies.
+/// Playback menu applies and the display may sleep again.
 #[tauri::command]
-fn notify_player_close(app_menu: tauri::State<'_, AppMenu<Wry>>) {
+fn notify_player_close(
+    app_menu: tauri::State<'_, AppMenu<Wry>>,
+    power: tauri::State<'_, PowerSaveBlocker>,
+) {
     app_menu.set_group_enabled(menu::PLAYBACK_ITEMS, false);
+    power.disable();
+}
+
+/// `ipcOs.notifyPlayerPlay`: keep the display awake for as long as
+/// something is playing (US-066).
+///
+/// Opening the player already did this; playing after a pause is the
+/// call that matters, and `src/main/ipc.js` sends both.
+#[tauri::command]
+fn notify_player_play(power: tauri::State<'_, PowerSaveBlocker>) {
+    power.enable();
+}
+
+/// `ipcOs.notifyPlayerPause`: nothing is playing, so let the display
+/// sleep. The player is still open, which is why this is not
+/// `notify_player_close`.
+#[tauri::command]
+fn notify_player_pause(power: tauri::State<'_, PowerSaveBlocker>) {
+    power.disable();
 }
 
 /// `ipcOs.notifyPlayerUpdate`: whether there is a next or previous
@@ -626,6 +655,14 @@ fn watch_close(main: &WebviewWindow) {
         if let tauri::WindowEvent::CloseRequested { api, .. } = event {
             let app = watched.app_handle();
             let quitting = QUITTING.load(Ordering::SeqCst);
+
+            // Whether this close hides the window or ends the app, the
+            // player is off screen from here on, so the display may
+            // sleep (US-066). The renderer sends no `onPlayerClose` for
+            // either: it is not asked before the window goes.
+            if let Some(power) = app.try_state::<PowerSaveBlocker>() {
+                power.disable();
+            }
 
             if tray::on_close(tray::exists(app), quitting) == tray::Close::Hide {
                 api.prevent_close();
@@ -1263,6 +1300,9 @@ fn main() {
 
             app.manage(paths);
             app.manage(watch);
+            // Nothing is playing yet, so it starts holding nothing
+            // (US-066).
+            app.manage(PowerSaveBlocker::platform());
             app.manage(allowlist);
             app.manage(app_menu);
             app.manage(ContextMenus::<Wry>::default());
@@ -1289,6 +1329,8 @@ fn main() {
             set_allow_nav,
             notify_player_open,
             notify_player_close,
+            notify_player_play,
+            notify_player_pause,
             notify_player_update,
             set_badge,
             download_finished,
@@ -1318,8 +1360,14 @@ fn main() {
                 QUITTING.store(true, Ordering::SeqCst);
             }
             // Take the tray icon down with the app rather than leaving
-            // it for the notification area to notice.
-            tauri::RunEvent::Exit => tray::destroy(app),
+            // it for the notification area to notice, and give back the
+            // display-sleep block if one is still held (US-066).
+            tauri::RunEvent::Exit => {
+                if let Some(power) = app.try_state::<PowerSaveBlocker>() {
+                    power.disable();
+                }
+                tray::destroy(app);
+            }
             _ => {}
         });
 }

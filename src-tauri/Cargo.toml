@@ -57,6 +57,16 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
     "NSNotification",
     "NSString",
 ] }
+# The power save blocker's two IOKit strings (US-066). Electron's
+# `prevent-display-sleep` is `IOPMAssertionCreateWithName`, which takes
+# `CFStringRef`s; `src/power.rs` declares the two IOKit functions
+# itself, so this is only what builds their arguments. Already in the
+# tree at this version underneath Tauri's macOS backend, and its MSRV
+# is 1.71, below the `rust-version` above.
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "CFString",
+] }
 
 [dev-dependencies]
 # The accelerator parser behind `MenuItem::with_id`, which drops an

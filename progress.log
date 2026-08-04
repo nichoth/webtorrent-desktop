@@ -111,6 +111,27 @@ it tight.
   `app.run_on_main_thread(move || ...)`, and the `cfg` stays inside
   the module -- a `#[cfg(not(target_os = "macos"))]` no-op twin keeps
   every caller free of it.
+- **A crate that does the job cross-platform is not automatically
+  cheaper than doing it here (US-066).** `keepawake` is exactly
+  `powerSaveBlocker`, and its own `rust-version` is 1.64 -- but
+  resolving its tree pulls `windows` 0.62 (MSRV 1.82) and `zbus` 5.18
+  (1.87), both above ADR-014's 1.77.2, and neither is visible without
+  `cargo metadata` over a throwaway project:
+  `cargo new /tmp/x && cargo add <crate> && cargo metadata
+  --format-version 1`, then print every package's `rust_version`. Do
+  that *before* writing anything against the crate's API. Where it
+  fails, three per-platform calls behind one small trait is often
+  fewer lines than the dependency review would have been.
+- **Foreign-platform code that cannot be compiled here is the real
+  cost, and `std` is how to dodge it.** Only macOS builds on this
+  machine, so a Windows or Linux branch written with a platform crate
+  is unverifiable until someone else's build breaks. Two mitigations,
+  both in `src/power.rs`: prefer a `std`-only implementation where one
+  exists (the Linux blocker is a `systemd-inhibit` child over
+  `std::process`, and its module is compiled on *every* platform so a
+  macOS `cargo clippy` checks it in full -- only the *selection* is
+  `cfg`'d); and keep the untestable branch down to a couple of
+  `extern` declarations, as the Windows one is.
 - **A host command is checkable in the real webview without a UI.**
   `tauri::Builder::append_invoke_initialization_script` injects a
   script that runs with the real allowlist and capabilities, so a few
@@ -5531,4 +5552,68 @@ clean; the Rust gates were re-run after the revert).
     rather than drawing a `0`; `Badge::Clear` is that behaviour, and
     the shim deliberately forwards the zero rather than skipping the
     call.
+---
+
+## 2026-08-04 - US-066
+- Ported `src/main/power-save-blocker.js` to Rust. New
+  `src-tauri/src/power.rs` holds `PowerSaveBlocker`, which is
+  Electron's two `isStarted` guards -- enable does nothing if a block
+  is already held, disable does nothing if none is -- over a `Wake`
+  that each platform implements. `strategy(Platform)` is the pure
+  decision, asserted for all three platforms: macOS takes an IOKit
+  `PreventUserIdleDisplaySleep` assertion (the same one Electron's
+  `prevent-display-sleep` takes), Windows holds `ES_DISPLAY_REQUIRED`
+  on a thread of its own because that flag is per-thread and a command
+  does not choose its thread, and Linux runs a `systemd-inhibit` child
+  holding an `idle` lock.
+- Release is `Drop` on the held inhibitor rather than a method, so
+  every path -- `disable`, the window's `CloseRequested`, `RunEvent::
+  Exit`, a panic -- gives the block back through the same code. The
+  tests count starts against releases against a fake `Wake`, which is
+  what "no leaked inhibitor" means here; removing either guard or
+  leaking the token fails four of them (checked by mutation, not
+  assumed).
+- Wiring matches `src/main/ipc.js`: `notify_player_open` and the new
+  `notify_player_play` enable, `notify_player_close` and the new
+  `notify_player_pause` disable. `platform/tauri/ipc-os.js` implements
+  `notifyPlayerPlay` and `notifyPlayerPause` against the two new
+  commands and stops throwing `NotImplementedError`.
+- One deliberate departure from Electron, commented at the call site:
+  closing the window releases the block even when the close only hides
+  the window to the tray. The renderer is not asked before the window
+  goes, so it sends no `onPlayerClose`, and a hidden player has no
+  visible video for the display to stay awake for.
+- Files: `src-tauri/src/power.rs` (new), `src-tauri/src/main.rs`,
+  `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`,
+  `src-tauri/AGENTS.md`, `src/renderer/lib/platform/tauri/ipc-os.js`,
+  `test/unit/platform-tauri-ipc-os.js`, `test/unit/platform-tauri.js`,
+  `specs/prd.json`.
+- Gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D
+  warnings`, `cargo test` (114 pass, 8 of them `power::`), and
+  `npm test` (2325 pass). Plus three background launches with a
+  throwaway `append_invoke_initialization_script` probe, removed
+  before committing: `pmset -g assertions` showed exactly one
+  `PreventUserIdleDisplaySleep named: "WebTorrent Desktop is playing
+  media"` after open+play, none after pause, and none after a
+  Cmd-W close taken while the block was held.
+- **Learnings for future iterations:**
+  - **`pmset -g assertions` is a non-stale read of a real host
+    effect**, unlike the AX menu-item attributes. Recipe in
+    `src-tauri/AGENTS.md`. Budget for the timing: the first webview
+    load varies by seconds between launches, so a probe that releases
+    the block 9s in raced two checks that disagreed. Hold it for 30s
+    and check either side instead of tuning the sleep.
+  - **Dead code is the tax on a "pure decision plus platform call"
+    module that only one platform can run.** `strategy` and the
+    per-platform constructors are all `pub` and all unused on two
+    platforms out of three; `-D warnings` fails on it. Resolving it by
+    `cfg`-ing the *constructors* and letting one `match` on `strategy`
+    select between them keeps the decision in one place, and the
+    unreachable arms return a `Wake` that refuses rather than
+    `unreachable!()` -- a display that sleeps during playback is a
+    smaller failure than a host that dies when the player opens.
+  - **A test-only reader belongs behind `#[cfg(test)]`.**
+    `is_enabled` is Electron's `isStarted` and nothing in the host
+    asks it, because the guards are its only callers. Marking it
+    rather than leaving it `pub` is what keeps it honest about that.
 ---

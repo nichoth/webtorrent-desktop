@@ -48,6 +48,7 @@ const IMPLEMENTED = {
   // US-061: the application menu's renderer half -- the calls that
   // enable and disable items, and the event a click arrives on.
   // US-063: the dock badge and the Downloads stack.
+  // US-066: the power save blocker's two notifications.
   'ipc-os.js': [
     'onWindowBoundsChanged',
     'setTitle',
@@ -63,6 +64,8 @@ const IMPLEMENTED = {
     'notifyPlayerOpen',
     'notifyPlayerUpdate',
     'notifyPlayerClose',
+    'notifyPlayerPlay',
+    'notifyPlayerPause',
     'onDispatch'
   ],
   // US-057: the two current-window reads.
