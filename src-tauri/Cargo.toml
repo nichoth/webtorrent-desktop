@@ -42,6 +42,12 @@ tauri-plugin-clipboard-manager = "2"
 # `rust-version` above. Lifting the pin means raising that, which is an
 # ADR-014 decision rather than a dependency bump.
 trash = "=5.2.3"
+# The media keys, held only while the player is open (US-067). Same
+# arrangement as the plugins above: `src/shortcuts.rs` reaches it from
+# Rust, so `capabilities/default.json` stays at `core:default`. It and
+# the two crates it brings in (`global-hotkey` 0.8, MSRV 1.77, and
+# `xkeysym`, 1.58.1) are all at or below the `rust-version` above.
+tauri-plugin-global-shortcut = "2.3.2"
 
 # The dock's Downloads-stack bounce (US-063). Electron's
 # `app.dock.downloadFinished` is a `com.apple.DownloadFileFinished`

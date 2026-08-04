@@ -39,7 +39,19 @@ it tight.
   instead would need its `allow-*` permissions granted to the whole
   webview. Declare such a command `async`: several plugin calls block
   or deadlock the main event loop (the dialog crate's `blocking_*`
-  pickers, and the clipboard's `read_text`, which is `arboard`'s).
+  pickers, the clipboard's `read_text`, which is `arboard`'s, and
+  every `global-shortcut` register/unregister, which hops to the main
+  thread and waits -- US-067). Borrowed `tauri::State` in an `async`
+  command then forces a `Result` return, even where there is nothing
+  to report.
+- **A plugin's accelerator spelling is not Electron's.**
+  `global-shortcut` parses `KeyboardEvent.code` names, so Electron's
+  `MediaNextTrack` is `MediaTrackNext` (US-067) -- and a
+  media/function key is exactly the kind nobody presses while
+  checking. Parse every accelerator in a test, whichever crate owns
+  it: `muda` drops one it cannot parse in silence, and
+  `global-shortcut` returns an error at registration that only a log
+  line reveals.
 - **Cargo's resolver does not honour `rust-version`.** It is 1.77.2
   (ADR-014), and `cargo add` warns about a too-new dependency and then
   the lockfile picks it anyway. A non-Tauri dependency therefore needs
@@ -5616,4 +5628,73 @@ clean; the Rust gates were re-run after the revert).
     `is_enabled` is Electron's `isStarted` and nothing in the host
     asks it, because the guards are its only callers. Marking it
     rather than leaving it `pub` is what keeps it honest about that.
+---
+
+## 2026-08-04 - US-067
+
+- Ported `src/main/shortcuts.js` to the Tauri host. The new
+  `src-tauri/src/shortcuts.rs` holds the three media keys as a table
+  of accelerator/action pairs (`MEDIA_KEYS`), a `MediaShortcuts` guard
+  that tracks which keys were actually taken, and a `Keys` trait whose
+  real implementation is the `global-shortcut` plugin reached from
+  Rust. Each press dispatches the renderer action Electron dispatches:
+  `playPause`, `nextTrack`, `previousTrack`.
+- Wired into `notify_player_open` and `notify_player_close`, beside
+  the playback menu items and the power save blocker, so the keys are
+  held only while a player is open. Both commands became `async` --
+  see the learning below -- which forced a `Result<(), String>` return
+  they always fill with `Ok(())`. `RunEvent::Exit` releases the keys
+  too, and so does `Drop` on `MediaShortcuts`.
+- The keys are taken through the plugin's **Rust** API, as with the
+  dialog, opener and clipboard plugins, so
+  `capabilities/default.json` stays at `core:default` for a sixth
+  story and the webview carries no shortcut API of its own. No
+  shortcut is declared on the plugin builder: `shortcuts.js` holds
+  none until a player opens.
+- Files: `src-tauri/src/shortcuts.rs` (new), `src-tauri/src/main.rs`,
+  `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`,
+  `src-tauri/AGENTS.md`, `progress.log`, `specs/prd.json`. Nothing on
+  the JS side changed: `ipcOs.notifyPlayerOpen`/`notifyPlayerClose`
+  already existed in both shim trees, and `src/main/shortcuts.js`
+  stays until the cutover (US-072).
+- Verified. `cargo fmt --check`, `cargo clippy --all-targets -- -D
+  warnings` and `cargo test` (123 tests, 9 of them new) pass; `npm
+  test` passes (2325 assertions). The nine new tests were
+  mutation-checked rather than taken on trust: registering only the
+  first key and draining nothing on release fails seven of them.
+- Runtime evidence, taken with a throwaway probe (an injected script
+  plus `probe_log`/`probe_keys` commands, both removed before
+  committing): against the real host,
+  `is_registered` for the three accelerators read `[false,false,false]`
+  before the player, `[true,true,true]` after `notify_player_open`,
+  and `[false,false,false]` after `notify_player_close`, with no
+  registration failure on stderr. A second `notify_player_open` in
+  between resolved rather than hanging, which is the deadlock check.
+- What is left for a human (US-073): actually pressing a media key
+  during playback and seeing the video respond, and confirming another
+  application's play/pause works again once the player is closed. The
+  mechanism underneath both is proven above.
+- **Learnings for future iterations:**
+  - **`append_invoke_initialization_script` has to go on the
+    `Builder::default()` call.** Chained after the `.plugin(...)`
+    calls instead, the script never ran and the probe printed
+    nothing at all -- which reads exactly like a deadlock in the
+    command being probed. Copy the working recipe out of US-060's
+    `wip` commit (`git log -S PROBE_SCRIPT`) rather than writing a
+    fresh one.
+  - **A global shortcut is machine-wide state, so releasing it is the
+    half that matters.** Registering is idempotent enough in practice;
+    a host that exits holding play/pause leaves the machine broken in
+    a way restarting *this* app does not fix. Hence `Drop`, the
+    `RunEvent::Exit` release, and tracking the keys that were actually
+    taken rather than a flag -- a key another application already owns
+    is refused, and handing back one this process never had would
+    report an error the user cannot act on.
+  - **Check a plugin's added crates against ADR-014 before writing
+    against its API.** `tauri-plugin-global-shortcut` 2.3.2 adds
+    exactly three packages to the lockfile (`global-hotkey` 0.8,
+    `xkeysym`), all at or below 1.77.2 -- cheap, but the way to know
+    that is `cargo add` followed by a lockfile diff and a
+    `cargo metadata` read of each new package's `rust_version`, not
+    the crate's own `rust-version`.
 ---

@@ -28,6 +28,7 @@ mod menu;
 mod paths;
 mod power;
 mod shell;
+mod shortcuts;
 mod tray;
 mod window;
 
@@ -47,6 +48,7 @@ use fs::{Access, Allowlist, FileStats, Root};
 use menu::{Action, AppMenu, ContextMenus, Platform};
 use paths::AppPaths;
 use power::PowerSaveBlocker;
+use shortcuts::MediaShortcuts;
 use window::{Debounce, FullscreenWatch, ProgressBar, WindowLayout};
 
 /// The label of the one window, as `tauri.conf.json` declares it.
@@ -434,29 +436,43 @@ fn set_allow_nav(app_menu: tauri::State<'_, AppMenu<Wry>>, allow: bool) {
 }
 
 /// `ipcOs.notifyPlayerOpen`: the Playback items act on something now,
-/// and the display is to stay awake.
+/// the display is to stay awake, and the media keys drive the player.
 ///
-/// The two halves are the two things `src/main/ipc.js` does on
-/// `onPlayerOpen`, minus the media keys (US-067), which land on this
-/// command when they are ported.
+/// The three halves are the three things `src/main/ipc.js` does on
+/// `onPlayerOpen`.
+///
+/// `async` because taking a global shortcut hops to the main thread
+/// and waits for the answer, which from a synchronous command -- those
+/// run on the main thread -- would be a deadlock rather than a slow
+/// call. Borrowed state then forces the `Result`; there is no failure
+/// to report, and both halves log their own.
 #[tauri::command]
-fn notify_player_open(
+async fn notify_player_open(
     app_menu: tauri::State<'_, AppMenu<Wry>>,
     power: tauri::State<'_, PowerSaveBlocker>,
-) {
+    media_keys: tauri::State<'_, MediaShortcuts>,
+) -> Result<(), String> {
     app_menu.set_group_enabled(menu::PLAYBACK_ITEMS, true);
     power.enable();
+    media_keys.enable();
+    Ok(())
 }
 
 /// `ipcOs.notifyPlayerClose`: nothing is playing, so nothing in the
-/// Playback menu applies and the display may sleep again.
+/// Playback menu applies, the display may sleep again, and the media
+/// keys go back to the OS for other applications to use.
+///
+/// `async` for the same reason as [`notify_player_open`].
 #[tauri::command]
-fn notify_player_close(
+async fn notify_player_close(
     app_menu: tauri::State<'_, AppMenu<Wry>>,
     power: tauri::State<'_, PowerSaveBlocker>,
-) {
+    media_keys: tauri::State<'_, MediaShortcuts>,
+) -> Result<(), String> {
     app_menu.set_group_enabled(menu::PLAYBACK_ITEMS, false);
     power.disable();
+    media_keys.disable();
+    Ok(())
 }
 
 /// `ipcOs.notifyPlayerPlay`: keep the display awake for as long as
@@ -1249,6 +1265,11 @@ fn main() {
         // `capabilities/default.json`.
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        // The media keys (US-067). Same arrangement again: they are
+        // taken and given back by `crate::shortcuts` through this
+        // plugin's Rust API, and no shortcut is declared here --
+        // `src/main/shortcuts.js` holds none until a player opens.
+        .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .setup(|app| {
             // `download_dir` is the one path Tauri resolves better than
             // this crate can: on Linux it reads the XDG user-dirs
@@ -1303,6 +1324,9 @@ fn main() {
             // Nothing is playing yet, so it starts holding nothing
             // (US-066).
             app.manage(PowerSaveBlocker::platform());
+            // Nothing is playing yet, so the media keys stay with
+            // whatever else on the machine wants them (US-067).
+            app.manage(MediaShortcuts::global(app.handle().clone()));
             app.manage(allowlist);
             app.manage(app_menu);
             app.manage(ContextMenus::<Wry>::default());
@@ -1361,10 +1385,14 @@ fn main() {
             }
             // Take the tray icon down with the app rather than leaving
             // it for the notification area to notice, and give back the
-            // display-sleep block if one is still held (US-066).
+            // display-sleep block if one is still held (US-066) and the
+            // media keys if the player was still open (US-067).
             tauri::RunEvent::Exit => {
                 if let Some(power) = app.try_state::<PowerSaveBlocker>() {
                     power.disable();
+                }
+                if let Some(media_keys) = app.try_state::<MediaShortcuts>() {
+                    media_keys.disable();
                 }
                 tray::destroy(app);
             }

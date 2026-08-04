@@ -326,3 +326,29 @@ held for the whole window the check runs in (drive it with a probe
 that pauses tens of seconds later, not one or two), and a *count* of
 assertion lines is what proves the idempotence guard, since open plus
 play must still leave exactly one.
+
+## A global shortcut is not spelled the way Electron spells it
+
+`src/shortcuts.rs` asks for `MediaTrackNext` and `MediaTrackPrevious`
+where `src/main/shortcuts.js` asks for `MediaNextTrack` and
+`MediaPreviousTrack`: the parser behind `tauri-plugin-global-shortcut`
+takes `KeyboardEvent.code` names, not Electron's accelerator names.
+Unlike the application menu, an accelerator that does not parse is an
+error rather than a silent drop -- but the error is at registration
+time, in a `Result` nothing looks at unless something logs it, so
+parse every new accelerator in a test the way
+`every_accelerator_parses_to_its_media_key` does.
+
+**A command that registers or unregisters one must be `async`.** The
+plugin hops to the main thread and blocks on the answer, and a
+synchronous Tauri command already runs on the main thread, so the
+call would deadlock the whole host rather than fail. Borrowed
+`tauri::State` in an `async` command then forces a `Result` return --
+`notify_player_open` and `notify_player_close` return `Ok(())` and log
+their own failures.
+
+Whether the keys are actually held is readable from inside the host:
+`app.global_shortcut().is_registered(accelerator)`. A probe that
+prints it before, during and after a player (see **Observing the
+webview non-interactively** above) is the whole of "they do not
+capture keys outside playback", and needs no key to be pressed.
