@@ -51,6 +51,7 @@ const IMPLEMENTED = {
   // US-066: the power save blocker's two notifications.
   // US-068: the folder watcher's start and stop.
   // US-069: the launch-at-login preference.
+  // US-070: where the engine sidecar is listening.
   'ipc-os.js': [
     'onWindowBoundsChanged',
     'setTitle',
@@ -71,7 +72,8 @@ const IMPLEMENTED = {
     'onDispatch',
     'startFolderWatcher',
     'stopFolderWatcher',
-    'setStartup'
+    'setStartup',
+    'getEngineEndpoint'
   ],
   // US-057: the two current-window reads.
   'window.js': ['isVisible', 'isMaximized'],

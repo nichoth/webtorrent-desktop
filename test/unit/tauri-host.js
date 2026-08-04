@@ -157,3 +157,57 @@ test('the Tauri build output is not committed or scanned', function (t) {
   t.ok(clean.includes(`'${OUT_DIR}/'`), 'bin/clean.js removes it')
   t.end()
 })
+
+// US-070: the Tauri host supervises the engine sidecar itself, so a
+// Tauri launch needs the sidecar on disk the way an Electron one does.
+// It is the Babel output of `src/engine/`, which only `build:main`
+// produces -- and nothing else in the Tauri build has ever needed it,
+// so it is easy to leave out and the symptom is a window with no
+// torrenting rather than a build error.
+
+test('the Tauri build produces the engine sidecar it spawns', function (t) {
+  t.ok(
+    pkg.scripts['build:tauri'].includes('build:main'),
+    'build:tauri builds the sidecar entry point'
+  )
+
+  const entry = path.join('build', 'engine', 'index.js')
+  const supervisor = fs.readFileSync(
+    path.join(TAURI_DIR, 'src', 'engine.rs'), 'utf8'
+  )
+
+  // The Rust side joins the three components rather than carrying the
+  // path as a string, so this is what it spells rather than where it
+  // says it.
+  t.ok(
+    supervisor.includes('join("build").join("engine").join("index.js")'),
+    `the host spawns ${entry}`
+  )
+  t.ok(
+    fs.existsSync(path.join(REPO, entry)),
+    `${entry} is where build:main puts it`
+  )
+  t.end()
+})
+
+test('the host and the sidecar agree on the port line', function (t) {
+  const supervisor = fs.readFileSync(
+    path.join(TAURI_DIR, 'src', 'engine.rs'), 'utf8'
+  )
+  const sidecar = fs.readFileSync(
+    path.join(REPO, 'src', 'engine', 'index.js'), 'utf8'
+  )
+
+  // One line of stdout is the whole of the handshake, so a rename on
+  // either side is a host that waits forever for a port.
+  const prefix = 'WEBTORRENT_ENGINE_PORT='
+  t.ok(sidecar.includes(`'${prefix}'`), 'the sidecar prints it')
+  t.ok(supervisor.includes(`"${prefix}"`), 'the host parses it')
+
+  // Same for the pipe that stops an orphan: the child only watches it
+  // when the host asks it to.
+  const pipe = 'WEBTORRENT_ENGINE_PARENT_PIPE'
+  t.ok(sidecar.includes(pipe), 'the sidecar watches the parent pipe')
+  t.ok(supervisor.includes(`"${pipe}"`), 'the host sets it')
+  t.end()
+})

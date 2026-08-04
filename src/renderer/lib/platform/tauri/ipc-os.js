@@ -296,8 +296,31 @@ export async function notifyDownloadFinished (path) {
   return invoke('download_finished', { path })
 }
 
+// -- The engine sidecar -----------------------------------------------
+
+/**
+ * @typedef {object} EngineEndpoint
+ * @property {string} url   WebSocket URL of the engine sidecar.
+ * @property {string} token Per-launch credential the sidecar expects.
+ */
+
+/**
+ * Ask the host where the engine sidecar is listening (US-070).
+ *
+ * The Electron sibling asks `src/main/engine-process.js`; this one
+ * asks `src-tauri/src/engine.rs`, which supervises the same sidecar
+ * (ADR-012) and answers the same `{ url, token }`. The host waits out
+ * a restart before replying, so a slow answer here means the engine is
+ * on its way back rather than that the call was lost.
+ *
+ * The port changes when the sidecar restarts, so this is a question to
+ * ask on every connect rather than a value to cache. `null` means the
+ * host has no engine to offer -- `ipc-engine.js` retries.
+ *
+ * @returns {Promise<EngineEndpoint|null>}
+ */
 export async function getEngineEndpoint () {
-  notImplemented('ipc-os', 'getEngineEndpoint')
+  return invoke('get_engine_endpoint')
 }
 
 export async function onLog (listener, options) {

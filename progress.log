@@ -5860,3 +5860,83 @@ clean; the Rust gates were re-run after the revert).
     directory for both file kinds, so the untestable platform here is
     only Windows.
 ---
+
+## 2026-08-04 - US-070 - Move sidecar supervision into the Rust host
+- `src-tauri/src/engine.rs`: the Rust port of
+  `src/main/engine-process.js`. Spawns `build/engine/index.js` under
+  `node`, reads the one `WEBTORRENT_ENGINE_PORT=` stdout line, forwards
+  the rest of the child's output to the host log, restarts on a crash
+  with the same 500ms-doubling-to-8s policy over five attempts, resets
+  that allowance when a port binds, gives up loudly, and answers
+  `wait_for_endpoint` with the same `{ url, token }`. The token is
+  `getrandom` in place of `crypto.randomBytes(24)`.
+- `main.rs`: `mod engine`, the engine started in `setup()` (as
+  `engineProcess.init()` is in `src/main/index.js`), the
+  `get_engine_endpoint` command, and `engine.stop()` in
+  `RunEvent::Exit`.
+- `src/renderer/lib/platform/tauri/ipc-os.js`: `getEngineEndpoint` is
+  no longer a stub -- one `invoke('get_engine_endpoint')`.
+- `package.json`: `build:tauri` now runs `build:main`, because the
+  sidecar it spawns is that script's output.
+- Tests: six in `engine.rs` against a fake Node sidecar (endpoint,
+  graceful stop, restart-after-crash, give-up, double stop) plus the
+  pure parts; `getEngineEndpoint` in
+  `test/unit/platform-tauri-ipc-os.js`; the build/handshake wiring in
+  `test/unit/tauri-host.js`.
+- Docs: `docs/platform-shim.md` and a new section in
+  `src-tauri/AGENTS.md`.
+
+**One acceptance criterion is not met, and cannot be met by this
+story.** "Under `npm run start:tauri`, a torrent downloads, plays and
+seeds" needs a renderer, and the Tauri renderer bundle does not boot:
+an error probe in the real webview reports
+`ReferenceError: Can't find variable: require` at load, because
+`build-vite/renderer/main.js` still contains 27 `require("util")`,
+`require("events")`, `require("fs")` ... calls that only Electron's
+nodeIntegration answers. Nothing in this story's scope reaches that;
+**US-072 (cut the app over to Tauri) owns it**, and it is recorded in
+the PRD notes. What *was* verified end to end on the real host is
+everything up to the renderer: the sidecar spawns and prints its port,
+the webview's own `invoke('get_engine_endpoint')` comes back with
+`{"url":"ws://127.0.0.1:53644","token":"7201..."}`, and no `node`
+child survives either a `pkill` of the host or a real Cmd-Q.
+
+- **Learnings for future iterations:**
+  - **The parent pipe is a better kill than a signal, and it is
+    already there.** `src/engine/index.js` shuts down when its stdin
+    closes (`WEBTORRENT_ENGINE_PARENT_PIPE=1`), which the Electron
+    supervisor sets purely as an anti-orphan backstop. Using it as the
+    *primary* stop means the Rust side needs no `libc`, no SIGTERM and
+    no Windows branch: `drop(child.stdin.take())`, wait four seconds,
+    then `Child::kill` as the backstop. Look for an existing
+    cooperative shutdown before reaching for a signal crate.
+  - **A supervisor is testable without the thing it supervises.** The
+    whole contract with the child is one stdout line, an exit status
+    and a stdin that closing means quit, so a few lines of Node in a
+    temp directory exercise spawn, restart, give-up and graceful stop
+    in half a second of `cargo test` -- no WebTorrent client, no port,
+    no network. `node` was already a `cargo test` dependency
+    (`paths.rs` shells out to it).
+  - **Two mutexes, in a fixed order, keep a kill from blocking a
+    read.** The child handle is held apart from the state a waiter
+    reads, and never waited on while a lock is held (`try_wait` on a
+    50ms poll instead). Locking state-then-child everywhere is what
+    makes that safe, and the race worth guarding is the one between
+    `spawn` and storing the child: the stopped flag is checked *while*
+    storing, or a `stop()` landing in between leaves a process nobody
+    holds.
+  - **`CARGO_MANIFEST_DIR` is the dev build's answer to "where is the
+    repo".** It is baked in at compile time, so it survives the binary
+    being run from anywhere -- and is exactly wrong for a packaged
+    build, which is why the production branch of `Runtime::resolve`
+    takes the resource directory instead.
+  - **Rust code only tests can call fails `-D warnings`.** Two
+    getters mirroring the Electron module's `getEndpoint`/`getPid` are
+    dead in the host, and dead code is a clippy error under the gate --
+    `#[cfg(test)]` on the method, with a line saying why it exists, is
+    the honest fix rather than an `allow`.
+  - **The webview probe's `setTimeout` really is throttled.** The
+    AGENTS.md warning is worth believing: a probe at 3000ms fired every
+    time and the same probe moved to 8000ms produced total silence on a
+    background launch.
+---

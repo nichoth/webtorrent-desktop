@@ -185,6 +185,38 @@ windows` is whether the window is showing, and `click button 1 of
 window 1` is the close button. Revert the escape hatch before
 committing.
 
+## The sidecar is a second process, and the pipe is what stops an orphan
+
+`src/engine.rs` is `src/main/engine-process.js`: it spawns
+`build/engine/index.js` under `node`, reads the port off the one
+`WEBTORRENT_ENGINE_PORT=` stdout line, restarts on a crash with the
+same 500ms-doubling-to-8s policy, and answers `get_engine_endpoint`
+with `{ url, token }`. Three things about it are not local to the file:
+
+- **`npm run build:tauri` runs `build:main` for this reason.** The
+  sidecar is the Babel output of `src/engine/`, and nothing else in the
+  Tauri build ever needed `build/`. Leave it out and the window comes
+  up with no torrenting and no build error.
+- **The child is stopped by closing its stdin, never by a signal.** It
+  is spawned with `WEBTORRENT_ENGINE_PARENT_PIPE=1`, which is what
+  makes the pipe closing a shutdown request -- so it releases the
+  download directory on a clean quit, *and* dies on its own when the
+  host is force quit and never reaches `RunEvent::Exit`. That is why
+  the module is `std`-only and identical on Windows;
+  `Child::kill` is only the backstop after four seconds.
+- **`CARGO_MANIFEST_DIR` is what finds the repo in a dev build.** It is
+  baked in at compile time, which is exactly why the packaged branch of
+  `Runtime::resolve` uses the resource directory instead -- filling
+  that directory is US-047.
+
+Checking it needs no UI: launch the debug binary (with a throwaway
+`HOME`, below) and the child's own output arrives on the host's stdout
+as `Engine: ...` lines, port included. `lsof -nP -iTCP:<port>` says
+whether anything connected, and `pgrep -f build/engine/index.js` after
+the host is gone is the orphan check -- run it for both quits, a
+`pkill` of the host (the force-quit path, where only the pipe can
+work) and a real Cmd-Q through `osascript`.
+
 ## Gates
 
 `cargo fmt --check` and `cargo clippy -- -D warnings` are gates from

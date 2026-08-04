@@ -494,3 +494,34 @@ test('a launch-on-login failure reaches the caller', async function (t) {
   core.invoke = real
   t.end()
 })
+
+// -- the engine sidecar (US-070) --------------------------------------
+//
+// The endpoint is the host's answer, not the renderer's guess: the
+// port and the per-launch token live in the supervisor, which is
+// `src-tauri/src/engine.rs` here and `src/main/engine-process.js`
+// under Electron. `ipc-engine.js` -- shared by both trees -- asks for
+// it on every connect, so the two things that matter on this side are
+// that the value crosses unchanged and that "no engine yet" arrives as
+// `null` rather than as a failure.
+
+test('getEngineEndpoint asks the host and returns what it says',
+  async function (t) {
+    reset()
+    answer = { url: 'ws://127.0.0.1:51423', token: 'deadbeef' }
+    const endpoint = await ipcOs.getEngineEndpoint()
+
+    t.deepEqual(invocations, [{ command: 'get_engine_endpoint', args: undefined }],
+      'one command, no arguments')
+    t.deepEqual(endpoint, { url: 'ws://127.0.0.1:51423', token: 'deadbeef' },
+      'the url and token cross unchanged')
+    t.end()
+  })
+
+test('no engine to offer is null, not an error', async function (t) {
+  reset()
+  answer = null
+  t.equal(await ipcOs.getEngineEndpoint(), null,
+    'null reaches the caller, which retries')
+  t.end()
+})

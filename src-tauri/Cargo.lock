@@ -4649,6 +4649,7 @@ dependencies = [
 name = "webtorrent-desktop"
 version = "0.24.0"
 dependencies = [
+ "getrandom 0.2.17",
  "muda",
  "objc2-core-foundation",
  "objc2-foundation",

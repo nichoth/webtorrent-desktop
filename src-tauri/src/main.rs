@@ -23,6 +23,7 @@
 mod clipboard;
 mod dialog;
 mod dock;
+mod engine;
 mod fs;
 mod menu;
 mod paths;
@@ -46,6 +47,7 @@ use tauri_plugin_dialog::{DialogExt, FileDialogBuilder};
 use tauri_plugin_opener::OpenerExt;
 
 use dock::{Badge, DownloadNotice};
+use engine::{Endpoint, Engine};
 use fs::{Access, Allowlist, FileStats, Root};
 use menu::{Action, AppMenu, ContextMenus, Platform};
 use paths::AppPaths;
@@ -558,6 +560,27 @@ fn start_folder_watcher(app: AppHandle) {
 #[tauri::command]
 fn stop_folder_watcher(folder_watcher: tauri::State<'_, FolderWatcher>) {
     folder_watcher.stop();
+}
+
+/// `ipcMain.on('getEngineEndpoint')`: where the engine sidecar is
+/// listening, and the credential it expects (US-070).
+///
+/// The renderer asks on every connect, because the port changes across
+/// a restart. `None` is the same answer `src/main/ipc.js` sends when
+/// the supervisor has nothing to report: not an error, and something
+/// `ipc-engine.js` retries.
+///
+/// `async` because it waits: the UI may ask before the first spawn has
+/// finished, or during the gap while a restart is in flight, and a
+/// synchronous command would do that waiting on the main thread. The
+/// wait itself is a blocking one on a condition variable, so it goes
+/// to `spawn_blocking` rather than tying up an async worker.
+#[tauri::command]
+async fn get_engine_endpoint(engine: tauri::State<'_, Engine>) -> Result<Option<Endpoint>, String> {
+    let engine = engine.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || engine.wait_for_endpoint(engine::ENDPOINT_TIMEOUT))
+        .await
+        .map_err(|err| err.to_string())
 }
 
 /// `ipcMain.on('setStartup')`: turn launching at login on or off,
@@ -1405,6 +1428,30 @@ fn main() {
             app.manage(ContextMenus::<Wry>::default());
             app.manage(FolderWatcher::default());
 
+            // The engine sidecar (US-070), which is
+            // `engineProcess.init()` in `src/main/index.js`: it comes
+            // up with the app rather than on the first torrent, so
+            // that the renderer's first `getEngineEndpoint` has
+            // something to wait for rather than nothing to report.
+            //
+            // The development entry point is this repository's Babel
+            // output, and `CARGO_MANIFEST_DIR` is the only thing that
+            // still knows where the repository is once the binary has
+            // been copied anywhere -- it is baked in at compile time,
+            // which is exactly what makes it wrong for a packaged
+            // build, hence the resource directory for that one.
+            let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
+            let engine = Engine::new(
+                engine::Runtime::resolve(
+                    manifest.parent().unwrap_or(manifest),
+                    app.path().resource_dir().ok().as_deref(),
+                    !cfg!(debug_assertions),
+                ),
+                engine::Policy::default(),
+            );
+            engine.start();
+            app.manage(engine);
+
             // `delayedInit` in `src/main/index.js`: the watcher comes
             // up with the app when the preference is already on, so
             // that a torrent dropped in the folder is added without
@@ -1443,6 +1490,7 @@ fn main() {
             download_finished,
             start_folder_watcher,
             stop_folder_watcher,
+            get_engine_endpoint,
             set_startup,
             open_external,
             open_path,
@@ -1485,6 +1533,16 @@ fn main() {
                 // (US-068).
                 if let Some(folder_watcher) = app.try_state::<FolderWatcher>() {
                     folder_watcher.stop();
+                }
+                // The sidecar is a whole second process, so this is
+                // the one teardown that leaves something behind if it
+                // is missed (US-070). It closes the child's stdin
+                // first, which is how the engine gets to destroy its
+                // client and release the download directory; a force
+                // quit that never reaches here closes the same pipe by
+                // dying, and the child stops on that too.
+                if let Some(engine) = app.try_state::<Engine>() {
+                    engine.stop();
                 }
                 tray::destroy(app);
             }

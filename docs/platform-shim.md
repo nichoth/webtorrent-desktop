@@ -243,8 +243,9 @@ rather than stubbing it. That module has been host-free since US-044 --
 it is a WebSocket client of the sidecar, banned from importing Electron
 by the boundary config -- so there is nothing for a Tauri version to do
 differently, and no Phase 4 story reimplements it. The host knowledge
-it depends on is `ipc-os.getEngineEndpoint()`, which is stubbed like
-the rest.
+it depends on is `ipc-os.getEngineEndpoint()`, and US-070 gave that one
+a host: `src-tauri/src/engine.rs` supervises the same sidecar the
+Electron main process does, and answers the same `{ url, token }`.
 
 Selection is by `WT_HOST`, defaulting to `electron`:
 
@@ -697,7 +698,10 @@ ipc-engine.js  ==== ws://127.0.0.1:PORT?token=... ====>  bus-websocket.js
   mode, `ELECTRON_RUN_AS_NODE=1`), reads the port off its one
   `WEBTORRENT_ENGINE_PORT=<port>` stdout line, and holds the port and
   the per-launch token. Neither is discoverable from the renderer's own
-  environment.
+  environment. `src-tauri/src/engine.rs` is the same supervisor for the
+  Tauri host (US-070): same stdout line, same restart policy, same
+  `{ url, token }`, and `node` off the `PATH` in place of Electron in
+  Node mode.
 - `ipc-engine.js` asks `ipc-os.getEngineEndpoint()` for
   `{ url, token }` on **every** connect rather than caching it, because
   the port changes when the sidecar restarts. A `null` reply means wait,

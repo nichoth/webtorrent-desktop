@@ -1185,8 +1185,8 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 70,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Supervision, restart, endpoint and teardown are done and verified on the real host (US-070). The 'a torrent downloads, plays and seeds under npm run start:tauri' criterion is NOT met: the Tauri renderer bundle still calls Node's require() at load and never boots, which US-072 owns. See progress.log."
     },
     {
       "id": "US-071",

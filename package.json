@@ -12,7 +12,7 @@
     "build:main": "babel src --out-dir build --ignore \"src/renderer/main.js,src/renderer/components/**/*,src/renderer/controllers/**/*,src/renderer/pages/**/*\"",
     "build:renderer": "vite build",
     "build:renderer:tauri": "node ./bin/build-renderer.js",
-    "build:tauri": "npm run build:renderer:tauri && node ./bin/build-tauri.js",
+    "build:tauri": "npm run build:main && npm run build:renderer:tauri && node ./bin/build-tauri.js",
     "clean": "node ./bin/clean.js",
     "gh-release": "gh-release",
     "install-system-deps": "brew install fakeroot dpkg rpm",

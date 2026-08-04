@@ -48,6 +48,13 @@ trash = "=5.2.3"
 # the two crates it brings in (`global-hotkey` 0.8, MSRV 1.77, and
 # `xkeysym`, 1.58.1) are all at or below the `rust-version` above.
 tauri-plugin-global-shortcut = "2.3.2"
+# The engine sidecar's per-launch token (US-070), which is
+# `crypto.randomBytes(24)` in `src/main/engine-process.js`. `std` has no
+# random source and the supervisor needs nothing else from an RNG
+# crate, so this is the smallest thing that answers it -- and it is
+# already in the tree underneath Tauri, so it adds nothing to the
+# build. No `rust-version` of its own; it documents rustc 1.36.
+getrandom = "0.2"
 
 # The dock's Downloads-stack bounce (US-063). Electron's
 # `app.dock.downloadFinished` is a `com.apple.DownloadFileFinished`
