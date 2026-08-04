@@ -588,46 +588,6 @@ async fn fs_exists(allow: tauri::State<'_, Allowlist>, path: String) -> Result<b
     })
 }
 
-
-#[tauri::command]
-fn probe(message: String) {
-    println!("PROBE: {message}");
-}
-
-const PROBE_SCRIPT: &str = r#"
-setTimeout(async function () {
-  const invoke = (c, a) => window.__TAURI_INTERNALS__.invoke(c, a)
-  const say = (m) => invoke('probe', { message: String(m) })
-  const ok = async (label, fn) => {
-    try { await say(label + ': ' + await fn()) }
-    catch (err) { await say(label + ': THREW ' + err) }
-  }
-  const paths = await invoke('app_paths')
-  await say('configPath=' + paths.configPath)
-  const file = paths.configPath + '/probe-file.bin'
-
-  await ok('mkdir', async () => (await invoke('fs_mkdir', { path: paths.configPath }), 'ok'))
-  await ok('write', async () => (await invoke('fs_write_file', { path: file, data: [104, 105] }), 'ok'))
-  await ok('read', async () => {
-    const d = await invoke('fs_read_file', { path: file })
-    const bytes = d instanceof ArrayBuffer ? new Uint8Array(d) : Uint8Array.from(d)
-    return d.constructor.name + ' ' + JSON.stringify(Array.from(bytes))
-  })
-  await ok('stat', async () => JSON.stringify(await invoke('fs_stat', { path: file })))
-  await ok('readdir', async () => JSON.stringify(await invoke('fs_readdir', { path: paths.configPath })))
-  await ok('exists-yes', async () => await invoke('fs_exists', { path: file }))
-  await ok('exists-refused', async () => await invoke('fs_exists', { path: '/etc/passwd' }))
-  await ok('read-refused', async () => await invoke('fs_read_file', { path: '/etc/passwd' }))
-  await ok('write-refused', async () => (await invoke('fs_write_file', { path: '/etc/wt-probe', data: [1] }), 'RESOLVED'))
-  await ok('escape-refused', async () => await invoke('fs_read_file', { path: paths.configPath + '/../../../../etc/passwd' }))
-  await ok('copy', async () => (await invoke('fs_copy_file', { src: file, dest: file + '.copy' }), 'ok'))
-  await ok('rename', async () => (await invoke('fs_rename', { oldPath: file + '.copy', newPath: file + '.moved' }), 'ok'))
-  await ok('unlink', async () => (await invoke('fs_unlink', { path: file + '.moved' }), 'ok'))
-  await ok('exists-after-unlink', async () => await invoke('fs_exists', { path: file + '.moved' }))
-  await say('DONE')
-}, 800)
-"#;
-
 /// Open the window where the last session left it.
 ///
 /// The order matters: the minimum size is set before the size, so a
@@ -746,7 +706,7 @@ fn main() {
         .map(|env| paths::is_portable(&env))
         .unwrap_or(false);
 
-    let mut builder = tauri::Builder::default().append_invoke_initialization_script(PROBE_SCRIPT);
+    let mut builder = tauri::Builder::default();
 
     if !portable {
         // A second launch signals this one and exits, which is
@@ -839,8 +799,7 @@ fn main() {
             fs_unlink,
             fs_readdir,
             fs_stat,
-            fs_exists,
-            probe
+            fs_exists
         ])
         .run(tauri::generate_context!())
         .expect("failed to start the WebTorrent Desktop window");

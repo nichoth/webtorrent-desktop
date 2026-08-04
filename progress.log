@@ -89,6 +89,15 @@ it tight.
   specifiers like a barrel's `./clipboard` slip past a
   `resolve.alias` entry, and the resulting half-and-half bundle
   *builds* cleanly.
+- **A host command is checkable in the real webview without a UI.**
+  `tauri::Builder::append_invoke_initialization_script` injects a
+  script that runs with the real allowlist and capabilities, so a few
+  `window.__TAURI_INTERNALS__.invoke` calls plus a one-line command
+  that `println!`s its argument exercise a whole module end to end
+  from one background launch (US-060 proved the nine `fs_*` commands
+  and their refusals that way). It is also a registered command that
+  would ship: grep the probe's name out of `main.rs` before
+  committing.
 - **An inline env var in an npm script is POSIX-only.**
   `FOO=bar vite build` fails on Windows, which Phase 4 targets. Set it
   from a small Node wrapper that then calls the tool's JS API
@@ -5188,4 +5197,80 @@ state file.
     rather than `is_ok()`.** The mutation check above only produced a
     useful failure message because the assertion printed the error;
     `assert!(...is_ok())` would have said nothing about why.
+---
+## 2026-08-04 - US-060
+
+- Implemented file access for the Tauri tree. Most of the code landed
+  in the previous session's `wip` commit and was left unverified and
+  unmarked; this session finished it: removed the debug probe harness
+  from `src-tauri/src/main.rs` (a `probe` command plus a
+  `PROBE_SCRIPT` injected with `append_invoke_initialization_script`,
+  which would have shipped), then ran every gate the story asks for.
+- `src/renderer/lib/platform/tauri/fs.js` is the nine exports of
+  `../fs.js` as nine host commands over `std::fs`, not the `fs`
+  plugin's JS API. The reason is new relative to US-057..US-059: the
+  plugin's scope is a glob list in `capabilities/default.json`, and
+  that list cannot name the config directory per platform, nor the
+  download folder the user picked a moment ago. The host knows both,
+  so the allowlist lives there -- `src-tauri/src/fs.rs` -- and
+  `capabilities/default.json` stays at `core:default` for a fourth
+  story, so the webview carries no file access of its own.
+- The allowlist grants `configPath`, `tempPath`,
+  `defaultDownloadPath`, the download folders read back out of
+  `config.json` (`prefs.downloadPath` and each `torrents[].path`, so a
+  restart does not lose a folder the user chose in an earlier
+  session), and the resource directory read-only. `show_open_dialog`
+  and `show_save_dialog` extend it with whatever the user picks -- a
+  folder for writing, a file for reading. Each root's reason is in the
+  table at the top of `src-tauri/src/fs.rs` and in
+  `docs/platform-shim.md`.
+- `window::read_saved_bounds` became `read_saved_state`, returning the
+  document, because startup now reads two things out of `config.json`
+  (the window rectangle and the download folders) and reading the file
+  once means the two cannot disagree about what was in it.
+- Files: `src-tauri/src/fs.rs` (new), `src-tauri/src/main.rs`,
+  `src-tauri/src/window.rs`, `src-tauri/capabilities/default.json`,
+  `src/renderer/lib/platform/tauri/fs.js`, `test/unit/platform-fs.js`,
+  `test/unit/platform-tauri.js`, `docs/platform-shim.md`,
+  `src-tauri/AGENTS.md`, `specs/prd.json`.
+- Verified. `cargo fmt --check`, `cargo clippy --all-targets -- -D
+  warnings` and `cargo test` (81 tests) pass; `npm test` passes (2294
+  assertions). Both sides were mutation-checked rather than taken on
+  trust: dropping the `Array.from` in `writeFile` fails two JS
+  assertions, and swapping `permits`'s `Path::starts_with` for a
+  string `starts_with` fails
+  `a_sibling_sharing_a_name_prefix_is_not_inside`.
+- Runtime evidence, taken with the probe before deleting it: against
+  the real host, `mkdir`/`write`/`read`/`stat`/`readdir`/`copy`/
+  `rename`/`unlink`/`exists` all succeeded inside `configPath`;
+  `readFile` came back as an `ArrayBuffer` with the right bytes;
+  `stat` serialized as `{"size":2,"isDirectory":false,"isFile":true}`;
+  and `/etc/passwd`, a write to `/etc/wt-probe` and a
+  `configPath + '/../../../../etc/passwd'` escape were each refused by
+  name, with `fs_exists` answering `false` for the refused path rather
+  than rejecting. After the probe was removed the binary was rebuilt
+  and launched again: no stderr, exits on `kill`, `pgrep` clean.
+- The interactive half of the criterion (state persisting across a
+  restart and a subtitle file loading *through the UI* under
+  `npm run start:tauri`) needs a human at the window and the rest of
+  the renderer cut over, so it goes to US-073 with US-057..US-059's
+  observations. The mechanism underneath it is proven above.
+- **Learnings for future iterations:**
+  - **A debug harness injected with
+    `append_invoke_initialization_script` is the fastest way to
+    exercise host commands non-interactively, and the easiest thing to
+    leave behind.** It runs inside the real webview with the real
+    allowlist, needs no UI, and prints through a one-line `probe`
+    command -- but it is a registered command that would ship, so
+    grep for it before committing. Now in the Patterns section.
+  - **Check the previous session's commit before starting.** This
+    story's code was already written under a `wip` message with
+    `passes: false` and no `progress.log` entry. Reviewing it -- which
+    is what turned up the probe -- was the work, not rewriting it.
+  - **A path check has to normalize before it resolves.** Resolving
+    the deepest existing ancestor of
+    `/granted/missing/../../etc/passwd` first leaves the `..`
+    components in the unresolved tail, and the result still starts
+    with `/granted`. `fs::real_path` takes them out textually and only
+    then canonicalizes, which is also what closes the symlink escape.
 ---
