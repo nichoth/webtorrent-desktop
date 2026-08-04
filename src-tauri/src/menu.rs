@@ -689,9 +689,12 @@ pub fn build<R: Runtime, M: Manager<R>>(
     Ok((menu, AppMenu { items }))
 }
 
-/// Build a context menu from descriptors. Nothing is indexed: a
-/// context menu lives for one popup and its items are never changed.
-pub fn build_context<R: Runtime, M: Manager<R>>(
+/// Build a menu from descriptors, without indexing anything: the
+/// caller either never changes an item afterwards, or replaces the
+/// whole menu when it does. That is a context menu, which lives for
+/// one popup, and the tray's, which is rebuilt to swap its one label
+/// exactly as `updateTrayMenu` rebuilds it (US-062).
+pub fn build_menu<R: Runtime, M: Manager<R>>(
     manager: &M,
     items: &[Item],
 ) -> tauri::Result<Menu<R>> {

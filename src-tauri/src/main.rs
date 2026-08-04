@@ -26,9 +26,11 @@ mod fs;
 mod menu;
 mod paths;
 mod shell;
+mod tray;
 mod window;
 
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde_json::{json, Value};
@@ -263,8 +265,7 @@ fn full_screen(
 /// `ipcOs.show`. Electron's `win.show()` focuses as well as shows.
 #[tauri::command]
 fn show(main: WebviewWindow) -> Result<(), String> {
-    main.show().map_err(failed)?;
-    main.set_focus().map_err(failed)
+    show_main(main.app_handle()).map_err(failed)
 }
 
 // -- the dialogs (US-058) --------------------------------------------
@@ -412,7 +413,7 @@ fn show_context_menu(
     items: Vec<menu::ContextItem>,
 ) -> Result<(), String> {
     let template = menu::context_template(menu, &items)?;
-    let built = menu::build_context(&main, &template).map_err(failed)?;
+    let built = menu::build_menu(&main, &template).map_err(failed)?;
 
     main.popup_menu(&built).map_err(failed)?;
     menus.hold(built);
@@ -495,8 +496,106 @@ fn perform(app: &AppHandle, action: Action) {
         }
         Action::ToggleAlwaysOnTop => toggle_always_on_top(app),
         Action::ToggleDevTools => toggle_dev_tools(app),
-        Action::Quit => app.exit(0),
+        Action::Quit => quit(app),
     }
+}
+
+// -- the tray (US-062) ------------------------------------------------
+//
+// `src/main/tray.js`, whose menu is two items and whose whole point is
+// that the window can go away without the app doing so. The shape is
+// the menu's: [`tray::template`] and [`tray::action`] are data, and
+// the three things a tray click can do are below.
+
+/// A tray menu item was chosen.
+fn on_tray_menu_click(app: &AppHandle, id: &str) {
+    // The toggle item keeps one id across both of its labels, so what
+    // the window is doing now decides what the click means -- the same
+    // reading that chose the label.
+    if let Some(action) = tray::action(id, is_main_visible(app)) {
+        perform_tray(app, action);
+    }
+}
+
+/// Do what a tray click says to do.
+fn perform_tray(app: &AppHandle, action: tray::Action) {
+    let done = match action {
+        tray::Action::Show => show_main(app),
+        tray::Action::Hide => hide_main(app),
+        tray::Action::Quit => {
+            quit(app);
+            Ok(())
+        }
+    };
+
+    if let Err(err) = done {
+        eprintln!("tray {action:?}: {err}");
+    }
+}
+
+/// `windows.main.show()`, and the tray menu follows the window.
+fn show_main(app: &AppHandle) -> tauri::Result<()> {
+    let Some(main) = app.get_webview_window(MAIN_WINDOW) else {
+        return Ok(());
+    };
+
+    main.show()?;
+    main.set_focus()?;
+    tray::refresh(app, true);
+    Ok(())
+}
+
+/// `windows.main.hide()`, which tells the renderer to leave the player
+/// before the window goes -- hiding a playing video would keep playing
+/// it.
+fn hide_main(app: &AppHandle) -> tauri::Result<()> {
+    let Some(main) = app.get_webview_window(MAIN_WINDOW) else {
+        return Ok(());
+    };
+
+    dispatch(app, "backToList", vec![]);
+    main.hide()?;
+    tray::refresh(app, false);
+    Ok(())
+}
+
+fn is_main_visible(app: &AppHandle) -> bool {
+    app.get_webview_window(MAIN_WINDOW)
+        .and_then(|main| main.is_visible().ok())
+        .unwrap_or(false)
+}
+
+/// `app.quit()`.
+///
+/// The flag is Electron's `app.isQuitting`, and it is here for the
+/// same reason: the window's close handler hides instead of closing,
+/// so the quit has to say that this close is the app going away.
+fn quit(app: &AppHandle) {
+    QUITTING.store(true, Ordering::SeqCst);
+    app.exit(0);
+}
+
+/// Whether the app is on its way out. See [`quit`].
+static QUITTING: AtomicBool = AtomicBool::new(false);
+
+/// The window's close button, which is `win.on('close')` in
+/// `src/main/windows/main.js`: with a tray to hide to, closing hides.
+fn watch_close(main: &WebviewWindow) {
+    let watched = main.clone();
+
+    main.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+            let app = watched.app_handle();
+            let quitting = QUITTING.load(Ordering::SeqCst);
+
+            if tray::on_close(tray::exists(app), quitting) == tray::Close::Hide {
+                api.prevent_close();
+                if let Err(err) = hide_main(app) {
+                    eprintln!("close: {err}");
+                }
+            }
+        }
+    });
 }
 
 /// `windows.main.dispatch(name, ...args)`: the renderer's own action,
@@ -997,6 +1096,11 @@ fn watch_focus(main: &WebviewWindow) {
             if let Some(app_menu) = watched.try_state::<AppMenu<Wry>>() {
                 app_menu.set_group_enabled(menu::WINDOW_FOCUS_ITEMS, *focused);
             }
+            // `tray.setWindowFocus`: the tray menu's toggle item reads
+            // the window's visibility, and a focus change is where
+            // `src/main/windows/main.js` has it catch up.
+            let app = watched.app_handle();
+            tray::refresh(app, is_main_visible(app));
         }
     });
 }
@@ -1110,6 +1214,14 @@ fn main() {
             menu.set_as_app_menu()?;
             watch_focus(&main);
 
+            // The tray, on the platforms that have one (US-062). It is
+            // created after the window because its menu describes what
+            // the window is doing, and it is what makes closing the
+            // window a hide rather than a quit -- so `watch_close`
+            // follows it.
+            tray::init(app.handle(), main.is_visible().unwrap_or(false))?;
+            watch_close(&main);
+
             app.manage(paths);
             app.manage(watch);
             app.manage(allowlist);
@@ -1155,8 +1267,20 @@ fn main() {
             fs_stat,
             fs_exists
         ])
-        .run(tauri::generate_context!())
-        .expect("failed to start the WebTorrent Desktop window");
+        .build(tauri::generate_context!())
+        .expect("failed to start the WebTorrent Desktop window")
+        .run(|app, event| match event {
+            // Whatever asked for the exit -- the menu, the tray, the
+            // OS -- the app is quitting from here on, which is what
+            // the window's close handler needs to know.
+            tauri::RunEvent::ExitRequested { .. } => {
+                QUITTING.store(true, Ordering::SeqCst);
+            }
+            // Take the tray icon down with the app rather than leaving
+            // it for the notification area to notice.
+            tauri::RunEvent::Exit => tray::destroy(app),
+            _ => {}
+        });
 }
 
 #[cfg(test)]

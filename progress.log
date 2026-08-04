@@ -89,6 +89,13 @@ it tight.
   specifiers like a barrel's `./clipboard` slip past a
   `resolve.alias` entry, and the resulting half-and-half bundle
   *builds* cleanly.
+- **A host feature the development machine does not have can still
+  be driven once.** macOS creates no tray, so `src/tray.rs` was
+  unobservable there until a throwaway `std::env::var` escape hatch in
+  its `init` forced it, after which `osascript` drove the real status
+  item (`menu bar 2`). The same shape works for anything gated on
+  `Platform::current()`: force it, drive it, revert the hatch and grep
+  for it before committing.
 - **A host command is checkable in the real webview without a UI.**
   `tauri::Builder::append_invoke_initialization_script` injects a
   script that runs with the real allowlist and capabilities, so a few
@@ -5391,4 +5398,71 @@ clean; the Rust gates were re-run after the revert).
     two can disagree (an accelerator that fails to parse is dropped
     silently, which is exactly this shape of bug). Budget a real
     launch for it rather than treating the unit tests as the gate.
+---
+
+## 2026-08-04 - US-062
+- Ported `src/main/tray.js` to the Rust host as `src-tauri/src/tray.rs`,
+  in the shape `menu.rs` and `window.rs` use: `is_supported`,
+  `template`, `action`, `click_action`, `menu_on_left_click`,
+  `on_close` and `icon_bytes` are pure functions of plain values, and
+  the world-touching half (`has_appindicator`, `init`, `exists`,
+  `refresh`, `destroy`) is at the bottom of the file.
+- The tray menu is built from `menu::Item` descriptors through
+  `menu::build_menu` (the old `build_context`, renamed -- a context
+  menu and the tray's share "built once, never edited"). Ids are
+  namespaced `tray:` so the three menus that arrive at the same event
+  cannot collide; a test asserts `menu::action` and
+  `menu::context_choice` both ignore them.
+- Wired into `main.rs`: `tray::init` after the window is restored,
+  `watch_close` for the close button, `show_main` / `hide_main` /
+  `quit` as the three things a tray click can do, tray refresh from
+  the focus watcher (Electron's `tray.setWindowFocus`), and
+  `.build(...).run(|app, event| ...)` so `RunEvent::Exit` takes the
+  icon down and `RunEvent::ExitRequested` sets the quitting flag.
+- Files: `src-tauri/src/tray.rs` (new), `src-tauri/src/main.rs`,
+  `src-tauri/src/menu.rs`, `src-tauri/Cargo.toml`, `Cargo.lock`,
+  `src-tauri/AGENTS.md`, `specs/prd.json`, `progress.log`.
+- Interpretation worth recording: the story says "port the tray", and
+  the tray's only consumer elsewhere is `tray.hasTray()` in the
+  window's close handler, so that handler came with it -- a tray that
+  cannot be hidden to is not the ported behaviour. Its macOS branch
+  did not: Electron hides on close there too and gets the window back
+  from the dock, which is US-063, so macOS closes for now and the doc
+  comment on `on_close` says why.
+- Verified on the real binary, not only in `cargo test` (three
+  launches, all cleaned up): the status item's menu read back
+  "Hide to tray, Quit"; clicking Hide left 0 windows with the process
+  alive and the menu relabelled "Show WebTorrent"; Show brought the
+  window back; Quit exited and took the icon with it; the close button
+  hid with a tray and exited without one.
+- **Learnings for future iterations:**
+  - **A `tauri` feature is how the tray and its icon exist at all.**
+    `tray-icon` for `TrayIconBuilder`, and `image-png` / `image-ico`
+    for `Image::from_bytes` -- without them the failure is a missing
+    method on `AppHandle`, which reads like an API-version problem
+    rather than a feature-flag one. Adding features recompiles the
+    tree (~1.5 min).
+  - **The icon has to be embedded.** `frontendDist` is walked into the
+    binary at compile time, so `static/WebTorrent.png` is not a file
+    at runtime in a packaged build; `include_bytes!` of the same asset
+    is the port of `getIconPath`, and the test asserts the PNG and ICO
+    magic rather than a path.
+  - **Hiding instead of closing needs the quit flag from day one.**
+    Electron carries `app.isQuitting` for exactly this, and without
+    the Rust equivalent every route out of the app (menu Quit, tray
+    Quit, the OS) is caught by the close handler and the app cannot be
+    quit at all. `.run(|app, event| ...)` instead of `.run(context)`
+    is what gives `ExitRequested` and `Exit`, and `Exit` is where the
+    tray comes down.
+  - **macOS AX reads of a *status* item are fresh**, unlike the menu
+    bar's (US-061). Item names came back changed immediately after the
+    window was hidden, so the tray can be asserted by name -- but the
+    behavioural check (`count of windows`) is still the stronger one
+    and cost nothing.
+  - **A platform this machine is not can still be driven once.** macOS
+    creates no tray, so the module was unobservable here until a
+    throwaway env-var escape hatch in `init` forced it; that plus
+    `osascript` on `menu bar 2` exercised the whole thing. Recipe in
+    `src-tauri/AGENTS.md`. Grep the hatch out before committing, the
+    same way US-060's probe command had to be.
 ---

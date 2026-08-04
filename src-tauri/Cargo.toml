@@ -15,7 +15,11 @@ rust-version = "1.77.2"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `tray-icon` is the tray (US-062); `image-png` and `image-ico` are the
+# decoders `Image::from_bytes` needs for the two icon files
+# `src/main/tray.js` picks between (`static/WebTorrent.png` and
+# `.ico`), which are embedded rather than read at runtime.
+tauri = { version = "2", features = ["tray-icon", "image-png", "image-ico"] }
 # Single-instance is a host concern the Electron main process gets from
 # `app.requestSingleInstanceLock()` (US-056).
 tauri-plugin-single-instance = "2"

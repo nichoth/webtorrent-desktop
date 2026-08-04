@@ -138,6 +138,53 @@ lockfile picks it anyway. So a non-Tauri dependency needs its
 is how the declaration stays true. Note *why* in `Cargo.toml`, because
 the next person's instinct is to unpin it.
 
+## The tray decides whether closing the window ends the app
+
+`src/tray.rs` is `src/main/tray.js`, and like the menus it is data
+first: `is_supported`, `template`, `action` and `on_close` are pure and
+asserted from any platform. Three things follow from it that are not
+local to the file:
+
+- **The tray is what makes a close a hide.** `on_close` is
+  `win.on('close')` in `src/main/windows/main.js`, and it needs the
+  `QUITTING` flag in `main.rs` -- Electron's `app.isQuitting` -- or the
+  quit the tray asks for is swallowed by the close handler that hides.
+  Anything that ends the app must go through `quit()`, and
+  `RunEvent::ExitRequested` sets the same flag for the exits that do
+  not.
+- **The tray icon is embedded, not read.** The document root is
+  compiled into the binary, so there is no `static/WebTorrent.png` on
+  disk in a packaged build; `icon_bytes` is `include_bytes!` and the
+  `image-png` / `image-ico` features on the `tauri` dependency are
+  what decode it. `tray-icon` is the feature for the tray itself.
+- **The menu is replaced, never edited.** The one item's label follows
+  the window, exactly as `updateTrayMenu` rebuilds the template, so
+  `refresh` builds a new menu and calls `set_menu`. Every path that
+  shows or hides the window has to call it.
+
+## Driving a real tray without a human (macOS)
+
+macOS gets no tray at all, which leaves the whole module unobservable
+on the development machine. A throwaway `std::env::var("WT_FORCE_TRAY")`
+escape hatch in `tray::init` plus `osascript` covers it, and unlike the
+application menu the reads here were **not** stale -- the item names
+came back changed immediately after the window was hidden:
+
+```
+osascript -e 'tell application "System Events" to tell process \
+  "webtorrent-desktop"
+click menu bar item 1 of menu bar 2
+delay 1
+name of every menu item of menu 1 of menu bar item 1 of menu bar 2
+end tell'
+```
+
+A status item lives in `menu bar 2` (`menu bar 1` is the app's own),
+`click menu item "Hide to tray" of menu 1 of ...` fires it, `count of
+windows` is whether the window is showing, and `click button 1 of
+window 1` is the close button. Revert the escape hatch before
+committing.
+
 ## Gates
 
 `cargo fmt --check` and `cargo clippy -- -D warnings` are gates from
