@@ -353,6 +353,38 @@ prints it before, during and after a player (see **Observing the
 webview non-interactively** above) is the whole of "they do not
 capture keys outside playback", and needs no key to be pressed.
 
+## Launch on login is three files, not an API
+
+`src/startup.rs` is `src/main/startup.js`, which is the `auto-launch`
+package. There is no Tauri or OS API behind it on any platform: it
+writes `~/Library/LaunchAgents/<name>.plist` on macOS,
+`~/.config/autostart/<name>.desktop` on Linux, and a value under
+`HKCU\...\CurrentVersion\Run` through `reg.exe` on Windows. All three
+are built as pure functions of an `Entry` and compiled everywhere, so
+a `cargo test` run on one platform checks the other two's spelling,
+and the two file-based ones are exercised for real against a temp
+directory.
+
+**The macOS branch deliberately differs from `startup.js`.** Electron
+gets `auto-launch`'s default there, a System Events *login item*, and
+that verb is dead on macOS 26.5.1: `make login item at end with
+properties {...}` answers `login item <name>` and adds nothing --
+absent from `every login item` two seconds later and from a fresh
+`osascript` after that, and deleting it fails with -1728. The launch
+agent is the same package's other macOS branch, works, and passes
+`--hidden` as a real argument, which is why `window::is_hidden` needs
+no equivalent of Electron's `wasOpenedAsHidden`. Before porting any
+other AppleScript verb, run it from a terminal and check the state it
+claims to have changed: `osascript` reported success for every call in
+this one.
+
+Driving it end to end needs no UI: launch the debug binary with a
+throwaway `HOME` (see below) and a probe that invokes `set_startup`,
+then look in `$HOME/Library/LaunchAgents`. `plutil -lint` on what lands
+there is the check that the plist is a plist. The `--hidden` half is a
+separate launch and one `osascript` line -- `count windows` of the
+process is 0 while it is up.
+
 ## A profile-reading feature is drivable with `HOME`
 
 `paths::Env::current` reads `HOME`, `XDG_CONFIG_HOME`, `LOCALAPPDATA`

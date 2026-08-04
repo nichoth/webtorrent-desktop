@@ -133,9 +133,18 @@ pub fn read_saved_state(config_path: &Path) -> String {
 
 /// Whether this launch should come up without showing the window.
 ///
-/// `src/main/index.js` reads the same flag out of `process.argv`. The
-/// macOS half of that test (`wasOpenedAsHidden`) belongs to
-/// launch-on-login and lands with it in US-069.
+/// `src/main/index.js` reads the same flag out of `process.argv`, and
+/// that is the whole test here on all three platforms: every login
+/// entry [`crate::startup`] writes passes `--hidden` on the command
+/// line, the macOS launch agent included.
+///
+/// The macOS half of Electron's test (`wasOpenedAsHidden`) is
+/// deliberately not ported (US-069). It exists because a login item
+/// carries no arguments, so Electron has to ask which login item
+/// started the process -- through the same deprecated
+/// `LSSharedFileList` API that made this host use a launch agent
+/// rather than a login item in the first place. With a real
+/// `--hidden` argument there is nothing left for it to answer.
 pub fn is_hidden<I>(args: I) -> bool
 where
     I: IntoIterator<Item = String>,

@@ -29,6 +29,7 @@ mod paths;
 mod power;
 mod shell;
 mod shortcuts;
+mod startup;
 mod tray;
 mod watcher;
 mod window;
@@ -557,6 +558,27 @@ fn start_folder_watcher(app: AppHandle) {
 #[tauri::command]
 fn stop_folder_watcher(folder_watcher: tauri::State<'_, FolderWatcher>) {
     folder_watcher.stop();
+}
+
+/// `ipcMain.on('setStartup')`: turn launching at login on or off,
+/// which is `install()` or `uninstall()` in `src/main/startup.js`.
+///
+/// `async` because the work is a file write on macOS and Linux and a
+/// `reg.exe` child on Windows; a synchronous command would do either
+/// on the main thread with the UI waiting on it.
+#[tauri::command]
+async fn set_startup(startup: bool) -> Result<(), String> {
+    let Some(entry) = startup::Entry::current() else {
+        return Err("cannot tell which executable to register".to_string());
+    };
+
+    let items = startup::platform_items();
+
+    if startup {
+        startup::install(items.as_ref(), &entry)
+    } else {
+        startup::uninstall(items.as_ref(), &entry)
+    }
 }
 
 /// Watch whatever folder the saved preferences name, or stop watching
@@ -1421,6 +1443,7 @@ fn main() {
             download_finished,
             start_folder_watcher,
             stop_folder_watcher,
+            set_startup,
             open_external,
             open_path,
             show_item_in_folder,

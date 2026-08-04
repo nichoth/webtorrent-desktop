@@ -182,6 +182,19 @@ it tight.
   `FOO=bar vite build` fails on Windows, which Phase 4 targets. Set it
   from a small Node wrapper that then calls the tool's JS API
   (`bin/build-renderer.js` is the example).
+- **An API Electron uses may be dead on the current OS -- check the
+  state, not the return value (US-069).** macOS's System Events
+  `make login item` answers `login item <name>` and adds nothing on
+  macOS 26.5.1; `auto-launch`'s default macOS branch, and therefore
+  `src/main/startup.js`, is a no-op there. A faithful port would have
+  been a preference that silently does nothing. Before porting a host
+  feature that rests on a deprecated API (AppleScript verbs,
+  `LSSharedFileList`, anything Chromium wraps), drive it once from the
+  terminal and read back the state it claims to have changed. Where
+  the mechanism is dead, say so in the module's doc comment with the
+  evidence and the OS version, then take the working alternative --
+  and note the deviation from the Electron behaviour rather than
+  leaving it to be discovered as a bug.
 - **Test scripts.** Since US-034 `npm run lint` is
   `standard && npm run lint:boundary`, and `npm test` is
   `npm run lint && depcheck && npm run test-unit`. Since US-019
@@ -5769,4 +5782,81 @@ clean; the Rust gates were re-run after the revert).
     keep (`watching()`) was a second answer to "which folder is being
     watched" with nothing keeping it honest, and the tests say it
     better by asserting which files the callback is handed.
+---
+## 2026-08-04 - US-069 Port launch-on-login to Rust
+
+- `src-tauri/src/startup.rs` is `src/main/startup.js`, which is the
+  `auto-launch` package and nothing else. No platform has an API for
+  this, so each one is a file or a registry value built as a pure
+  function of an `Entry` (the executable, and the name to file it
+  under): a `~/Library/LaunchAgents/<name>.plist` launch agent on
+  macOS, a `~/.config/autostart/<name>.desktop` entry on Linux, and a
+  `HKCU\...\CurrentVersion\Run` value written with `reg.exe` on
+  Windows. All three compile on every platform. The two guards
+  `startup.js` is made of -- install only when it is not installed,
+  uninstall only when it is -- are `install`/`uninstall` over a
+  `LoginItems` trait, which is also what makes them testable.
+- `main.rs` gains `set_startup(startup: bool)`, `async` because the
+  work is a file write or a child process. `tauri/ipc-os.js`'s
+  `setStartup` invokes it, is registered in `IMPLEMENTED` in
+  `test/unit/platform-tauri.js`, and is covered in
+  `test/unit/platform-tauri-ipc-os.js`. Nothing else on the JS side
+  changed: the preferences checkbox already calls this export.
+- **The macOS branch deliberately differs from `startup.js`**, which
+  gets `auto-launch`'s default -- a System Events login item. That
+  verb is dead on this OS (macOS 26.5.1): `make login item at end with
+  properties {...}` answers `login item <name>` and adds nothing, the
+  item is absent from `every login item` two seconds later and from a
+  fresh `osascript` after that, and deleting it fails with -1728. The
+  same happens without the `name` and `hidden` properties, so it is
+  the `LSSharedFileList` machinery behind the verb. The launch agent
+  is the same package's other macOS branch and it works. The reason
+  and the evidence are in the module's doc comment, because the next
+  person to compare the two hosts will otherwise read it as a mistake.
+- That choice also settles the `wasOpenedAsHidden` question
+  `window.rs` had left open for this story: a launch agent passes
+  `--hidden` as a real argument, so `is_hidden` reading argv is the
+  whole test on all three platforms and Electron's macOS-only login
+  item probe has nothing left to answer. The comment there says so.
+- Files: `src-tauri/src/startup.rs` (new), `src-tauri/src/main.rs`,
+  `src-tauri/src/window.rs`, `src-tauri/AGENTS.md`,
+  `src/renderer/lib/platform/tauri/ipc-os.js`,
+  `test/unit/platform-tauri.js`, `test/unit/platform-tauri-ipc-os.js`,
+  `progress.log`, `specs/prd.json`.
+- Verified. `cargo fmt --check`, `cargo clippy --all-targets -- -D
+  warnings` and `cargo test` (147 tests, 13 of them new) pass, as does
+  `npm test` (2329 assertions). The new tests were mutation-checked:
+  dropping the install guard fails two, removing the whole directory
+  instead of the file fails the round trip, and matching a login item
+  name by substring failed the parser test the earlier draft had.
+- Runtime evidence, two launches of the real binary with a throwaway
+  `HOME` and a probe that invokes `set_startup` (both reverted; `grep
+  PROBE` is clean). `set_startup(true)` wrote
+  `$HOME/Library/LaunchAgents/webtorrent-desktop.plist` naming this
+  binary and `--hidden`, and `plutil -lint` passes it.
+  `set_startup(false)` removed exactly that file and left the
+  directory. That second launch also carried `--hidden`, and System
+  Events counted 0 windows for the process while it was up.
+- What is left for a human (US-073): logging out and back in with the
+  preference on, on each platform, and seeing the app come up without
+  a window.
+
+- **Learnings for future iterations:**
+  - The pattern above (an API Electron uses can be dead on the current
+    OS) is the story's main one and is in `## Codebase Patterns`.
+  - **A `--hidden` launch is checkable in one line.**
+    `osascript -e 'tell application "System Events" to tell process
+    "webtorrent-desktop" to count windows'` answers 0 while the host is
+    up and hidden. Unlike the menu-item attribute reads, this is a
+    count of real windows and was not stale.
+  - **`append_invoke_initialization_script` takes an owned `String`,**
+    so a probe that varies per launch can be `format!`ed or `.replace`d
+    from an env var rather than needing two builds -- that is how one
+    binary did both the install and the uninstall launch here.
+  - **Two platforms' mechanisms turned out to be one.** `auto-launch`
+    shares its `fileBasedUtilities` between macOS's launch agent and
+    Linux's autostart entry, and following that gave the Linux branch
+    real coverage on macOS: `FileEntries` is exercised against a temp
+    directory for both file kinds, so the untestable platform here is
+    only Windows.
 ---

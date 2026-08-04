@@ -457,3 +457,40 @@ test('a folder watcher failure reaches the caller', async function (t) {
   core.invoke = real
   t.end()
 })
+
+// -- launch on login (US-069) -----------------------------------------
+//
+// `src/main/startup.js` is `auto-launch`, whose mechanism differs by
+// platform. None of that reaches the renderer under Electron -- it
+// sends a boolean and the main process decides -- and none of it
+// reaches the renderer here either.
+
+test('setStartup sends the preference and nothing else',
+  async function (t) {
+    reset()
+    await ipcOs.setStartup(true)
+    await ipcOs.setStartup(false)
+
+    t.deepEqual(invocations.map(c => c.command),
+      ['set_startup', 'set_startup'], 'one command for both directions')
+    t.deepEqual(invocations.map(c => c.args),
+      [{ startup: true }, { startup: false }],
+      'the argument key is the Rust parameter name')
+    t.end()
+  })
+
+test('a launch-on-login failure reaches the caller', async function (t) {
+  reset()
+  const real = core.invoke
+  core.invoke = async () => { throw new Error('osascript: refused') }
+
+  try {
+    await ipcOs.setStartup(true)
+    t.fail('resolved over a host failure')
+  } catch (err) {
+    t.equal(err.message, 'osascript: refused', 'the host error is not eaten')
+  }
+
+  core.invoke = real
+  t.end()
+})

@@ -177,8 +177,18 @@ export async function setDefaultFileHandler (isFileHandler) {
   notImplemented('ipc-os', 'setDefaultFileHandler')
 }
 
+/**
+ * Enable or disable launching the app at login (US-069).
+ *
+ * The mechanism is the host's and differs by platform -- a login
+ * item, an autostart entry or a registry value -- so the renderer
+ * says only whether it wants one, exactly as it does under Electron.
+ *
+ * @param {boolean} startup
+ * @returns {Promise<void>}
+ */
 export async function setStartup (startup) {
-  notImplemented('ipc-os', 'setStartup')
+  return invoke('set_startup', { startup })
 }
 
 /**

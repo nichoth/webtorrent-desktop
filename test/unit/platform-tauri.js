@@ -50,6 +50,7 @@ const IMPLEMENTED = {
   // US-063: the dock badge and the Downloads stack.
   // US-066: the power save blocker's two notifications.
   // US-068: the folder watcher's start and stop.
+  // US-069: the launch-at-login preference.
   'ipc-os.js': [
     'onWindowBoundsChanged',
     'setTitle',
@@ -69,7 +70,8 @@ const IMPLEMENTED = {
     'notifyPlayerPause',
     'onDispatch',
     'startFolderWatcher',
-    'stopFolderWatcher'
+    'stopFolderWatcher',
+    'setStartup'
   ],
   // US-057: the two current-window reads.
   'window.js': ['isVisible', 'isMaximized'],
