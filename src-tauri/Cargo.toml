@@ -55,6 +55,17 @@ tauri-plugin-global-shortcut = "2.3.2"
 # already in the tree underneath Tauri, so it adds nothing to the
 # build. No `rust-version` of its own; it documents rustc 1.36.
 getrandom = "0.2"
+# The update check (US-071), which is one HTTPS GET -- `simple-get` in
+# `src/main/updater.js`. Tauri's own HTTP surface is `reqwest`, whose
+# 0.13 needs rustc 1.85; this is blocking, which is the shape a check
+# on its own thread wants, and it brings no async runtime with it.
+#
+# Pinned exactly: ureq 3 needs rustc 1.85 as well. Its 2.x tree tops
+# out at `zeroize` 1.85, which is under the 1.86 that Tauri's own
+# `url` -> `idna` -> `icu_*` chain already requires -- so it does not
+# raise what this crate actually builds with. Lifting the pin means
+# revisiting `rust-version` above, which is an ADR-014 decision.
+ureq = "=2.12.1"
 
 # The dock's Downloads-stack bounce (US-063). Electron's
 # `app.dock.downloadFinished` is a `com.apple.DownloadFileFinished`

@@ -1200,8 +1200,8 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 71,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "The check, the feed URL and the dispatch are done and driven end to end against a stub feed on the real host (200 -> updateAvailable with the version reaches the webview, 204 -> nothing). The modal itself was not observed: the Tauri renderer bundle does not boot yet (ReferenceError: require), which US-072 owns. Downloading and installing an update stays with US-085."
     },
     {
       "id": "US-072",

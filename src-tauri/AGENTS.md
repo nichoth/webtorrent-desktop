@@ -439,3 +439,28 @@ start when the page loads, not when the process does, so a probe
 scheduled with `setTimeout` from
 `append_invoke_initialization_script` fires later than the same number
 of seconds measured from the shell.
+
+## The probe script runs before `__TAURI_INTERNALS__` exists
+
+`append_invoke_initialization_script` is still the way to drive host
+commands from the real webview (see the entries above), but a call at
+the *top level* of that script throws -- `invoke` is not defined yet --
+and the throw takes the rest of the script with it, with no error
+printed anywhere. The symptom is total silence, which reads exactly
+like a script that was never injected. Wrap the whole probe in a
+`setTimeout(..., 800)`, the way US-060's did. Where the builder call
+sits in the chain makes no difference; that was checked (US-071).
+
+Subscribing to an event from such a probe goes through the internal
+command, which needs the target as well as the name:
+
+```js
+window.__TAURI_INTERNALS__.invoke('plugin:event|listen', {
+  event: 'dispatch',
+  target: { kind: 'Any' },
+  handler: window.__TAURI_INTERNALS__.transformCallback((e) => ...)
+})
+```
+
+Without `target` it rejects with `command listen missing required key
+target`, which is at least a message rather than silence.

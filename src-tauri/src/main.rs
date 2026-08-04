@@ -32,6 +32,7 @@ mod shell;
 mod shortcuts;
 mod startup;
 mod tray;
+mod updater;
 mod watcher;
 mod window;
 
@@ -634,6 +635,43 @@ fn watch_folder(app: &AppHandle) {
             dispatch(&handle, "addTorrent", vec![json!(path.to_string_lossy())]);
         },
     );
+}
+
+/// `updater.init()` in `delayedInit` (US-071): ask the feed whether
+/// there is a newer version, and tell the renderer if there is.
+///
+/// On a thread of its own because the request blocks, and after the
+/// same [`updater::DELAYED_INIT`] wait `src/main/index.js` makes --
+/// which here also gives the renderer time to subscribe, since a
+/// dispatch nobody is listening to yet is a dispatch nobody hears.
+///
+/// The renderer half of this is the `onDispatch` subscription it
+/// already has: `updateAvailable` is the action
+/// `controllers/update-controller.js` handles under both hosts, and
+/// neither it nor the modal changes.
+fn check_for_updates(app: &AppHandle) {
+    let app = app.clone();
+
+    std::thread::spawn(move || {
+        std::thread::sleep(updater::DELAYED_INIT);
+
+        let url = updater::feed_url(
+            updater::AUTO_UPDATE_URL,
+            updater::APP_VERSION,
+            updater::platform_name(Platform::current()),
+            updater::sysarch(),
+        );
+
+        match updater::check(&url) {
+            updater::Outcome::Available(version) => {
+                dispatch(&app, "updateAvailable", vec![json!(version)]);
+            }
+            // `// No update available` -- the Electron host does
+            // nothing here either.
+            updater::Outcome::UpToDate => {}
+            updater::Outcome::Failed(err) => eprintln!("Update error: {err}"),
+        }
+    });
 }
 
 /// A menu item was chosen, in either menu.
@@ -1460,6 +1498,11 @@ fn main() {
             if watcher::saved_prefs(&saved_state).auto_add_torrents {
                 watch_folder(app.handle());
             }
+
+            // The other half of `delayedInit`: the update check
+            // (US-071), which waits out the same delay on its own
+            // thread rather than holding this one.
+            check_for_updates(app.handle());
 
             // Both menus arrive here: an application item's id maps to
             // an action, a context item's to the choice the renderer is

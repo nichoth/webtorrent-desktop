@@ -57,7 +57,14 @@ it tight.
   the lockfile picks it anyway. A non-Tauri dependency therefore needs
   its own MSRV checked and, if it moves, pinning exactly
   (`trash = "=5.2.3"`, US-059) with the reason in a `Cargo.toml`
-  comment -- the next person's instinct is to unpin it.
+  comment -- the next person's instinct is to unpin it. But measure a
+  candidate against what the tree **already** requires, not against
+  1.77.2: Tauri's own `url` -> `idna` -> `icu_*` chain needs 1.86
+  today, so the declared MSRV is a statement of intent that the build
+  has already outgrown. `cargo tree -i <crate>` (with `--target all`
+  when the answer is "nothing to print") says whether a lockfile entry
+  is actually compiled -- `reqwest` 0.13, MSRV 1.85, is in the lock and
+  is not.
 - **macOS TCC blocks reading protected directories even outside the
   sandbox.** `~/.Trash` is the one hit so far: `ls` fails with
   `Operation not permitted` unless the terminal has been granted Full
@@ -165,7 +172,13 @@ it tight.
   from one background launch (US-060 proved the nine `fs_*` commands
   and their refusals that way). It is also a registered command that
   would ship: grep the probe's name out of `main.rs` before
-  committing.
+  committing. **Wrap the whole probe in a `setTimeout`**: at the top
+  level `window.__TAURI_INTERNALS__.invoke` does not exist yet, and the
+  throw takes the rest of the script with it in total silence, which
+  looks exactly like a script that was never injected (US-071). Where
+  the builder call sits in the chain is irrelevant. Recipes, including
+  the `plugin:event|listen` spelling for subscribing to an event from a
+  probe, are in `src-tauri/AGENTS.md`.
 - **The OS side of a host feature is checkable with `osascript`, but
   only behaviourally.** System Events drives the real menu bar with no
   human and no UI work: enumerate `menu bar item`s, `click menu item
@@ -5939,4 +5952,76 @@ child survives either a `pkill` of the host or a real Cmd-Q.
     AGENTS.md warning is worth believing: a probe at 3000ms fired every
     time and the same probe moved to 8000ms produced total silence on a
     background launch.
+---
+## 2026-08-04 - US-071 (port the updater to Tauri)
+
+- `src-tauri/src/updater.rs`: the whole of `src/main/updater.js` as a
+  pure decision (`feed_url`, `outcome`, `sysarch_for`, `platform_name`)
+  plus one blocking `check` over `ureq`. `check_for_updates` in
+  `main.rs` runs it on its own thread after the same
+  `config.DELAYED_INIT` wait `delayedInit` makes, and dispatches
+  `updateAvailable` on the channel the renderer already listens to.
+  Nothing in `src/renderer/` changed: `controllers/update-controller.js`
+  and the modal are untouched, and the shim needed no new export.
+- `ureq = "=2.12.1"` added, pinned, with the MSRV reasoning in
+  `Cargo.toml`.
+- Tests: eleven in `updater.rs` -- the URL, the platform and width
+  spellings, all four outcomes of a response, a stub feed on a
+  loopback port answering an update and then a 204 through the real
+  agent, and a port nothing listens on. `matches_src_config_js` shells
+  out to node the way `paths.rs` does, so a change to
+  `AUTO_UPDATE_URL`, `APP_VERSION`, `OS_SYSARCH` or `DELAYED_INIT` on
+  the JS side alone fails `cargo test` -- including the `package.json`
+  version bump the crate's version is supposed to follow by hand.
+- Verified on the real host: two background launches against a local
+  stub feed with a throwaway `HOME`, one answering 200 and one 204.
+  The feed saw
+  `/desktop/update?version=0.24.0&platform=darwin&sysarch=x64` both
+  times; the webview received `["updateAvailable","9.9.9"]` on the
+  dispatch channel in the first and nothing in the second. Probe and
+  the feed-URL env hatch reverted afterwards.
+- Files: `src-tauri/src/updater.rs` (new), `src-tauri/src/main.rs`,
+  `src-tauri/Cargo.toml`, `src-tauri/Cargo.lock`,
+  `src-tauri/AGENTS.md`, `specs/prd.json`, `progress.log`.
+
+**The acceptance criterion about the UI is met at the event, not at the
+pixel.** `.modal` never appears, because the Tauri renderer bundle
+still does not boot -- the same `ReferenceError: Can't find variable:
+require` US-070 recorded, which **US-072 owns**. What was proved
+instead is everything up to and including the webview: the host emits
+the dispatch, and `updateAvailable` with the version is what arrives in
+the page. The renderer half of that hop is the `onDispatch`
+subscription the folder watcher already uses.
+
+- **Learnings for future iterations:**
+  - **`config.js`'s `arch()` is not `os.arch()`.** `OS_SYSARCH` reads
+    the `arch` npm package, which answers whether the **OS** is 64-bit
+    and only ever says `x64` or `x86` -- so an Apple-silicon machine
+    asks the update feed for `x64`, and a port over `target_arch`
+    would have asked for `ia32` on every arm build. Read the package,
+    not the name, when mirroring a `config.js` value: the first cut of
+    this was wrong and passed its test only because the Rust toolchain
+    on this machine is `x86_64-apple-darwin` under Rosetta while node
+    is native arm64. Two readings of "the architecture" on one machine
+    disagree, so make the test compare the *decision* rather than a
+    value both sides happen to derive the same way.
+  - **A port can be more faithful by dropping a branch.**
+    `src/main/updater.js` uses Electron's Squirrel `autoUpdater` on
+    macOS and Windows, which silently downloads and installs; a
+    like-for-like port would be a feature that does nothing at all
+    until signing lands in Phase 5. Doing the Linux check on all three
+    platforms delivers what the story asks for and is a smaller
+    surface for US-085 to replace. The deviation is in the module's
+    doc comment with what the user sees.
+  - **`ureq` 2 is the HTTP shape this host wants.** Blocking, no async
+    runtime, and it reports a 4xx/5xx as `Error::Status(code,
+    response)` rather than a status on an `Ok` -- so the code that
+    decides what a response means has to be reachable from both arms,
+    which is why `outcome` takes a plain `(status, body)`.
+  - **A stub HTTP feed is 30 lines of `std::net`.** `TcpListener` on
+    `127.0.0.1:0`, read to the blank line, write a response with
+    `Connection: close`, and hand the request line back to the test so
+    it can assert on the query string. No dev-dependency, and it makes
+    the network half of the module a unit test rather than something
+    only a manual launch covers.
 ---
