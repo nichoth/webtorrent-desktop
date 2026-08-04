@@ -181,12 +181,27 @@ export async function setStartup (startup) {
   notImplemented('ipc-os', 'setStartup')
 }
 
+/**
+ * Start watching the configured torrents folder (US-068).
+ *
+ * No argument, as the Electron sibling has none: which folder, and
+ * whether the preference is on at all, is in the saved state, and the
+ * host reads it for itself. A torrent that appears there arrives back
+ * as `addTorrent` on the `onDispatch` channel above.
+ *
+ * @returns {Promise<void>}
+ */
 export async function startFolderWatcher () {
-  notImplemented('ipc-os', 'startFolderWatcher')
+  return invoke('start_folder_watcher')
 }
 
+/**
+ * Stop watching the configured torrents folder (US-068).
+ *
+ * @returns {Promise<void>}
+ */
 export async function stopFolderWatcher () {
-  notImplemented('ipc-os', 'stopFolderWatcher')
+  return invoke('stop_folder_watcher')
 }
 
 export async function checkForExternalPlayer (path) {

@@ -414,3 +414,46 @@ test('neither dock command swallows a host failure', async function (t) {
   core.invoke = real
   t.end()
 })
+
+// -- the folder watcher (US-068) --------------------------------------
+//
+// `src/main/folder-watcher.js` reads the folder and the preference out
+// of the saved state itself, and the renderer only ever says "start"
+// or "stop". That stays true here: neither command carries anything,
+// and the torrents it finds arrive on the `dispatch` event above as
+// `addTorrent`, which is the channel the Electron host dispatches on
+// too.
+
+test('the folder watcher commands take no arguments', async function (t) {
+  reset()
+  await ipcOs.startFolderWatcher()
+  await ipcOs.stopFolderWatcher()
+
+  t.deepEqual(invocations.map(c => c.command),
+    ['start_folder_watcher', 'stop_folder_watcher'],
+    'one command each')
+  t.deepEqual(invocations.map(c => c.args), [undefined, undefined],
+    'the host reads the folder out of the saved state, as Electron does')
+  t.end()
+})
+
+test('a folder watcher failure reaches the caller', async function (t) {
+  reset()
+  const real = core.invoke
+  core.invoke = async () => { throw new Error('no such folder') }
+
+  for (const call of [
+    () => ipcOs.startFolderWatcher(),
+    () => ipcOs.stopFolderWatcher()
+  ]) {
+    try {
+      await call()
+      t.fail('resolved over a host failure')
+    } catch (err) {
+      t.equal(err.message, 'no such folder', 'the host error is not eaten')
+    }
+  }
+
+  core.invoke = real
+  t.end()
+})

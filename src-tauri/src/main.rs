@@ -30,6 +30,7 @@ mod power;
 mod shell;
 mod shortcuts;
 mod tray;
+mod watcher;
 mod window;
 
 use std::path::Path;
@@ -49,6 +50,7 @@ use menu::{Action, AppMenu, ContextMenus, Platform};
 use paths::AppPaths;
 use power::PowerSaveBlocker;
 use shortcuts::MediaShortcuts;
+use watcher::FolderWatcher;
 use window::{Debounce, FullscreenWatch, ProgressBar, WindowLayout};
 
 /// The label of the one window, as `tauri.conf.json` declares it.
@@ -538,6 +540,55 @@ fn download_finished(app: AppHandle, path: String) -> Result<(), String> {
 
     app.run_on_main_thread(move || dock::bounce_downloads_stack(&path))
         .map_err(failed)
+}
+
+/// `ipcMain.on('startFolderWatcher')`.
+///
+/// Takes nothing, exactly as the Electron handler does: which folder
+/// to watch is the user's `torrentsFolderPath` preference, and the
+/// host reads the saved state for itself rather than being told
+/// (`src/main/saved-state.js`).
+#[tauri::command]
+fn start_folder_watcher(app: AppHandle) {
+    watch_folder(&app);
+}
+
+/// `ipcMain.on('stopFolderWatcher')`.
+#[tauri::command]
+fn stop_folder_watcher(folder_watcher: tauri::State<'_, FolderWatcher>) {
+    folder_watcher.stop();
+}
+
+/// Watch whatever folder the saved preferences name, or stop watching
+/// if they name none -- `FolderWatcher.start()`, which bails on an
+/// unset `torrentsFolderPath` having already stopped the previous
+/// watch.
+///
+/// The file is re-read here rather than at launch, so that picking a
+/// different folder and switching the preference back on takes effect
+/// without a restart.
+fn watch_folder(app: &AppHandle) {
+    let paths = app.state::<AppPaths>();
+    let prefs = watcher::saved_prefs(&window::read_saved_state(&paths.config_path));
+    let folder_watcher = app.state::<FolderWatcher>();
+
+    let Some(folder) = prefs.folder() else {
+        folder_watcher.stop();
+        return;
+    };
+
+    // `this.window.dispatch('addTorrent', path)`: the same action on
+    // the same channel the Electron host sends it on, so the renderer
+    // half of this is the `onDispatch` subscription it already has.
+    let handle = app.clone();
+    folder_watcher.start(
+        folder,
+        watcher::POLL_INTERVAL,
+        watcher::STABLE_POLLS,
+        move |path| {
+            dispatch(&handle, "addTorrent", vec![json!(path.to_string_lossy())]);
+        },
+    );
 }
 
 /// A menu item was chosen, in either menu.
@@ -1330,6 +1381,16 @@ fn main() {
             app.manage(allowlist);
             app.manage(app_menu);
             app.manage(ContextMenus::<Wry>::default());
+            app.manage(FolderWatcher::default());
+
+            // `delayedInit` in `src/main/index.js`: the watcher comes
+            // up with the app when the preference is already on, so
+            // that a torrent dropped in the folder is added without
+            // the preferences screen having been opened first
+            // (US-068).
+            if watcher::saved_prefs(&saved_state).auto_add_torrents {
+                watch_folder(app.handle());
+            }
 
             // Both menus arrive here: an application item's id maps to
             // an action, a context item's to the choice the renderer is
@@ -1358,6 +1419,8 @@ fn main() {
             notify_player_update,
             set_badge,
             download_finished,
+            start_folder_watcher,
+            stop_folder_watcher,
             open_external,
             open_path,
             show_item_in_folder,
@@ -1393,6 +1456,12 @@ fn main() {
                 }
                 if let Some(media_keys) = app.try_state::<MediaShortcuts>() {
                     media_keys.disable();
+                }
+                // Ends the polling thread rather than leaving it
+                // scanning the folder while the app tears down
+                // (US-068).
+                if let Some(folder_watcher) = app.try_state::<FolderWatcher>() {
+                    folder_watcher.stop();
                 }
                 tray::destroy(app);
             }

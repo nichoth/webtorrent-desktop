@@ -123,6 +123,19 @@ it tight.
   `app.run_on_main_thread(move || ...)`, and the `cfg` stays inside
   the module -- a `#[cfg(not(target_os = "macos"))]` no-op twin keeps
   every caller free of it.
+- **A profile-reading host feature is drivable with a throwaway
+  `HOME` (US-068).** `paths::Env::current` reads `HOME`,
+  `XDG_CONFIG_HOME`, `LOCALAPPDATA` and `USERPROFILE` and nothing
+  else, so `HOME=/tmp/x src-tauri/target/debug/webtorrent-desktop`
+  gives the launch a whole profile of its own -- seed the
+  `config.json` the check needs and the real one is never touched.
+  Two traps: the host is not up when the launch command returns (a
+  debug build took over two seconds to reach `setup()`, and a
+  stimulus delivered before that is indistinguishable from a feature
+  that does not work), and a `setTimeout` in an
+  `append_invoke_initialization_script` probe is measured from page
+  load, not process start. Anchor the timeline on a `println!` from
+  inside `setup()`.
 - **A crate that does the job cross-platform is not automatically
   cheaper than doing it here (US-066).** `keepawake` is exactly
   `powerSaveBlocker`, and its own `rust-version` is 1.64 -- but
@@ -5697,4 +5710,63 @@ clean; the Rust gates were re-run after the revert).
     that is `cargo add` followed by a lockfile diff and a
     `cargo metadata` read of each new package's `rust_version`, not
     the crate's own `rust-version`.
+---
+## 2026-08-04 - US-068 Port the folder watcher to Rust
+
+- `src-tauri/src/watcher.rs` is `src/main/folder-watcher.js`: it reads
+  the watcher's two preferences out of the renderer's `config.json`
+  (`saved_prefs`, alongside `window::read_saved_state`), scans the
+  configured folder recursively for `.torrent` files (`scan`), decides
+  which of them are new and finished being written (`Watch`), and runs
+  the polling thread the two commands start and stop
+  (`FolderWatcher`).
+- `main.rs` gains `start_folder_watcher` and `stop_folder_watcher`,
+  both argument-free, as the Electron IPC handlers are. The watcher
+  also comes up at launch when `autoAddTorrents` is already on, which
+  is `delayedInit` in `src/main/index.js`, and is stopped on
+  `RunEvent::Exit` beside the power blocker and the media keys. Each
+  torrent found goes out as `dispatch('addTorrent', path)` -- the same
+  action on the same channel the Electron host sends it on, so the
+  renderer half is the `onDispatch` subscription it already had.
+- `tauri/ipc-os.js` implements the two exports over `invoke`; they are
+  registered in `test/unit/platform-tauri.js`'s `IMPLEMENTED` and
+  covered in `test/unit/platform-tauri-ipc-os.js`.
+- Files: `src-tauri/src/watcher.rs` (new), `src-tauri/src/main.rs`,
+  `src-tauri/AGENTS.md`, `src/renderer/lib/platform/tauri/ipc-os.js`,
+  `test/unit/platform-tauri-ipc-os.js`, `test/unit/platform-tauri.js`,
+  `specs/prd.json`.
+- Checked end to end in the real binary, one launch, with a throwaway
+  `HOME` so the check had a profile of its own: the watcher started
+  from the saved preference, reported a torrent dropped into a
+  *subfolder* of the watched one, reported nothing after
+  `stop_folder_watcher` arrived from the webview, and reported the
+  next drop after `start_folder_watcher` arrived. The probe is
+  reverted; `grep WATCH-PROBE` is clean.
+
+- **Learnings for future iterations:**
+  - **`chokidar` has no Rust equivalent worth taking here.** `notify`
+    8 is the current line and its `notify-types` 2.1 needs rustc 1.85,
+    over ADR-014's 1.77.2; `notify` 6 is inside it (everything at or
+    below 1.75) but is a superseded major line and 20 packages. And
+    neither gives `awaitWriteFinish`, which is the part that matters
+    -- a half-written `.torrent` handed to the engine is a broken
+    torrent -- so a size-stability poll has to be written either way.
+    Once it is, what remains is a directory walk, which is `std`.
+  - **`ignoreInitial` has to be sampled where the caller is, not on
+    the new thread.** Taking the "what was already here" scan inside
+    the spawned thread makes "is this file an addition or was it
+    already there" a scheduling race, and the losing side is silent:
+    the file is filed as pre-existing and never reported. The first
+    version did that and its own test caught it.
+  - **The saved state is re-read on every start.** The Electron main
+    process loads `config.json` once at launch, so changing the
+    watched folder there does not take effect until a restart; this
+    host reads the file again in `watch_folder`, which is what makes
+    "toggle the preference and it works" true without one.
+  - A `pub` method used only by that module's tests fails
+    `cargo clippy -- -D warnings` as dead code. That is usually the
+    right answer rather than an `#[allow]`: the getter it wanted to
+    keep (`watching()`) was a second answer to "which folder is being
+    watched" with nothing keeping it honest, and the tests say it
+    better by asserting which files the callback is handed.
 ---

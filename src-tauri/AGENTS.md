@@ -352,3 +352,26 @@ Whether the keys are actually held is readable from inside the host:
 prints it before, during and after a player (see **Observing the
 webview non-interactively** above) is the whole of "they do not
 capture keys outside playback", and needs no key to be pressed.
+
+## A profile-reading feature is drivable with `HOME`
+
+`paths::Env::current` reads `HOME`, `XDG_CONFIG_HOME`, `LOCALAPPDATA`
+and `USERPROFILE` and nothing else, so launching the debug binary with
+`HOME=/tmp/some-throwaway` gives it a whole profile of its own. That is
+how anything that reads or writes `config.json` gets exercised without
+seeding -- or destroying -- the real one in
+`~/Library/Application Support/WebTorrent`. Write the `config.json` the
+check needs under
+`$HOME/Library/Application Support/WebTorrent/` first, then launch.
+
+Two things the folder watcher's check (US-068) got wrong the first
+time. **The host is not up when the launch command returns**: a debug
+build took over two seconds to reach `setup()`, so a file dropped in
+the watched folder at t=2 was still part of the *initial* scan and was
+correctly ignored -- which reads exactly like a watcher that does not
+work. Anchor the timeline on a `println!` from inside `setup()`, and
+leave a wide margin before the first stimulus. And the webview's timers
+start when the page loads, not when the process does, so a probe
+scheduled with `setTimeout` from
+`append_invoke_initialization_script` fires later than the same number
+of seconds measured from the shell.
