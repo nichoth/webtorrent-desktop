@@ -1,74 +1,290 @@
-import captureFrame from 'capture-frame'
+/**
+ * Choose, fetch and save the poster image for a torrent.
+ *
+ * US-043 / ADR-013: this runs in the UI renderer. It used to run in the
+ * hidden WebTorrent window, which had both a DOM and the torrent
+ * objects; the engine is a Node process now (ADR-012) and has neither a
+ * media decoder nor a canvas, so poster generation moved here rather
+ * than being shimmed. wt-generate-torrent-poster and wt-poster are
+ * gone from the wire with it.
+ *
+ * Three things changed shape in the move, and all three are deliberate:
+ *
+ * 1. Input is `torrentSummary.files` -- `{ name, length, path }` per
+ *    file, which the UI already holds from wt-metadata. No `torrent`
+ *    object, no new data on the wire.
+ * 2. File bytes come from the engine's streaming HTTP server by index
+ *    (`${serverURL}/${index}`) with `fetch`, replacing
+ *    `file.getBuffer()`. The video branch already built that URL.
+ * 3. Bytes are `Uint8Array` throughout and the file is written through
+ *    `platform/fs`, so no Node object is involved. `capture-frame`,
+ *    which returned a `Buffer`, is gone (ADR-007).
+ *
+ * The file name is unchanged -- `infoHash + extension` under
+ * `config.POSTER_PATH` -- so state saved by earlier versions still
+ * resolves through `lib/torrent-summary.js`.
+ */
+
 import path from 'path'
 
+import config from '../../config'
 import mediaExtensions from './media-extensions'
+import { captureVideoFrame } from './video-frame'
+import * as fs from './platform/fs'
+import * as ipcEngine from './platform/ipc-engine'
 
-const msgNoSuitablePoster = 'Cannot generate a poster from any files in the torrent'
+const msgNoSuitablePoster =
+  'Cannot generate a poster from any files in the torrent'
 
-export default function torrentPoster (torrent, cb) {
-  // First, try to use a poster image if available
-  const posterFile = torrent.files.filter(file => /^poster\.(jpg|png|gif)$/.test(file.name))[0]
-  if (posterFile) return extractPoster(posterFile, cb)
+// One job at a time. The decode, seek and canvas read now happen in the
+// window the user is looking at, so a burst of added torrents must not
+// turn into a burst of concurrent video decodes (ADR-013).
+let queue = Promise.resolve()
+
+// Nothing here is allowed to wedge the queue. A torrent whose pieces
+// never arrive would otherwise hold it forever and no later torrent
+// would ever get a poster.
+const JOB_TIMEOUT = 60 * 1000
+
+/**
+ * @typedef {object} PosterSource
+ * @property {'file'|'video'} kind  `file` is read as-is, `video` is
+ *   decoded and a frame captured.
+ * @property {number} index        Index within the torrent's file list.
+ * @property {string} extension    Extension for the saved poster.
+ */
+
+/**
+ * Decide where a torrent's poster should come from. Pure: file names
+ * and lengths only, no IO.
+ *
+ * @param {{name: string, length: number}[]} files
+ * @returns {PosterSource|null} `null` when no file is suitable.
+ */
+export function choosePosterSource (files) {
+  if (!files || files.length === 0) return null
+
+  // First, use a poster image if the torrent ships one
+  const posterIndex = files
+    .findIndex(file => /^poster\.(jpg|png|gif)$/.test(file.name))
+  if (posterIndex !== -1) return asFile(files, posterIndex)
 
   // 'score' each media type based on total size present in torrent
   const bestScore = ['audio', 'video', 'image'].map(mediaType => ({
     type: mediaType,
-    size: calculateDataLengthByExtension(torrent, mediaExtensions[mediaType])
+    size: totalLengthByExtension(files, mediaExtensions[mediaType])
   })).sort((a, b) => b.size - a.size)[0] // sort descending on size
 
-  if (bestScore.size === 0) {
-    // Admit defeat, no video, audio or image had a significant presence
-    return cb(new Error(msgNoSuitablePoster))
-  }
+  // Admit defeat, no video, audio or image had a significant presence
+  if (bestScore.size === 0) return null
 
-  // Based on which media type is dominant we select the corresponding poster function
   switch (bestScore.type) {
     case 'audio':
-      return torrentPosterFromAudio(torrent, cb)
+      return chooseAudioCover(files)
     case 'image':
-      return torrentPosterFromImage(torrent, cb)
-    case 'video':
-      return torrentPosterFromVideo(torrent, cb)
+      return asFile(files, largestByExtension(files, mediaExtensions.image))
+    case 'video': {
+      const index = largestByExtension(files, mediaExtensions.video)
+      return { kind: 'video', index, extension: '.jpg' }
+    }
   }
 }
 
 /**
- * Calculate the total data size of file matching one of the provided extensions
- * @param torrent
- * @param extensions List of extension to match
- * @returns {number} total size, of matches found (>= 0)
+ * Read the poster bytes for a torrent off the engine's streaming
+ * server.
+ *
+ * @param {{infoHash: string, files: object[]}} torrentSummary
+ * @param {string} serverURL Base URL of the engine's HTTP server.
+ * @returns {Promise<{bytes: Uint8Array, extension: string}>}
+ * @throws When the torrent has no suitable file, or the read fails.
  */
-function calculateDataLengthByExtension (torrent, extensions) {
-  const files = filterOnExtension(torrent, extensions)
-  if (files.length === 0) return 0
-  return files
-    .map(file => file.length)
-    .reduce((a, b) => a + b)
+export default async function torrentPoster (torrentSummary, serverURL) {
+  const source = choosePosterSource(torrentSummary.files)
+  if (!source) throw new Error(msgNoSuitablePoster)
+
+  const url = `${serverURL}/${source.index}`
+  const bytes = source.kind === 'video'
+    ? await captureVideoFrame(url)
+    : await fetchBytes(url)
+
+  if (!bytes || bytes.length === 0) throw new Error(msgNoSuitablePoster)
+  return { bytes, extension: source.extension }
 }
 
 /**
- * Get the largest file of a given torrent, filtered by provided extension
- * @param torrent Torrent to search in
- * @param extensions Extension whitelist filter
- * @returns Torrent file object
+ * Generate a torrent's poster and save it under `config.POSTER_PATH`.
+ *
+ * Quiet on failure, as the wt-generate-torrent-poster channel was:
+ * the caller keeps the placeholder and the user is told nothing. Jobs
+ * are serialized, so this may not start immediately.
+ *
+ * @param {{infoHash: string, files: object[]}} torrentSummary
+ * @returns {Promise<string|null>} The poster's file name, or `null` if
+ *   no poster could be made.
  */
-function getLargestFileByExtension (torrent, extensions) {
-  const files = filterOnExtension(torrent, extensions)
-  if (files.length === 0) return undefined
-  return files.reduce((a, b) => a.length > b.length ? a : b)
+export function generateTorrentPoster (torrentSummary) {
+  const job = queue.then(
+    () => runPosterJob(torrentSummary),
+    () => runPosterJob(torrentSummary)
+  )
+  // The queue must survive a failed job, and a rejection here is
+  // already reported by `runPosterJob`.
+  queue = job.then(() => {}, () => {})
+  return job
+}
+
+async function runPosterJob (torrentSummary) {
+  const { infoHash } = torrentSummary
+
+  // Nothing needs a server if nothing can be made from the torrent.
+  if (!choosePosterSource(torrentSummary.files)) {
+    console.log('no poster for torrent %s: %s', infoHash, msgNoSuitablePoster)
+    return null
+  }
+
+  try {
+    return await withTimeout(savePoster(torrentSummary), JOB_TIMEOUT)
+  } catch (err) {
+    // Same silence the engine kept: log it, leave the placeholder.
+    console.log('error generating poster for %s: %o', infoHash, err)
+    return null
+  } finally {
+    // Release this job's hold on the server whatever happened. The
+    // engine counts holders, so this does not disturb a player
+    // streaming the same torrent.
+    try {
+      await ipcEngine.stopServer(infoHash)
+    } catch (err) {
+      console.log('error releasing poster server for %s: %o', infoHash, err)
+    }
+  }
+}
+
+async function savePoster (torrentSummary) {
+  const { infoHash } = torrentSummary
+  const serverURL = await startServer(infoHash)
+  const { bytes, extension } = await torrentPoster(torrentSummary, serverURL)
+
+  const posterFileName = infoHash + extension
+  await fs.mkdir(config.POSTER_PATH)
+  await fs.writeFile(path.join(config.POSTER_PATH, posterFileName), bytes)
+  console.log('saved poster %s', posterFileName)
+  return posterFileName
 }
 
 /**
- * Filter file on a list extension, can be used to find al image files
- * @param torrent Torrent to filter files from
- * @param extensions File extensions to filter on
- * @returns {Array} Array of torrent file objects matching one of the given extensions
+ * Ask the engine for this torrent's streaming server and wait for its
+ * URL. wt-start-server is idempotent per torrent and always replies,
+ * so this resolves whether or not a server was already up (ADR-013).
  */
-function filterOnExtension (torrent, extensions) {
-  return torrent.files.filter(file => {
-    const extname = path.extname(file.name).toLowerCase()
-    return extensions.indexOf(extname) !== -1
+async function startServer (infoHash) {
+  let unsubscribe = null
+  try {
+    return await new Promise((resolve, reject) => {
+      ipcEngine.onServerRunningFor(
+        infoHash, (info) => resolve(info.localURL), { once: true }
+      ).then((off) => {
+        unsubscribe = off
+        return ipcEngine.startServer(infoHash)
+      }).catch(reject)
+    })
+  } finally {
+    if (unsubscribe) unsubscribe()
+  }
+}
+
+async function fetchBytes (url) {
+  const response = await fetch(url)
+  if (!response.ok) {
+    throw new Error(`${msgNoSuitablePoster}: HTTP ${response.status}`)
+  }
+  return new Uint8Array(await response.arrayBuffer())
+}
+
+function withTimeout (promise, ms) {
+  let timer = null
+  const timeout = new Promise((resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`timed out after ${ms}ms`)), ms
+    )
   })
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer))
+}
+
+/**
+ * @param {object[]} files
+ * @param {number} index
+ * @returns {PosterSource}
+ */
+function asFile (files, index) {
+  return {
+    kind: 'file',
+    index,
+    extension: path.extname(files[index].name)
+  }
+}
+
+/**
+ * Total size of the files matching one of the given extensions.
+ *
+ * @param {object[]} files
+ * @param {string[]} extensions
+ * @returns {number} Total size of the matches found (>= 0)
+ */
+function totalLengthByExtension (files, extensions) {
+  return indexesByExtension(files, extensions)
+    .reduce((total, index) => total + files[index].length, 0)
+}
+
+/**
+ * Index of the largest file matching one of the given extensions.
+ *
+ * @param {object[]} files
+ * @param {string[]} extensions
+ * @returns {number} -1 when nothing matches
+ */
+function largestByExtension (files, extensions) {
+  return indexesByExtension(files, extensions)
+    .reduce((a, b) => (a === -1 || files[b].length > files[a].length ? b : a), -1)
+}
+
+/**
+ * Indexes of the files matching one of the given extensions.
+ *
+ * @param {object[]} files
+ * @param {string[]} extensions
+ * @returns {number[]}
+ */
+function indexesByExtension (files, extensions) {
+  return files
+    .map((file, index) => index)
+    .filter(index => {
+      const extname = path.extname(files[index].name).toLowerCase()
+      return extensions.indexOf(extname) !== -1
+    })
+}
+
+/**
+ * Pick the image most likely to be an album cover.
+ *
+ * @param {object[]} files
+ * @returns {PosterSource|null}
+ */
+function chooseAudioCover (files) {
+  const candidates = indexesByExtension(files, mediaExtensions.image)
+  if (candidates.length === 0) return null
+
+  const best = candidates
+    .map(index => ({ index, score: scoreAudioCoverFile(files[index]) }))
+    .reduce((a, b) => {
+      if (a.score !== b.score) return a.score > b.score ? a : b
+      // If score is equal, pick the largest file, aiming for the
+      // highest resolution
+      return files[a.index].length > files[b.index].length ? a : b
+    })
+
+  return asFile(files, best.index)
 }
 
 /**
@@ -77,7 +293,9 @@ function filterOnExtension (torrent, extensions) {
  * @returns {number} Score, higher score is a better match
  */
 function scoreAudioCoverFile (imgFile) {
-  const fileName = path.basename(imgFile.name, path.extname(imgFile.name)).toLowerCase()
+  const fileName = path
+    .basename(imgFile.name, path.extname(imgFile.name))
+    .toLowerCase()
   const relevanceScore = {
     cover: 80,
     folder: 80,
@@ -96,85 +314,4 @@ function scoreAudioCoverFile (imgFile) {
     }
   }
   return 0
-}
-
-function torrentPosterFromAudio (torrent, cb) {
-  const imageFiles = filterOnExtension(torrent, mediaExtensions.image)
-
-  if (imageFiles.length === 0) return cb(new Error(msgNoSuitablePoster))
-
-  const bestCover = imageFiles.map(file => ({
-    file,
-    score: scoreAudioCoverFile(file)
-  })).reduce((a, b) => {
-    if (a.score > b.score) {
-      return a
-    }
-    if (b.score > a.score) {
-      return b
-    }
-    // If score is equal, pick the largest file, aiming for highest resolution
-    if (a.file.length > b.file.length) {
-      return a
-    }
-    return b
-  })
-
-  const extname = path.extname(bestCover.file.name)
-  bestCover.file.getBuffer((err, buf) => cb(err, buf, extname))
-}
-
-function torrentPosterFromVideo (torrent, cb) {
-  const file = getLargestFileByExtension(torrent, mediaExtensions.video)
-
-  const index = torrent.files.indexOf(file)
-
-  const server = torrent.createServer(0)
-  server.listen(0, onListening)
-
-  function onListening () {
-    const port = server.address().port
-    const url = 'http://localhost:' + port + '/' + index
-    const video = document.createElement('video')
-    video.addEventListener('canplay', onCanPlay)
-
-    video.volume = 0
-    video.src = url
-    video.play()
-
-    function onCanPlay () {
-      video.removeEventListener('canplay', onCanPlay)
-      video.addEventListener('seeked', onSeeked)
-
-      video.currentTime = Math.min((video.duration || 600) * 0.03, 60)
-    }
-
-    function onSeeked () {
-      video.removeEventListener('seeked', onSeeked)
-
-      const frame = captureFrame(video)
-      const buf = frame && frame.image
-
-      // unload video element
-      video.pause()
-      video.src = ''
-      video.load()
-
-      server.destroy()
-
-      if (buf.length === 0) return cb(new Error(msgNoSuitablePoster))
-
-      cb(null, buf, '.jpg')
-    }
-  }
-}
-
-function torrentPosterFromImage (torrent, cb) {
-  const file = getLargestFileByExtension(torrent, mediaExtensions.image)
-  extractPoster(file, cb)
-}
-
-function extractPoster (file, cb) {
-  const extname = path.extname(file.name)
-  file.getBuffer((err, buf) => cb(err, buf, extname))
 }

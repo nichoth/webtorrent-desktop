@@ -1,11 +1,19 @@
+// First, and deliberately: it installs the `Buffer` global that the
+// torrent stack below assumes. ES modules initialize in import order,
+// so anything above this line would run without one. See
+// `lib/buffer-global.js`.
+import './lib/buffer-global'
+
 import createGetter from 'fn-getter'
 import debounce from 'debounce'
 import dragDrop from 'drag-drop'
 import React from 'react'
 import ReactDOM from 'react-dom'
 
-import config from '../config'
-import * as Cast from './lib/cast'
+// `useHostPaths` by name: the default export is the values, and it is
+// one of the two surfaces this call writes to, so it cannot be reached
+// through it. See the "Keep in sync" comment in `src/config.js`.
+import config, { useHostPaths } from '../config'
 import State from './lib/state'
 import * as sound from './lib/sound'
 import * as TorrentPlayer from './lib/torrent-player'
@@ -14,6 +22,7 @@ import * as clipboard from './lib/platform/clipboard'
 import * as platformFs from './lib/platform/fs'
 import * as ipcEngine from './lib/platform/ipc-engine'
 import * as ipcOs from './lib/platform/ipc-os'
+import * as paths from './lib/platform/paths'
 import * as platformWindow from './lib/platform/window'
 
 // Perf optimization: Needed immediately, so do not lazy load it below
@@ -24,6 +33,7 @@ import TorrentListController from './controllers/torrent-list-controller'
 // synchronous controllers map -- so they are static imports now. The thunks
 // still defer *construction*; only module loading moved to startup.
 import AudioTracksController from './controllers/audio-tracks-controller'
+import CastController from './controllers/cast-controller'
 import FolderWatcherController from './controllers/folder-watcher-controller'
 import MediaController from './controllers/media-controller'
 import PlaybackController from './controllers/playback-controller'
@@ -39,7 +49,26 @@ console.time('init')
 // This used to sit above the module's other require() calls, so that the
 // asynchronous config file read overlapped with them. ESM hoists every import
 // to the top of the module, so that overlap is no longer expressible here.
-State.load(onState)
+bootstrap()
+
+// The host answers first, and that ordering is load-bearing. In a
+// webview `src/config.js` cannot resolve where the user's data lives
+// -- it has no `$HOME` and no platform convention -- so `CONFIG_PATH`
+// and its siblings are empty strings until `app_paths` lands in
+// `config.useHostPaths` (US-054, US-072). A `State.load()` that ran
+// first would read and write `./config.json`, relative to whatever the
+// webview considers its working directory: not an error, just the
+// wrong profile, invisibly.
+//
+// No `catch`. There is no UI to report into at this point -- `onError`
+// writes into `state`, which `onState` below is what creates -- and a
+// failure here leaves nothing to continue with, since every path the
+// app would touch is still the empty string. The rejection surfaces in
+// the webview console carrying the host's own message.
+async function bootstrap () {
+  useHostPaths(await paths.appPaths())
+  State.load(onState)
+}
 
 // Yo-yo pattern: state object lives here and percolates down thru all the views.
 // Events come back up from the views via dispatch(...)
@@ -47,12 +76,6 @@ setDispatch(dispatch)
 
 // From dispatch(...), events are sent to one of the controllers
 let controllers = null
-
-// Cast is the slowest-loading dependency, so it used to be require()d inside
-// lazyLoadCast() below. ESM has no synchronous conditional import, so the
-// module is loaded at startup now; only Cast.init() -- the local network scan
-// -- is still deferred to delayedInit().
-let castInitialized = false
 
 // All state lives in state.js. `state.saved` is read from and written to a file.
 // All other state is ephemeral. First we load state.saved then initialize the app.
@@ -81,6 +104,7 @@ function onState (err, _state) {
     prefs: createGetter(() => new PrefsController(state, config)),
     subtitles: createGetter(() => new SubtitlesController(state)),
     audioTracks: createGetter(() => new AudioTracksController(state)),
+    cast: createGetter(() => new CastController(state, update)),
     torrent: createGetter(() => new TorrentController(state)),
     torrentList: createGetter(() => new TorrentListController(state)),
     update: createGetter(() => new UpdateController(state)),
@@ -168,16 +192,10 @@ function delayedInit () {
   document.addEventListener('webkitvisibilitychange', onVisibilityChange)
   onVisibilityChange()
 
-  lazyLoadCast()
-}
-
-// Lazily loads Chromecast and Airplay support
-function lazyLoadCast () {
-  if (!castInitialized) {
-    castInitialized = true
-    Cast.init(state, update) // Search the local network for Chromecast and Airplays
-  }
-  return Cast
+  // Search the local network for Chromecast, DLNA and AirPlay receivers.
+  // The scan runs on the host since US-079, so this costs the renderer
+  // nothing -- but it is still traffic that can wait for startup.
+  controllers.cast().start()
 }
 
 // React loop:
@@ -272,6 +290,7 @@ const dispatchHandlers = {
   toggleAudioTracksMenu: () => controllers.audioTracks().toggleAudioTracksMenu(),
 
   // Local media: <video>, <audio>, external players
+  checkMediaPlayability: () => controllers.media().checkMediaPlayability(),
   mediaStalled: () => controllers.media().mediaStalled(),
   mediaError: (err) => controllers.media().mediaError(err),
   mediaSuccess: () => controllers.media().mediaSuccess(),
@@ -283,9 +302,9 @@ const dispatchHandlers = {
   externalPlayerNotFound: () => controllers.media().externalPlayerNotFound(),
 
   // Remote casting: Chromecast, Airplay, etc
-  toggleCastMenu: (deviceType) => lazyLoadCast().toggleMenu(deviceType),
-  selectCastDevice: (index) => lazyLoadCast().selectDevice(index),
-  stopCasting: () => lazyLoadCast().stop(),
+  toggleCastMenu: (deviceType) => controllers.cast().toggleMenu(deviceType),
+  selectCastDevice: (index) => controllers.cast().selectDevice(index),
+  stopCasting: () => controllers.cast().stop(),
 
   // Preferences screen
   preferences: () => controllers.prefs().show(),
@@ -373,7 +392,6 @@ async function setupIpc () {
     ipcEngine.onProgress((...args) => tc.torrentProgress(...args)),
     ipcEngine.onFileModtimes((...args) => tc.torrentFileModtimes(...args)),
     ipcEngine.onTorrentFileSaved((...args) => tc.torrentFileSaved(...args)),
-    ipcEngine.onPosterSaved((...args) => tc.torrentPosterSaved(...args)),
     ipcEngine.onAudioMetadata((...args) => tc.torrentAudioMetadata(...args)),
     ipcEngine.onServerRunning((...args) => tc.torrentServerRunning(...args))
   ])
@@ -424,22 +442,20 @@ function resumeTorrents () {
 
 // Set window dimensions to match video dimensions or fill the screen.
 //
-// The maximize check is async through the shim, so the geometry reads
-// are taken here, synchronously, before the suspension point: the saved
-// bounds and the maximize check that guards them then still describe
-// one instant, even though the save itself lands a tick later (see
-// docs/platform-shim.md). Nothing reads state.window.bounds
-// synchronously after a dispatch('setDimensions') -- restoreBounds()
-// runs when the player is closed.
+// The rectangle and the maximize check are one host read, so they
+// describe one instant even though the save lands a tick later (see
+// docs/platform-shim.md). The rectangle used to be four DOM reads of
+// the page's screen position and outer size, taken synchronously ahead
+// of an async maximize check, which is what kept the two together
+// under Electron -- but a webview's DOM does not know the OS window's
+// rectangle at all, so the reads moved to the host rather than moving
+// earlier. Nothing reads
+// state.window.bounds synchronously after a dispatch('setDimensions')
+// -- restoreBounds() runs when the player is closed.
 function setDimensions (dimensions) {
-  const bounds = {
-    x: window.screenX,
-    y: window.screenY,
-    width: window.outerWidth,
-    height: window.outerHeight
-  }
-  platformWindow.isMaximized()
-    .then(maximized => applyDimensions(dimensions, bounds, maximized))
+  platformWindow.getBounds()
+    .then(({ maximized, ...bounds }) =>
+      applyDimensions(dimensions, bounds, maximized))
     .catch(err => dispatch('error', err))
 }
 

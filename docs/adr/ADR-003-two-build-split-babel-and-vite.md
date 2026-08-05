@@ -2,6 +2,15 @@
 
 **Date:** 2026-07-27
 
+**Amended by US-072 (2026-08-04).** The split stands; its reason
+changed. The main process this ADR wrote it for is deleted, so the
+Babel half is now called `build:node` rather than `build:main` and
+exists for the engine sidecar (ADR-012), the `src/config.js` and
+`src/shared/wire.js` it shares with the renderer, and the unit suite's
+CommonJS copy of the renderer libraries (ADR-010). Nothing under
+`src/renderer/` is loaded from two sides any more, so the ordering
+hazard below is history.
+
 ## Context
 
 Introducing Vite (ADR-002) raised the question of how far it should

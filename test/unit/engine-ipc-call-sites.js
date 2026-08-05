@@ -14,6 +14,15 @@ const babel = require('@babel/core')
 // hand-built channel string, and that a rejected shim promise reaches
 // `dispatch('error', ...)` rather than floating.
 //
+// US-044 replaced the transport under that shim -- `ipcRenderer` became
+// a WebSocket client of the sidecar -- without changing one export
+// name, argument or return type. This file therefore still describes
+// exactly what it described before, and US-046 kept it: the stubs below
+// stand in for `ipc-engine.js` itself, so no assertion here ever named
+// a transport. What proves the transport swap is
+// `test/unit/platform-ipc-engine.js` (the shim against a fake socket)
+// and `test/unit/engine-bus-websocket.js` (the sidecar's own end).
+//
 // Controllers are excluded from `build:main`, so each one under test is
 // compiled here with the repo's own Babel config and emitted into
 // `build/renderer/controllers/`, where its `../lib/...` imports resolve
@@ -75,14 +84,15 @@ const ENGINE_COMMANDS = [
   'stopTorrenting',
   'createTorrent',
   'saveTorrentFile',
-  'generateTorrentPoster',
   'getAudioMetadata',
   'startServer',
   'stopServer',
   'selectFiles'
 ]
 
-const ENGINE_LISTENERS = ['onTorrentReadyFor', 'onServerRunning']
+const ENGINE_LISTENERS = [
+  'onTorrentReadyFor', 'onServerRunning', 'onServerRunningFor'
+]
 
 const ipcEngineStub = { __esModule: true }
 
@@ -141,7 +151,14 @@ stub(path.join(BUILT, 'lib', 'platform', 'ipc-os'), ipcOsStub)
 // and a real built shim module loaded here would bind *this* file's
 // `electron` stub for the whole run, breaking `platform-clipboard.js`
 // and friends further down the glob (test/AGENTS.md).
-for (const name of ['clipboard', 'dialog', 'fs', 'menu', 'shell']) {
+//
+// `cast` is on this list for the mirror-image reason: it is the one
+// shim module `playback-controller` imports that has no Electron under
+// it. Letting it load would bind the *real* `@tauri-apps/api` into
+// `require.cache` here, and `platform-cast.js` -- which runs later in
+// the glob and stubs that package -- would then be handed this file's
+// already-bound copy and fail on `window is not defined` (US-079).
+for (const name of ['cast', 'clipboard', 'dialog', 'fs', 'menu', 'shell']) {
   stub(path.join(BUILT, 'lib', 'platform', name), new Proxy(
     { __esModule: true },
     {
@@ -220,7 +237,10 @@ test('a duplicate torrent is stopped through the shim',
     t.end()
   })
 
-test('new metadata asks the engine to save the file and the poster',
+// The poster is no longer the engine's job (US-043, ADR-013), so only
+// the .torrent file goes out over the shim here. `test/unit/poster.js`
+// covers what the poster module does instead.
+test('new metadata asks the engine to save the torrent file',
   async function (t) {
     reset()
     const summary = { torrentKey: 'key1', status: 'new' }
@@ -228,10 +248,8 @@ test('new metadata asks the engine to save the file and the poster',
     new TorrentController(state)
       .torrentMetadata('key1', { name: 'n', path: '/tmp/dl', files: [] })
     await flush()
-    t.deepEqual(record.engine, [
-      ['saveTorrentFile', 'key1'],
-      ['generateTorrentPoster', 'key1']
-    ], 'both requests go through the shim')
+    t.deepEqual(record.engine, [['saveTorrentFile', 'key1']],
+      'the request goes through the shim')
     t.end()
   })
 
@@ -347,8 +365,10 @@ test('a running torrent starts its server through the shim',
     await flush()
     t.deepEqual(record.engine, [['startServer', 'abc']],
       'the server request goes out')
-    t.deepEqual(record.listeners.map((l) => l.name), ['onServerRunning'],
-      'and one server listener was registered')
+    t.deepEqual(record.listeners.map((l) => l.name), ['onServerRunningFor'],
+      'and one server listener was registered, by info hash')
+    t.deepEqual(record.listeners[0].args, ['abc', { once: true }],
+      'addressed by info hash, one-shot')
     record.listeners[0].listener({})
     t.equal(state.playing.isReady, true, 'the reply marks playback ready')
     t.end()
@@ -384,14 +404,14 @@ test('closing the player stops the server through the shim',
   async function (t) {
     reset()
     const state = {
-      playing: { location: 'local', volume: 1 },
+      playing: { location: 'local', volume: 1, infoHash: 'abc' },
       window: { isFullScreen: false, bounds: null },
       saved: { prefs: {} }
     }
     new PlaybackController(state, {}, () => {}).closePlayer()
     await flush()
-    t.deepEqual(record.engine, [['stopServer']],
-      'the server is stopped through the shim')
+    t.deepEqual(record.engine, [['stopServer', 'abc']],
+      'the server is released by info hash')
     t.end()
   })
 
@@ -401,7 +421,7 @@ test('with no server yet, the external player waits through the shim',
   async function (t) {
     reset()
     const state = {
-      playing: { fileIndex: 0, fileName: 'x.mp4' },
+      playing: { fileIndex: 0, fileName: 'x.mp4', infoHash: 'abc' },
       server: null,
       window: { title: 'T' },
       saved: { prefs: { externalPlayerPath: '' } }
@@ -409,8 +429,9 @@ test('with no server yet, the external player waits through the shim',
     new MediaController(state).openExternalPlayer()
     await flush()
     t.equal(record.listeners.length, 1, 'one listener was registered')
-    t.equal(record.listeners[0].name, 'onServerRunning',
+    t.equal(record.listeners[0].name, 'onServerRunningFor',
       'on the engine shim, not ipcRenderer')
-    t.deepEqual(record.listeners[0].args, [{ once: true }], 'one-shot')
+    t.deepEqual(record.listeners[0].args, ['abc', { once: true }],
+      'addressed by info hash, one-shot')
     t.end()
   })

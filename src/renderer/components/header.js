@@ -1,6 +1,7 @@
 import React from 'react'
 
 import { dispatcher } from '../lib/dispatcher'
+import * as os from '../lib/os'
 
 class Header extends React.Component {
   render () {
@@ -44,7 +45,7 @@ class Header extends React.Component {
   }
 
   getTitle () {
-    if (process.platform !== 'darwin') return null
+    if (!os.isDarwin()) return null
     const state = this.props.state
     return (<div className='title ellipsis'>{state.window.title}</div>)
   }

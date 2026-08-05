@@ -1,155 +1,646 @@
 const test = require('tape')
 
-// `ipc-os.js` compiles to `var _electron = require('electron')` plus a
-// lazy `_electron.ipcRenderer` at each call site, so seeding
-// `require.cache` for the real resolution of 'electron' is enough to
-// stub the whole module. Must happen before the first require of the
-// module under test.
-const electronPath = require.resolve('electron')
+// US-056: the first shim export with the Rust host behind it.
+//
+// `onWindowBoundsChanged` is the renderer's half of the window
+// restore loop: the host emits the rectangle on the same event name
+// the Electron main process used to send it on, and the renderer
+// saves what it receives. What is asserted here is the shim's side of that
+// contract -- the event name, the payload the caller sees, and the
+// unsubscribe function every listener export resolves to.
+//
+// Same `require.cache` stub route as `platform-dialog.js`; see
+// `test/AGENTS.md`. The stub's exports object is bound once, at the
+// first require of the module under test, so the recording state
+// lives behind stable functions rather than being rebuilt.
 
-function makeIpcStub () {
-  const listeners = new Map()
-  const stub = {
-    sent: [],
-    listeners,
-    send (channel, ...args) {
-      stub.sent.push({ channel, args })
-    },
-    on (channel, fn) {
-      if (!listeners.has(channel)) listeners.set(channel, [])
-      listeners.get(channel).push({ fn, once: false })
-    },
-    once (channel, fn) {
-      if (!listeners.has(channel)) listeners.set(channel, [])
-      listeners.get(channel).push({ fn, once: true })
-    },
-    removeListener (channel, fn) {
-      const all = listeners.get(channel) || []
-      const i = all.findIndex((l) => l.fn === fn)
-      if (i !== -1) all.splice(i, 1)
-    },
-    // Pretend the main process sent an event on `channel`.
-    emit (channel, ...args) {
-      const all = (listeners.get(channel) || []).slice()
-      for (const l of all) {
-        if (l.once) stub.removeListener(channel, l.fn)
-        l.fn({ channel }, ...args)
-      }
-    },
-    count (channel) {
-      return (listeners.get(channel) || []).length
-    }
-  }
-  return stub
-}
+const eventPath = require.resolve('@tauri-apps/api/event')
+const corePath = require.resolve('@tauri-apps/api/core')
 
-let ipc = makeIpcStub()
-require.cache[electronPath] = {
-  id: electronPath,
-  filename: electronPath,
+let calls = []
+let unsubscribe = () => {}
+
+let invocations = []
+let answer
+
+require.cache[eventPath] = {
+  id: eventPath,
+  filename: eventPath,
   loaded: true,
   exports: {
-    get ipcRenderer () { return ipc }
+    __esModule: true,
+    async listen (name, handler) {
+      calls.push({ api: 'listen', name, handler })
+      return unsubscribe
+    },
+    async once (name, handler) {
+      calls.push({ api: 'once', name, handler })
+      return unsubscribe
+    }
   }
+}
+
+// US-057 added the window-control half, which is commands rather than
+// events. This file requires `platform/ipc-os` first in the glob, so this
+// is the `invoke` that module binds for the whole run -- a later file
+// seeding its own core stub (`platform-window.js` does) gets a fresh
+// entry for its own module and leaves this one alone.
+//
+// The reference is kept here rather than read back out of
+// `require.cache` at use, because that later file overwrites the
+// entry: the cache holds *its* stub by then, and `ipc-os` holds this
+// one.
+const core = {
+  __esModule: true,
+  async invoke (command, args) {
+    invocations.push({ command, args })
+    return answer
+  }
+}
+
+require.cache[corePath] = {
+  id: corePath,
+  filename: corePath,
+  loaded: true,
+  exports: core
 }
 
 const ipcOs = require('../../build/renderer/lib/platform/ipc-os')
 
 function reset () {
-  ipc = makeIpcStub()
+  calls = []
+  unsubscribe = () => {}
+  invocations = []
+  answer = undefined
 }
 
-test('every export is async', function (t) {
-  const names = Object.keys(ipcOs).filter((k) => typeof ipcOs[k] === 'function')
-  t.ok(names.length > 0, 'module exports functions')
-  const sync = names.filter(
-    (n) => ipcOs[n].constructor.name !== 'AsyncFunction'
-  )
-  t.deepEqual(sync, [], 'no synchronous exports')
+test('onWindowBoundsChanged subscribes to the host event',
+  async function (t) {
+    reset()
+    await ipcOs.onWindowBoundsChanged(() => {})
+
+    t.equal(calls.length, 1, 'registered once')
+    t.equal(calls[0].api, 'listen', 'a standing subscription by default')
+    t.equal(calls[0].name, 'windowBoundsChanged',
+      'the same event name the Electron host sends')
+    t.end()
+  })
+
+test('onWindowBoundsChanged hands the caller the payload alone',
+  async function (t) {
+    reset()
+    const received = []
+    await ipcOs.onWindowBoundsChanged((bounds) => received.push(bounds))
+
+    const bounds = { x: 1, y: 2, width: 500, height: 638 }
+    calls[0].handler({ event: 'windowBoundsChanged', id: 7, payload: bounds })
+
+    t.deepEqual(received, [bounds],
+      'the rectangle, not the Tauri event envelope')
+    t.end()
+  })
+
+test('onWindowBoundsChanged resolves to an unsubscribe function',
+  async function (t) {
+    reset()
+    let stopped = 0
+    unsubscribe = () => { stopped++ }
+
+    const stop = await ipcOs.onWindowBoundsChanged(() => {})
+    t.equal(typeof stop, 'function', 'resolved to a function')
+    stop()
+    t.equal(stopped, 1, 'it is the host unsubscribe')
+    t.end()
+  })
+
+test('onWindowBoundsChanged honours { once: true }', async function (t) {
+  reset()
+  await ipcOs.onWindowBoundsChanged(() => {}, { once: true })
+
+  t.equal(calls[0].api, 'once', 'a one-shot subscription')
+  t.equal(calls[0].name, 'windowBoundsChanged', 'on the same event')
   t.end()
 })
 
-test('no export sends on a wt-* channel', async function (t) {
+test('onWindowBoundsChanged returns a promise', function (t) {
   reset()
-  // Call every command with harmless arguments and assert nothing
-  // reached an engine channel. Listener registrations are covered by
-  // the channel assertion below too.
-  const skip = ['checkForExternalPlayer']
-  for (const name of Object.keys(ipcOs)) {
-    if (typeof ipcOs[name] !== 'function' || skip.includes(name)) continue
-    if (name.startsWith('on')) {
-      await ipcOs[name](() => {})
-    } else {
-      await ipcOs[name]()
+  t.ok(ipcOs.onWindowBoundsChanged(() => {}) instanceof Promise,
+    'every shim export is async (FR-10)')
+  t.end()
+})
+
+// -- the window controls (US-057) ------------------------------------
+//
+// Each of these is one command in `src-tauri/src/main.rs`, and the
+// contract asserted here is the command name and the arguments: the
+// Rust side names its parameters in snake_case and Tauri accepts them
+// as camelCase, so a renamed key here is a silently ignored argument
+// rather than a failure. The behaviour behind each command (the
+// fullscreen guard, the centring, the progress mapping) is tested in
+// Rust, where it lives.
+
+test('setTitle sends the title to the host', async function (t) {
+  reset()
+  await ipcOs.setTitle('WebTorrent - 42%')
+
+  t.deepEqual(invocations, [{
+    command: 'set_title',
+    args: { title: 'WebTorrent - 42%' }
+  }], 'one command, carrying the title')
+  t.end()
+})
+
+test('setProgress sends the fraction unchanged', async function (t) {
+  reset()
+  await ipcOs.setProgress(0.5)
+  await ipcOs.setProgress(-1)
+
+  t.deepEqual(invocations.map(c => c.command), ['set_progress', 'set_progress'])
+  t.deepEqual(invocations.map(c => c.args.progress), [0.5, -1],
+    'the out-of-range values keep their meaning for the host to read')
+  t.end()
+})
+
+test('setBounds sends the rectangle and the maximize flag',
+  async function (t) {
+    reset()
+    const bounds = { contentBounds: true, x: null, y: null, width: 640, height: 480 }
+    await ipcOs.setBounds(bounds, false)
+
+    t.equal(invocations.length, 1, 'one command')
+    t.equal(invocations[0].command, 'set_bounds', 'named the command')
+    t.deepEqual(invocations[0].args.bounds, bounds,
+      'the rectangle crosses as the caller wrote it, nulls and all')
+    t.equal(invocations[0].args.maximize, false, 'and the flag')
+    t.end()
+  })
+
+test('setBounds sends null rather than undefined for no flag',
+  async function (t) {
+    reset()
+    await ipcOs.setBounds({ width: 500, height: 638 })
+
+    t.equal(invocations[0].args.maximize, null,
+      'an omitted flag is JSON null, which the host reads as "leave it"')
+    t.end()
+  })
+
+test('setAspectRatio asks the host, which does not support it',
+  async function (t) {
+    reset()
+    await ipcOs.setAspectRatio(1.78)
+
+    t.deepEqual(invocations, [{
+      command: 'set_aspect_ratio',
+      args: { aspectRatio: 1.78 }
+    }], 'still one call per track, so the day Tauri gains the API ' +
+      'there is one place to fill in')
+    t.end()
+  })
+
+test('toggleFullScreen carries the flag, and null when omitted',
+  async function (t) {
+    reset()
+    await ipcOs.toggleFullScreen(true)
+    await ipcOs.toggleFullScreen()
+
+    t.deepEqual(invocations.map(c => c.command),
+      ['toggle_full_screen', 'toggle_full_screen'])
+    t.equal(invocations[0].args.setTo, true, 'the explicit flag')
+    t.equal(invocations[1].args.setTo, null,
+      'no flag means toggle, which the host decides')
+    t.end()
+  })
+
+test('show asks the host to show the window', async function (t) {
+  reset()
+  await ipcOs.show()
+
+  t.deepEqual(invocations, [{ command: 'show', args: undefined }],
+    'one command, no arguments')
+  t.end()
+})
+
+test('a failing command rejects the caller', async function (t) {
+  reset()
+  const real = core.invoke
+  core.invoke = async () => { throw new Error('no window') }
+
+  try {
+    await ipcOs.setTitle('x')
+    t.fail('resolved over a host failure')
+  } catch (err) {
+    t.equal(err.message, 'no window', 'the host error reaches the caller')
+  }
+
+  core.invoke = real
+  t.end()
+})
+
+test('onFullscreenChanged subscribes to the host event',
+  async function (t) {
+    reset()
+    const received = []
+    const stop = await ipcOs.onFullscreenChanged((on) => received.push(on))
+
+    t.equal(calls.length, 1, 'registered once')
+    t.equal(calls[0].api, 'listen', 'a standing subscription')
+    t.equal(calls[0].name, 'fullscreenChanged',
+      'the same event name the Electron host sends')
+
+    calls[0].handler({ event: 'fullscreenChanged', id: 3, payload: true })
+    t.deepEqual(received, [true], 'the flag alone, not the event envelope')
+    t.equal(typeof stop, 'function', 'resolved to an unsubscribe')
+    t.end()
+  })
+
+test('onFullscreenChanged honours { once: true }', async function (t) {
+  reset()
+  await ipcOs.onFullscreenChanged(() => {}, { once: true })
+
+  t.equal(calls[0].api, 'once', 'a one-shot subscription')
+  t.end()
+})
+
+// -- the application menu's renderer half (US-061) --------------------
+//
+// The menu itself is the host's, built in `src-tauri/src/menu.rs` from
+// descriptors that never cross the boundary. What the renderer keeps
+// is these four commands -- the calls that enable and disable items --
+// and the event the host reports a click on. The menu's own contents
+// are asserted in Rust; what is asserted here is the boundary.
+
+test('setAllowNav sends the flag to the host', async function (t) {
+  reset()
+  await ipcOs.setAllowNav(false)
+  await ipcOs.setAllowNav(true)
+
+  t.deepEqual(invocations, [
+    { command: 'set_allow_nav', args: { allow: false } },
+    { command: 'set_allow_nav', args: { allow: true } }
+  ], 'one command per call, carrying the flag')
+  t.end()
+})
+
+test('the player open and close notifications take no arguments',
+  async function (t) {
+    reset()
+    await ipcOs.notifyPlayerOpen()
+    await ipcOs.notifyPlayerClose()
+
+    t.deepEqual(invocations.map(c => c.command),
+      ['notify_player_open', 'notify_player_close'],
+      'the two commands that turn the Playback items on and off')
+    t.deepEqual(invocations.map(c => c.args), [undefined, undefined],
+      'neither carries anything')
+    t.end()
+  })
+
+// US-066: the two the power save blocker is the whole content of.
+// `notifyPlayerOpen` and `notifyPlayerClose` reach commands that do the
+// same thing among others, which is how `src/main/ipc.js` has it.
+test('the play and pause notifications take no arguments either',
+  async function (t) {
+    reset()
+    await ipcOs.notifyPlayerPlay()
+    await ipcOs.notifyPlayerPause()
+
+    t.deepEqual(invocations.map(c => c.command),
+      ['notify_player_play', 'notify_player_pause'],
+      'the two commands that hold the display awake and let it go')
+    t.deepEqual(invocations.map(c => c.args), [undefined, undefined],
+      'neither carries anything')
+    t.end()
+  })
+
+test('notifyPlayerUpdate carries both playlist flags', async function (t) {
+  reset()
+  await ipcOs.notifyPlayerUpdate(true, false)
+
+  t.deepEqual(invocations, [{
+    command: 'notify_player_update',
+    args: { hasNext: true, hasPrevious: false }
+  }], 'camelCase keys, which is how the host reads its snake_case ones')
+  t.end()
+})
+
+test('onDispatch subscribes to the host event', async function (t) {
+  reset()
+  const stop = await ipcOs.onDispatch(() => {})
+
+  t.equal(calls.length, 1, 'registered once')
+  t.equal(calls[0].api, 'listen', 'a standing subscription by default')
+  t.equal(calls[0].name, 'dispatch',
+    'the same event name the Electron host sends')
+  t.equal(typeof stop, 'function', 'resolved to an unsubscribe')
+  t.end()
+})
+
+test('onDispatch spreads the action and its arguments', async function (t) {
+  reset()
+  const received = []
+  await ipcOs.onDispatch((...args) => received.push(args))
+
+  // A Tauri event carries one payload, so the host sends the whole
+  // argument list as an array; the caller's signature is Electron's
+  // `(action, ...args)` either way.
+  calls[0].handler({ event: 'dispatch', payload: ['changeVolume', 0.1] })
+  calls[0].handler({ event: 'dispatch', payload: ['playPause'] })
+
+  t.deepEqual(received, [['changeVolume', 0.1], ['playPause']],
+    'the action first, then whatever the menu item passes')
+  t.end()
+})
+
+test('onDispatch honours { once: true }', async function (t) {
+  reset()
+  await ipcOs.onDispatch(() => {}, { once: true })
+
+  t.equal(calls[0].api, 'once', 'a one-shot subscription')
+  t.equal(calls[0].name, 'dispatch', 'on the same event')
+  t.end()
+})
+
+// -- the dock and the taskbar (US-063) --------------------------------
+//
+// `setProgress` above is the third of the three, and was already the
+// window's own. These two are `src/main/dock.js`. What the host does
+// with either -- which platforms draw a badge, what a zero means, which
+// have a Downloads stack -- is decided and asserted in
+// `src-tauri/src/dock.rs`; the contract here is that the value crosses
+// unchanged, so that the decision is made in exactly one place.
+
+test('setBadge sends the count to the host', async function (t) {
+  reset()
+  await ipcOs.setBadge(3)
+  await ipcOs.setBadge(0)
+
+  t.deepEqual(invocations, [
+    { command: 'set_badge', args: { count: 3 } },
+    { command: 'set_badge', args: { count: 0 } }
+  ], 'one command per call, and zero is sent rather than skipped')
+  t.end()
+})
+
+test('notifyDownloadFinished sends the path to the host',
+  async function (t) {
+    reset()
+    await ipcOs.notifyDownloadFinished('/Users/me/Downloads/movie.mp4')
+
+    t.deepEqual(invocations, [{
+      command: 'download_finished',
+      args: { path: '/Users/me/Downloads/movie.mp4' }
+    }], 'the path alone -- the Dock decides whether it is in a stack')
+    t.end()
+  })
+
+test('neither dock command swallows a host failure', async function (t) {
+  reset()
+  const real = core.invoke
+  core.invoke = async () => { throw new Error('no dock') }
+
+  for (const call of [
+    () => ipcOs.setBadge(1),
+    () => ipcOs.notifyDownloadFinished('/tmp/x')
+  ]) {
+    try {
+      await call()
+      t.fail('resolved over a host failure')
+    } catch (err) {
+      t.equal(err.message, 'no dock', 'the host error reaches the caller')
     }
   }
-  const channels = ipc.sent.map((s) => s.channel)
-    .concat([...ipc.listeners.keys()])
-  t.deepEqual(
-    channels.filter((c) => c.startsWith('wt-')),
-    [],
-    'no wt-* channel touched'
-  )
+
+  core.invoke = real
   t.end()
 })
 
-test('setTitle sends on the setTitle channel', async function (t) {
+// -- the folder watcher (US-068) --------------------------------------
+//
+// `src/main/folder-watcher.js` reads the folder and the preference out
+// of the saved state itself, and the renderer only ever says "start"
+// or "stop". That stays true here: neither command carries anything,
+// and the torrents it finds arrive on the `dispatch` event above as
+// `addTorrent`, which is the channel the Electron host dispatches on
+// too.
+
+test('the folder watcher commands take no arguments', async function (t) {
   reset()
-  await ipcOs.setTitle('a title')
-  t.deepEqual(ipc.sent, [{ channel: 'setTitle', args: ['a title'] }])
+  await ipcOs.startFolderWatcher()
+  await ipcOs.stopFolderWatcher()
+
+  t.deepEqual(invocations.map(c => c.command),
+    ['start_folder_watcher', 'stop_folder_watcher'],
+    'one command each')
+  t.deepEqual(invocations.map(c => c.args), [undefined, undefined],
+    'the host reads the folder out of the saved state, as Electron does')
   t.end()
 })
 
-test('setBounds forwards both arguments', async function (t) {
+test('a folder watcher failure reaches the caller', async function (t) {
   reset()
-  const bounds = { x: 1, y: 2, width: 3, height: 4 }
-  await ipcOs.setBounds(bounds, false)
-  t.deepEqual(ipc.sent, [{ channel: 'setBounds', args: [bounds, false] }])
+  const real = core.invoke
+  core.invoke = async () => { throw new Error('no such folder') }
+
+  for (const call of [
+    () => ipcOs.startFolderWatcher(),
+    () => ipcOs.stopFolderWatcher()
+  ]) {
+    try {
+      await call()
+      t.fail('resolved over a host failure')
+    } catch (err) {
+      t.equal(err.message, 'no such folder', 'the host error is not eaten')
+    }
+  }
+
+  core.invoke = real
   t.end()
 })
 
-test('onDispatch receives events without the event object', async function (t) {
+// -- launch on login (US-069) -----------------------------------------
+//
+// `src/main/startup.js` is `auto-launch`, whose mechanism differs by
+// platform. None of that reaches the renderer under Electron -- it
+// sends a boolean and the main process decides -- and none of it
+// reaches the renderer here either.
+
+test('setStartup sends the preference and nothing else',
+  async function (t) {
+    reset()
+    await ipcOs.setStartup(true)
+    await ipcOs.setStartup(false)
+
+    t.deepEqual(invocations.map(c => c.command),
+      ['set_startup', 'set_startup'], 'one command for both directions')
+    t.deepEqual(invocations.map(c => c.args),
+      [{ startup: true }, { startup: false }],
+      'the argument key is the Rust parameter name')
+    t.end()
+  })
+
+test('a launch-on-login failure reaches the caller', async function (t) {
   reset()
-  const seen = []
-  await ipcOs.onDispatch((...args) => seen.push(args))
-  ipc.emit('dispatch', 'openFiles', 1)
-  t.deepEqual(seen, [['openFiles', 1]], 'listener got the payload only')
+  const real = core.invoke
+  core.invoke = async () => { throw new Error('osascript: refused') }
+
+  try {
+    await ipcOs.setStartup(true)
+    t.fail('resolved over a host failure')
+  } catch (err) {
+    t.equal(err.message, 'osascript: refused', 'the host error is not eaten')
+  }
+
+  core.invoke = real
   t.end()
 })
 
-test('the unsubscribe function stops delivery', async function (t) {
+// -- the engine sidecar (US-070) --------------------------------------
+//
+// The endpoint is the host's answer, not the renderer's guess: the
+// port and the per-launch token live in the supervisor, which is
+// `src-tauri/src/engine.rs` here and `src/main/engine-process.js`
+// under Electron. `ipc-engine.js` -- shared by both trees -- asks for
+// it on every connect, so the two things that matter on this side are
+// that the value crosses unchanged and that "no engine yet" arrives as
+// `null` rather than as a failure.
+
+test('getEngineEndpoint asks the host and returns what it says',
+  async function (t) {
+    reset()
+    answer = { url: 'ws://127.0.0.1:51423', token: 'deadbeef' }
+    const endpoint = await ipcOs.getEngineEndpoint()
+
+    t.deepEqual(invocations, [{ command: 'get_engine_endpoint', args: undefined }],
+      'one command, no arguments')
+    t.deepEqual(endpoint, { url: 'ws://127.0.0.1:51423', token: 'deadbeef' },
+      'the url and token cross unchanged')
+    t.end()
+  })
+
+test('no engine to offer is null, not an error', async function (t) {
   reset()
-  const seen = []
-  const unsubscribe = await ipcOs.onDispatch((...args) => seen.push(args))
-  t.equal(typeof unsubscribe, 'function', 'resolves to a function')
-  ipc.emit('dispatch', 'first')
-  unsubscribe()
-  ipc.emit('dispatch', 'second')
-  t.deepEqual(seen, [['first']], 'nothing delivered after unsubscribe')
-  t.equal(ipc.count('dispatch'), 0, 'listener removed from ipcRenderer')
+  answer = null
+  t.equal(await ipcOs.getEngineEndpoint(), null,
+    'null reaches the caller, which retries')
   t.end()
 })
 
-test('{ once: true } delivers a single event', async function (t) {
+// -- the external player (US-080) -------------------------------------
+//
+// `src/main/external-player.js` is now `src-tauri/src/external_player.rs`:
+// the VLC lookup, the spawn and the kill. Nothing about the three
+// exports changes on this side -- `media-controller.js` and
+// `playback-controller.js` call them exactly as they did under
+// Electron -- so what is asserted here is that each reaches its
+// command with the arguments the Rust parameters are named for, and
+// that "no player configured" crosses as null rather than being
+// dropped by JSON.
+
+test('checkForExternalPlayer asks the host and answers a boolean',
+  async function (t) {
+    reset()
+    answer = true
+    const installed = await ipcOs.checkForExternalPlayer('/Applications/VLC.app')
+
+    t.deepEqual(invocations, [{
+      command: 'check_for_external_player',
+      args: { path: '/Applications/VLC.app' }
+    }], 'one command, carrying the configured player')
+    t.equal(installed, true,
+      'the answer is the boolean the modal reads, as the Electron ' +
+      'reply channel was')
+    t.end()
+  })
+
+test('no configured player crosses as null, not a missing key',
+  async function (t) {
+    reset()
+    answer = false
+    t.equal(await ipcOs.checkForExternalPlayer(undefined), false,
+      'and "VLC is not installed either" reaches the caller')
+    t.equal(invocations[0].args.path, null,
+      'the host is told to look for VLC rather than left guessing')
+    t.end()
+  })
+
+test('the empty default crosses as the empty string it is',
+  async function (t) {
+    reset()
+    answer = false
+    // `externalPlayerPath` defaults to `''` in `lib/state.js`, so an
+    // empty string is what "no player configured" usually looks like
+    // -- far more often than `undefined`. The shim passes it through
+    // rather than normalising it, because `if (!playerPath)` was the
+    // *host's* test under Electron and still is
+    // (`external_player::configured`); deciding it in both places is
+    // how the two drift apart.
+    await ipcOs.checkForExternalPlayer('')
+
+    t.equal(invocations[0].args.path, '',
+      'the empty preference reaches the host unchanged')
+    t.end()
+  })
+
+test('openExternalPlayer sends the player, the url and the title',
+  async function (t) {
+    reset()
+    await ipcOs.openExternalPlayer(
+      '/Applications/mpv.app', 'http://127.0.0.1:5000/0', 'Big Buck Bunny')
+
+    t.deepEqual(invocations, [{
+      command: 'open_external_player',
+      args: {
+        path: '/Applications/mpv.app',
+        url: 'http://127.0.0.1:5000/0',
+        title: 'Big Buck Bunny'
+      }
+    }], 'the three arguments src/main/external-player.js spawn() took')
+    t.end()
+  })
+
+test('openExternalPlayer with no configured player sends null',
+  async function (t) {
+    reset()
+    // `undefined` rather than `null`: JSON drops the key altogether,
+    // and a dropped key is not a value the host can read. Both shapes
+    // have to arrive as `null`, which is what makes the host look for
+    // VLC rather than guess from an argument that is not there.
+    await ipcOs.openExternalPlayer(undefined, 'http://127.0.0.1:5000/0', 'Sintel')
+
+    t.ok('path' in invocations[0].args, 'the key crosses at all')
+    t.equal(invocations[0].args.path, null,
+      'which is what makes the host go looking for VLC')
+    t.equal(invocations[0].args.title, 'Sintel', 'the title still crosses')
+
+    reset()
+    await ipcOs.openExternalPlayer(null, 'http://127.0.0.1:5000/0', 'Sintel')
+    t.equal(invocations[0].args.path, null, 'and an explicit null is the same')
+    t.end()
+  })
+
+test('quitExternalPlayer asks the host to kill it', async function (t) {
   reset()
-  const seen = []
-  await ipcOs.onDispatch((...args) => seen.push(args), { once: true })
-  ipc.emit('dispatch', 'first')
-  ipc.emit('dispatch', 'second')
-  t.deepEqual(seen, [['first']], 'only the first event delivered')
+  await ipcOs.quitExternalPlayer()
+
+  t.deepEqual(invocations, [{ command: 'quit_external_player', args: undefined }],
+    'one command, no arguments')
   t.end()
 })
 
-test('checkForExternalPlayer resolves with the reply', async function (t) {
+test('a failed launch reaches the caller', async function (t) {
   reset()
-  const pending = ipcOs.checkForExternalPlayer('/bin/vlc')
-  t.deepEqual(
-    ipc.sent,
-    [{ channel: 'checkForExternalPlayer', args: ['/bin/vlc'] }],
-    'request sent'
-  )
-  ipc.emit('checkForExternalPlayer', true)
-  t.equal(await pending, true, 'resolves with the reply payload')
-  t.equal(ipc.count('checkForExternalPlayer'), 0, 'reply listener removed')
+  const real = core.invoke
+  core.invoke = async () => { throw new Error('spawn: no such file') }
+
+  try {
+    await ipcOs.openExternalPlayer('/nope', 'http://x/0', 'x')
+    t.fail('resolved over a host failure')
+  } catch (err) {
+    t.equal(err.message, 'spawn: no such file',
+      'reportErrors() gets something to show')
+  }
+
+  core.invoke = real
   t.end()
 })

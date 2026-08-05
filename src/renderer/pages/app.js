@@ -8,6 +8,8 @@ import MuiThemeProvider from 'material-ui/styles/MuiThemeProvider'
 
 import Header from '../components/header'
 
+import * as os from '../lib/os'
+
 import TorrentListPage from './torrent-list-page'
 import PlayerPage from './player-page'
 import CreateTorrentPage from './create-torrent-page'
@@ -36,7 +38,7 @@ const Modals = {
   'delete-all-torrents-modal': DeleteAllTorrentsModal
 }
 
-const fontFamily = process.platform === 'win32'
+const fontFamily = os.isWindows()
   ? '"Segoe UI", sans-serif'
   : 'BlinkMacSystemFont, "Helvetica Neue", Helvetica, sans-serif'
 
@@ -65,7 +67,7 @@ class App extends React.Component {
 
     const cls = [
       'view-' + state.location.url(), /* e.g. view-home, view-player */
-      'is-' + process.platform /* e.g. is-darwin, is-win32, is-linux */
+      'is-' + os.platform() /* e.g. is-darwin, is-win32, is-linux */
     ]
     if (state.window.isFullScreen) cls.push('is-fullscreen')
     if (state.window.isFocused) cls.push('is-focused')

@@ -2,12 +2,38 @@
 
 import path from 'path'
 import semver from 'semver'
-import { sync as rimrafSync } from 'rimraf'
 
 import config from '../../config'
 import * as fs from './platform/fs'
 import * as ipcOs from './platform/ipc-os'
+import * as staticAsset from './static-asset'
 import * as TorrentSummary from './torrent-summary'
+
+/**
+ * Put a file into the user's profile, wherever it is coming from.
+ *
+ * Old configs name their torrents and posters three ways, and US-072
+ * split those three into two kinds rather than leaving them one. An
+ * absolute path is a file of the user's, on the filesystem, and goes
+ * through the shim as it always did. Anything relative names one of
+ * the app's own bundled defaults -- `'sintel.torrent'` in later
+ * releases, `'../static/sintel.torrent'` in earlier ones, both
+ * resolved against the app directory under Electron -- and a webview
+ * has no directory to resolve either against. In a packaged build
+ * those files are embedded in the binary, so the only thing that names
+ * them is their name.
+ *
+ * `path.basename` is what reduces the older spelling to the newer: the
+ * `../static/` prefix is a fact about the repository layout in 2016,
+ * not about the user's disk.
+ */
+async function copyIntoProfile (src, dest) {
+  if (path.isAbsolute(src)) {
+    await fs.copyFile(src, dest)
+  } else {
+    await fs.writeFile(dest, await staticAsset.read(path.basename(src)))
+  }
+}
 
 // Change `state.saved` (which will be saved back to config.json on exit) as
 // needed, for example to deal with config.json format changes across versions
@@ -62,13 +88,9 @@ async function migrate_0_7_0 (saved) {
     // * Finally, now we're getting rid of torrentPath altogether
     let src, dst
     if (ts.torrentPath) {
-      if (path.isAbsolute(ts.torrentPath) || ts.torrentPath.startsWith('..')) {
-        src = ts.torrentPath
-      } else {
-        src = path.join(config.STATIC_PATH, ts.torrentPath)
-      }
+      src = ts.torrentPath
       dst = path.join(config.TORRENT_PATH, infoHash + '.torrent')
-      if (src !== dst) await fs.copyFile(src, dst)
+      if (src !== dst) await copyIntoProfile(src, dst)
 
       delete ts.torrentPath
       ts.torrentFileName = infoHash + '.torrent'
@@ -77,11 +99,9 @@ async function migrate_0_7_0 (saved) {
     // Replace posterURL with posterFileName
     if (ts.posterURL) {
       const extension = path.extname(ts.posterURL)
-      src = path.isAbsolute(ts.posterURL)
-        ? ts.posterURL
-        : path.join(config.STATIC_PATH, ts.posterURL)
+      src = ts.posterURL
       dst = path.join(config.POSTER_PATH, infoHash + extension)
-      if (src !== dst) await fs.copyFile(src, dst)
+      if (src !== dst) await copyIntoProfile(src, dst)
 
       delete ts.posterURL
       ts.posterFileName = infoHash + extension
@@ -190,9 +210,20 @@ async function migrate_0_17_2 (saved) {
   } catch (err) {}
   ts.posterFileName = NEW_HASH + '.jpg'
 
-  rimrafSync(path.join(config.TORRENT_PATH, ts.torrentFileName))
-  await fs.copyFile(
-    path.join(config.STATIC_PATH, 'wiredCd.torrent'),
+  // `rimraf.sync` until US-072. The target is a single `.torrent`
+  // file, never a directory, so `unlink` is the same operation -- and
+  // `rimraf` is a static import that pulls `graceful-fs` into the
+  // renderer bundle, whose module body rewrites `process.cwd` at load
+  // and so threw in the webview before anything rendered.
+  //
+  // `rimraf.sync` ignored a missing path; `unlink` rejects on one, so
+  // the catch keeps the old behaviour. It is the same shape as the
+  // `rename` above, which is optional for the same reason.
+  try {
+    await fs.unlink(path.join(config.TORRENT_PATH, ts.torrentFileName))
+  } catch (err) {}
+  await copyIntoProfile(
+    'wiredCd.torrent',
     path.join(config.TORRENT_PATH, NEW_HASH + '.torrent')
   )
   ts.torrentFileName = NEW_HASH + '.torrent'

@@ -1,47 +1,6 @@
-<h1 align="center">
-  <br>
-  <a href="https://webtorrent.io">
-    <img src="https://webtorrent.io/img/WebTorrent.png"
-         alt="WebTorrent" width="200">
-  </a>
-  <br>
-  WebTorrent Desktop
-  <br>
-  <br>
-</h1>
+# Webtorrent Desktop
 
-<h4 align="center">The streaming torrent app. For Mac, Windows, and Linux.</h4>
-
-<p align="center">
-  <a href=
-    "https://discord.gg/cnXkm4Z">
-    <img src="https://img.shields.io/discord/612575111718895616"
-         alt="discord">
-  </a>
-  <a href=
-    "https://github.com/webtorrent/webtorrent-desktop/actions/workflows/ci.yml">
-    <img src=
-      "https://github.com/webtorrent/webtorrent-desktop/actions/workflows/ci.yml/badge.svg"
-      alt="GitHub CI action">
-  </a>
-  <a href=
-    "https://github.com/webtorrent/webtorrent-desktop/releases">
-    <img src=
-      "https://img.shields.io/github/release/webtorrent/webtorrent-desktop.svg"
-         alt="github release version">
-  </a>
-  <a href=
-    "https://github.com/webtorrent/webtorrent-desktop/releases">
-    <img src=
-      "https://img.shields.io/github/downloads/webtorrent/webtorrent-desktop/total.svg"
-         alt="github release downloads">
-  </a>
-  <a href="https://standardjs.com">
-    <img src=
-      "https://img.shields.io/badge/code_style-standard-brightgreen.svg"
-         alt="Standard - JavaScript Style Guide">
-  </a>
-</p>
+Rewriting it in Tauri.
 
 ## Install
 
@@ -110,101 +69,25 @@ $ npm test
 
 ### Run integration tests
 
-```
-$ npm run test-integration
-```
-
-The integration tests use Spectron and Tape. They click through the
-app, taking screenshots and comparing each one to a reference. Why
-screenshots?
-
-* Ad-hoc checking makes the tests a lot more work to write
-* Even diffing the whole HTML is not as thorough as screenshot
-  diffing. For example, it wouldn't catch a bug where hitting ESC from
-  a video doesn't correctly restore window size.
-* Chrome's own integration tests use screenshot diffing iirc
-* Small UI changes will break a few tests, but the fix is as easy as
-  deleting the offending screenshots and running the tests, which will
-  recreate them with the new look.
-* The resulting Github PR will then show, pixel by pixel, the exact UI
-  changes that were made! See
-  https://github.com/blog/817-behold-image-view-modes
-
-For MacOS, you'll need a Retina screen for the integration tests to
-pass. Your screen should have the same resolution as a 2018 MacBook
-Pro 13".
-
-For Windows, you'll need Windows 10 with a 1366x768 screen.
-
-When running integration tests, keep the mouse on the edge of the
-screen and don't touch the mouse or keyboard while the tests are
-running.
+There are none right now. The old suite drove the Electron app with
+Spectron and compared screenshots; the app runs on Tauri now, Spectron
+has no Tauri counterpart, and the suite was deleted with the host it
+drove. `test/AGENTS.md` records what covers the same ground in the
+meantime and what a replacement harness would take.
 
 ### Package the app
 
-Builds app binaries for Mac, Linux, and Windows.
+Packaging is not wired up yet. `npm run package` drove
+`electron-packager` and was deleted along with the Electron host;
+Tauri's own bundler replaces it, and the signed macOS, Windows and
+Linux builds are the next stories in `specs/prd.json` (US-083 and
+US-084). Until then the way to get a binary is
+`npm run build:tauri && (cd src-tauri && cargo build)`.
 
-```
-$ npm run package
-```
-
-To build for one platform:
-
-```
-$ npm run package -- [platform] [options]
-```
-
-Where `[platform]` is `darwin`, `linux`, `win32`, or `all` (default).
-
-The following optional arguments are available:
-
-- `--sign` - Sign the application (Mac, Windows)
-- `--package=[type]` - Package single output type.
-   - `deb` - Debian package
-   - `rpm` - RedHat package
-   - `zip` - Linux zip file
-   - `dmg` - Mac disk image
-   - `exe` - Windows installer
-   - `portable` - Windows portable app
-   - `all` - All platforms (default)
-
-Note: Even with the `--package` option, the auto-update files
-(.nupkg for Windows, -darwin.zip for Mac) will always be produced.
-
-#### Windows build notes
-
-The Windows app can be packaged from **any** platform.
-
-Note: Windows code signing only works from **Windows**, for now.
-
-Note: To package the Windows app from non-Windows platforms,
-[Wine](https://www.winehq.org/) and [Mono](https://www.mono-project.com/) need
-to be installed. For example on Mac, first install
-[XQuartz](http://www.xquartz.org/), then run:
-
-```
-$ brew install wine mono
-```
-
-(Requires the [Homebrew](http://brew.sh/) package manager.)
-
-#### Mac build notes
-
-The Mac app can only be packaged from **macOS**.
-
-#### Linux build notes
-
-The Linux app can be packaged from **any** platform.
-
-If packaging from Mac, install system dependencies with Homebrew by running:
-
-```
-npm run install-system-deps
-```
 #### Recommended readings to start working in the app
 
-Electron (Framework to make native apps for Windows, OSX and Linux in
-Javascript): https://electronjs.org/docs/tutorial/quick-start
+Tauri (Framework to make native apps with a Rust host and a system
+webview): https://v2.tauri.app/start/
 
 React.js (Framework to work with Frontend UI):
 https://reactjs.org/docs/getting-started.html

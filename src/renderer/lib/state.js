@@ -1,4 +1,3 @@
-import applicationConfig from 'application-config'
 import path from 'path'
 import { EventEmitter } from 'events'
 import debounce from 'debounce'
@@ -8,14 +7,30 @@ import createTorrent from 'create-torrent'
 
 import config from '../../config'
 import * as fs from './platform/fs'
+import * as staticAsset from './static-asset'
 import * as migrations from './migrations'
 
-const appConfig = applicationConfig('WebTorrent')
 const defaultAnnounceList = createTorrent.announceList.map((arr) => arr[0])
 
 const SAVE_DEBOUNCE_INTERVAL = 1000
 
-appConfig.filePath = path.join(config.CONFIG_PATH, 'config.json')
+// The renderer owns this file. It used to be read and written through
+// `application-config`, which reaches for Node's `fs` directly; since
+// US-055 both halves go through the platform shim, so a host without a
+// Node filesystem can back them. Since US-072 the renderer is the only
+// thing that reads it at all -- the Rust host keeps its own window
+// bounds in `src-tauri/src/window.rs`.
+//
+// A function, not a constant, and that is load-bearing. `config
+// .CONFIG_PATH` is empty until the host answers `app_paths`, and
+// `src/renderer/main.js` cannot call `config.useHostPaths` until after
+// this module's body has run -- importing it is what runs it. A path
+// joined at module load would therefore be `./config.json`, relative
+// to whatever the webview considers its working directory, for the
+// life of the process.
+function stateFile () {
+  return path.join(config.CONFIG_PATH, 'config.json')
+}
 
 const State = Object.assign(new EventEmitter(), {
   getDefaultPlayState,
@@ -76,7 +91,7 @@ function getDefaultState () {
      * Windows (> Vista)    %LOCALAPPDATA%/WebTorrent/config.json
      * Windows (XP, 2000)   %USERPROFILE%/Local Settings/Application Data/WebTorrent/config.json
      *
-     * Also accessible via `require('application-config')('WebTorrent').filePath`
+     * The directory is `config.CONFIG_PATH`; see `stateFile()` above.
      */
     saved: {},
 
@@ -115,7 +130,10 @@ function getDefaultPlayState () {
     },
     audioTracks: {
       tracks: [],
-      selectedIndex: 0, /* current audio track */
+      /* current audio track; -1 until `loadedmetadata` reads the
+         file's own default track, so nothing is forced on before then
+         and a webview with no track list forces nothing at all */
+      selectedIndex: -1,
       showMenu: false /* popover menu, above the video */
     },
     aspectRatio: 0 /* aspect ratio of the video */
@@ -145,17 +163,25 @@ async function setupStateSaved () {
   await fs.mkdir(config.POSTER_PATH)
   await fs.mkdir(config.TORRENT_PATH)
 
-  // The directories have to exist before anything is copied into them,
-  // so the copies start only once both mkdirs have resolved.
+  // The directories have to exist before anything is written into
+  // them, so the copies start only once both mkdirs have resolved.
+  //
+  // A read-then-write rather than the `fs.copyFile` this used to be:
+  // the source is a bundled file and the destination is in the user's
+  // profile, and after US-072 those are two different worlds. The
+  // profile is on the filesystem, behind the shim's allowlist; the
+  // defaults are inside the document root, embedded in the binary in a
+  // packaged build, where no filesystem path names them at all. Only
+  // the destination half is a path, so only it goes through the shim.
   await Promise.all(config.DEFAULT_TORRENTS.map((t, i) => {
     const infoHash = saved.torrents[i].infoHash
     return Promise.all([
-      fs.copyFile(
-        path.join(config.STATIC_PATH, t.posterFileName),
+      copyBundled(
+        t.posterFileName,
         path.join(config.POSTER_PATH, infoHash + path.extname(t.posterFileName))
       ),
-      fs.copyFile(
-        path.join(config.STATIC_PATH, t.torrentFileName),
+      copyBundled(
+        t.torrentFileName,
         path.join(config.TORRENT_PATH, infoHash + '.torrent')
       )
     ])
@@ -163,8 +189,12 @@ async function setupStateSaved () {
 
   return saved
 
+  async function copyBundled (name, dest) {
+    await fs.writeFile(dest, await staticAsset.read(name))
+  }
+
   async function createTorrentObject (t) {
-    const bytes = await fs.readFile(path.join(config.STATIC_PATH, t.torrentFileName))
+    const bytes = await staticAsset.read(t.torrentFileName)
     // The shim resolves a plain `Uint8Array`; parse-torrent only accepts
     // a `Buffer`. `Buffer.from(view)` copies, so wrap the same memory.
     const torrent = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
@@ -220,7 +250,7 @@ function getGlobalTrackers () {
 }
 
 async function load (cb) {
-  let saved = await appConfig.read()
+  let saved = await readSavedState()
 
   if (!saved || !saved.version) {
     console.log('Missing config file: Creating new one')
@@ -234,25 +264,55 @@ async function load (cb) {
   const state = getDefaultState()
   state.saved = saved
 
-  // Migrations only make sense in the renderer, which owns the config file
-  // and the ipcRenderer channel installHandlers() uses. The import is now
-  // static (ESM has no conditional import), so only the call stays guarded.
+  // Migrations used to be guarded by a `process.type === 'renderer'`
+  // test, because the main process loaded this module too and must not
+  // run them. It does not load it any more (US-055), and the test would
+  // be false under a host that is not Electron, so the guard is gone.
   // They are async since US-028, and `cb` must not fire until they have
   // finished writing -- the caller starts torrenting off `state.saved`.
-  if (process.type === 'renderer') {
-    try {
-      await migrations.run(state)
-    } catch (err) {
-      return cb(err)
-    }
+  try {
+    await migrations.run(state)
+  } catch (err) {
+    return cb(err)
   }
 
   cb(null, state)
 }
 
+/**
+ * Read the saved state file. A missing or unparseable file is not an
+ * error: `load()` treats `null` as "no config yet" and creates a fresh
+ * profile, which is also the only sane response to a corrupt one --
+ * the old reader threw a SyntaxError out of `load()` instead.
+ */
+async function readSavedState () {
+  try {
+    const bytes = await fs.readFile(stateFile())
+    return JSON.parse(new TextDecoder().decode(bytes))
+  } catch (err) {
+    return null
+  }
+}
+
+/**
+ * Write the saved state file, reproducing exactly what
+ * `application-config` wrote through `write-json-file`: the directory
+ * created first, tab-indented JSON, trailing newline. A config written
+ * by this version and one written by the last are byte-identical.
+ *
+ * The one thing not reproduced is `write-file-atomic`'s
+ * write-to-temp-and-rename. The shim has no atomic write and adding
+ * one would put a Node-shaped guarantee into a surface the Tauri host
+ * has to implement as well.
+ */
+async function writeSavedState (saved) {
+  await fs.mkdir(config.CONFIG_PATH)
+  await fs.writeFile(stateFile(), JSON.stringify(saved, null, '\t') + '\n')
+}
+
 // Write state.saved to the JSON state file
 async function saveImmediate (state, cb) {
-  console.log('Saving state to ' + appConfig.filePath)
+  console.log('Saving state to ' + stateFile())
 
   // Clean up, so that we're not saving any pending state
   const copy = Object.assign({}, state.saved)
@@ -275,7 +335,7 @@ async function saveImmediate (state, cb) {
     })
 
   try {
-    await appConfig.write(copy)
+    await writeSavedState(copy)
     State.emit('stateSaved')
   } catch (err) {
     console.error(err)

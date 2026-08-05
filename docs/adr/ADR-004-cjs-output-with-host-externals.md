@@ -2,6 +2,23 @@
 
 **Date:** 2026-07-27
 
+**Reversed by US-072 (2026-08-04).** Both halves of this decision
+rested on the renderer running in an Electron window with
+`nodeIntegration: true`, and that window is gone. A WKWebView/WebView2
+has no `require`, so an externalized builtin is a `ReferenceError` on
+the bundle's first line and a CommonJS output format is one waiting for
+the first top-level export. `vite.config.js` emits `iife` with no
+externals now; the four builtins whose module bodies are actually
+called have first-party implementations aliased in (`path`, `events`,
+`stream`, `util`), and the rest resolve to Vite's empty object because
+only code that cannot work in a webview reaches them. The comment
+block above `PROCESS_SHIM` in `vite.config.js` is the current
+inventory, and `test/unit/renderer-boots.js` is what holds it in
+place. What survives of this record is the diagnosis in "Context": a
+bundler still resolves `require('electron')` to a path string with no
+warning, which is why `test/unit/electron-removed.js` scans for the
+import rather than trusting the build.
+
 ## Context
 
 Vite targets browsers. Its default response to a Node builtin is to

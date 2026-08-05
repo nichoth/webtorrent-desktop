@@ -1,23 +1,57 @@
 /**
- * Platform shim: data-driven context menus (FR-12).
+ * Platform shim.
  *
- * Callers describe the menu as an array of plain objects and never
- * construct `MenuItem` instances, so the descriptors survive being
- * serialised across a process boundary. The `click` callbacks stay in
- * the renderer; the shim is responsible for invoking the one the user
- * chose.
+ * Context menus, built in Rust from the descriptors this module is
+ * handed (US-061). The descriptors are already host-neutral (FR-12),
+ * so nothing about the contract changes here -- but under Tauri they
+ * genuinely cross a process boundary, which is what ADR-007 was
+ * written for. A `click` is a function and cannot go: the callbacks
+ * stay here, the host answers with the index of what the user chose,
+ * and this module calls the one that matches.
  *
- * The descriptor vocabulary is exactly what the renderer's one
- * context menu needs (`controllers/torrent-list-controller.js`):
- * labels, `click` handlers, an `enabled` flag and separators. There is
- * no submenu type because no menu here has a submenu; add one when a
- * menu needs it rather than in advance.
+ * The application menu is not here. It is the host's, exactly as it
+ * was the Electron main process's (the deleted `src/main/menu.js`),
+ * and it is built
+ * from descriptors of the same shape in `src-tauri/src/menu.rs`. What
+ * the renderer keeps of it is `ipcOs.setAllowNav` and the player
+ * notifications.
  *
- * Implemented in US-025; the torrent context menu is rewritten
- * against it in US-029. See docs/platform-shim.md.
+ * `docs/platform-shim.md` is the contract each export is written
+ * against. Until US-072 there was a second, Electron tree beside
+ * this one and a build flag to pick between them (ADR-014); the
+ * cutover deleted both, so this module is the shim.
  */
 
-import { Menu, MenuItem, getCurrentWindow } from '@electron/remote'
+import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
+
+/**
+ * The event the host reports a choice on. It carries `{ menu, item }`
+ * -- which menu, and which of its items -- and nothing else.
+ */
+const CLICK_EVENT = 'contextMenuClick'
+
+/**
+ * The menu the user is looking at: its id, and the callbacks that
+ * belong to it. Only one context menu can be open at a time, so the
+ * previous one's callbacks are dropped rather than accumulated.
+ *
+ * The id is what makes a late click safe. A menu dismissed without a
+ * choice reports nothing, so there is no event that says "forget
+ * these"; a click naming an id that is no longer open is ignored
+ * instead.
+ */
+let open = null
+
+/** The next menu's id. Monotonic for the life of the page. */
+let nextMenu = 0
+
+/**
+ * The standing subscription, registered on first use rather than at
+ * import: a renderer that never opens a context menu never asks the
+ * host for anything.
+ */
+let subscription = null
 
 /**
  * @typedef {object} MenuItemDescriptor
@@ -29,18 +63,14 @@ import { Menu, MenuItem, getCurrentWindow } from '@electron/remote'
  */
 
 /**
- * Translate one descriptor into `MenuItem` options.
- *
- * The caller's `click` is wrapped so Electron's
- * `(menuItem, browserWindow, event)` arguments stop here: handing a
- * `MenuItem` or a `BrowserWindow` back to the renderer would put the
- * object this shim exists to hide in front of the caller again.
+ * Translate one descriptor into what the host is sent: plain data, and
+ * no more of it than the host needs.
  *
  * @param {MenuItemDescriptor} descriptor
- * @returns {object} Options for `MenuItem`.
+ * @returns {object}
  */
-function toMenuItemOptions (descriptor) {
-  const { type = 'normal', label, click, enabled } = descriptor
+function toHostItem (descriptor) {
+  const { type = 'normal', label, enabled } = descriptor
 
   if (type === 'separator') return { type: 'separator' }
   if (type !== 'normal') {
@@ -50,23 +80,50 @@ function toMenuItemOptions (descriptor) {
     throw new Error('platform/menu: an item needs a label')
   }
 
-  const options = { label, enabled: enabled !== false }
-  if (click) options.click = () => click()
-  return options
+  return { type, label, enabled: enabled !== false }
 }
 
 /**
- * Pop up a context menu at the pointer, parented to the current
- * window.
+ * Call the chosen item's `click`, if the menu it belongs to is still
+ * the open one.
+ *
+ * @param {{ menu: number, item: number }} choice
+ */
+function chose (choice) {
+  if (!open || !choice || choice.menu !== open.menu) return
+  const click = open.clicks[choice.item]
+  if (click) click()
+}
+
+/**
+ * Subscribe to the host's click event, once.
+ *
+ * @returns {Promise<void>}
+ */
+async function subscribe () {
+  if (!subscription) {
+    subscription = listen(CLICK_EVENT, (event) => chose(event.payload))
+  }
+  await subscription
+}
+
+/**
+ * Pop a context menu up at the pointer, parented to the window the
+ * command reaches the host from.
  *
  * @param {MenuItemDescriptor[]} items
  * @returns {Promise<void>} Resolves once the menu has been shown.
  *   It does not wait for the user's choice; the chosen item's
- *   `click` fires independently, as it does today.
+ *   `click` fires independently, as it does under Electron.
  */
 export async function showContextMenu (items) {
-  const options = items.map(toMenuItemOptions)
-  const menu = new Menu()
-  for (const item of options) menu.append(new MenuItem(item))
-  menu.popup({ window: getCurrentWindow() })
+  // Validated before anything is sent, so a bad descriptor rejects
+  // rather than producing a half-built menu (ADR-007).
+  const hostItems = items.map(toHostItem)
+  const menu = nextMenu++
+
+  await subscribe()
+  open = { menu, clicks: items.map((item) => item.click) }
+
+  return invoke('show_context_menu', { menu, items: hostItems })
 }

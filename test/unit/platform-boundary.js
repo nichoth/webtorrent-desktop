@@ -21,19 +21,22 @@ const path = require('path')
 // bundler, and `build/` does not contain `components/` or
 // `controllers/` at all.
 
-const RENDERER = path.join(__dirname, '..', '..', 'src', 'renderer')
+const SRC = path.join(__dirname, '..', '..', 'src')
+const RENDERER = path.join(SRC, 'renderer')
+const ENGINE = path.join(SRC, 'engine')
 const SHIM = path.join(RENDERER, 'lib', 'platform')
 
-// FR-4 exempts the hidden WebTorrent window from the shim: it is a
-// Node process by design and keeps its own `require('fs')`.
-const EXEMPT = new Set([path.join(RENDERER, 'webtorrent.js')])
+// US-046: `src/renderer/webtorrent.js` used to be exempt from the shim
+// under FR-4 -- it was a Node process by design and kept its own
+// `require('fs')`. US-045 deleted the file, so nothing under
+// `src/renderer/` is exempt from the Node bans any more and the two
+// exemption sets below are empty of it.
+const EXEMPT = new Set()
 
-// The two deferred casualties, matching the per-file overrides in
-// `eslint-boundary.config.js`.
-const DEFERRED = new Set([
-  path.join(RENDERER, 'webtorrent.js'),
-  path.join(RENDERER, 'lib', 'cast.js')
-])
+// US-079: the last deferred casualty, `lib/cast.js`, is gone --
+// casting moved to the host behind `lib/platform/cast.js` (ADR-015) --
+// so there is no per-file override left in
+// `eslint-boundary.config.js` and no exempt set to keep here.
 
 function rendererSources () {
   const out = []
@@ -123,6 +126,31 @@ for (const { concern, patterns } of REMOTE_CHECKS) {
   })
 }
 
+// The window's own rectangle is a host read too, and this one is not
+// an Electron API -- it is four DOM properties that only describe the
+// OS window when the page is a Chromium browser window. In a webview
+// `outerWidth`/`outerHeight` are 0 and `screenX`/`screenY` are the
+// content area's origin, one title bar below the window's, so a
+// renderer that saves them and asks the host to restore them later
+// sends the window to a rectangle no window was ever at. The screen's
+// dimensions (`window.screen.width`) are a different question and stay
+// where they are: they describe the display, not this window.
+test('no renderer code reads the window rectangle from the DOM',
+  function (t) {
+    const files = rendererSources()
+    t.ok(files.length > 20, 'walked the renderer sources')
+    const pattern = /\bwindow\.(screenX|screenY|outerWidth|outerHeight)\b/
+    for (const file of files) {
+      const rel = path.relative(RENDERER, file)
+      const hits = fs.readFileSync(file, 'utf8').split('\n')
+        .map((line, i) => ({ line, n: i + 1 }))
+        .filter(({ line }) => pattern.test(line))
+        .map(({ line, n }) => n + ': ' + line.trim())
+      t.deepEqual(hits, [], rel + ' asks the host for the window rectangle')
+    }
+    t.end()
+  })
+
 // US-028: the filesystem concern. Unlike the Electron checks above the
 // offending API is a Node builtin, so the pattern names the module
 // specifier -- there is only one way to reach `fs` and no second
@@ -150,11 +178,17 @@ test('no renderer code outside the shim imports fs', function (t) {
 // US-032 the engine protocol (`ipc-engine.js`). Between them the two
 // shims own every renderer <-> main channel (FR-9), so there is no
 // longer a channel prefix to carve out: nothing outside
-// `lib/platform/` may name a channel at all. `webtorrent.js` is the
-// counterparty, exempt by FR-4.
+// `lib/platform/` may name a channel at all.
+//
+// `webtorrent.js` was the last exemption here, as the counterparty of
+// the `wt-*` protocol. US-039 put a bus between the engine and the
+// transport (`src/engine/bus-electron.js`, outside this walk), so the
+// exemption is gone and this check now covers the whole renderer with
+// no carve-out. It still names `wt-` channels, so it stays exempt from
+// the channel-string check below.
 test('no renderer file outside the shim touches ipcRenderer',
   function (t) {
-    const files = rendererSources().filter((f) => !EXEMPT.has(f))
+    const files = rendererSources()
     t.ok(files.length > 20, 'walked the renderer sources')
     for (const file of files) {
       const rel = path.relative(RENDERER, file)
@@ -189,12 +223,13 @@ test('no renderer file outside the shim builds a wt-* channel string',
 // US-034: `no-restricted-imports` only sees `import` declarations, so
 // the lint rule cannot stop a renderer file from reaching a host
 // module through a call-scoped `require()` -- which is exactly the
-// escape hatch `lib/cast.js` uses for the casting libraries, and the
-// only deferral mechanism that works in this renderer at all. This
-// covers the same specifier list for the `require()` spelling.
+// escape hatch `lib/cast.js` used for the casting libraries, and the
+// only deferral mechanism that works in this renderer at all. US-079
+// deleted that file and with it the last `require()` in the renderer;
+// this covers the same specifier list for the `require()` spelling.
 test('no renderer file outside the shim requires a banned host module',
   function (t) {
-    const files = rendererSources().filter((f) => !DEFERRED.has(f))
+    const files = rendererSources()
     t.ok(files.length > 20, 'walked the renderer sources')
     const banned = [
       'electron', '@electron/remote',
@@ -217,13 +252,38 @@ test('no renderer file outside the shim requires a banned host module',
     t.end()
   })
 
+// US-052: the shim has two implementations (ADR-014), and which one a
+// build talks to is decided by `WT_HOST` at resolve time, not by any
+// import. A UI file naming `lib/platform/tauri/` would pin itself to
+// one host and quietly survive a bundle built for the other. The lint
+// rule bans the specifier; this covers the `require()` spelling it
+// cannot see, and both directions of slash.
+test('no renderer file outside the shim names the Tauri tree',
+  function (t) {
+    const files = rendererSources()
+    t.ok(files.length > 20, 'walked the renderer sources')
+    const pattern = /platform[\\/]tauri/
+    for (const file of files) {
+      const rel = path.relative(RENDERER, file)
+      const hits = fs.readFileSync(file, 'utf8').split('\n')
+        .map((line, i) => ({ line, n: i + 1 }))
+        .filter(({ line }) => pattern.test(line))
+        .map(({ line, n }) => n + ': ' + line.trim())
+      t.deepEqual(hits, [], rel + ' lets the build pick the shim tree')
+    }
+    t.end()
+  })
+
 // US-032 AC-4: with both IPC concerns migrated, the only renderer
-// modules left importing Electron are the shim itself (skipped by the
+// modules left importing Electron were the shim itself (skipped by the
 // walk) and the hidden WebTorrent window (FR-4). AC-4 also exempts
-// `lib/cast.js`, but it reaches Chromecast through `chromecasts` /
-// `airplay-js`, not Electron, so the assertion below is exact rather
-// than allowing it.
-test('only the shim and webtorrent.js import electron',
+// `lib/cast.js`, but it reached Chromecast through `chromecasts` /
+// `airplay-js`, not Electron, so the assertion below was exact rather
+// than allowing it -- and US-079 deleted the file anyway.
+//
+// Since US-039 the list is empty: the engine's `electron` import moved
+// into `src/engine/bus-electron.js`, which is not under this walk.
+test('nothing outside the shim imports electron',
   function (t) {
     const patterns = [
       /from\s*['"](electron|@electron\/remote)['"]/,
@@ -234,7 +294,173 @@ test('only the shim and webtorrent.js import electron',
         re.test(fs.readFileSync(file, 'utf8'))))
       .map((file) => path.relative(RENDERER, file).split(path.sep).join('/'))
       .sort()
-    t.deepEqual(importers, ['webtorrent.js'],
-      'no renderer module outside the exempt set imports electron')
+    t.deepEqual(importers, [],
+      'no renderer module outside the shim imports electron')
     t.end()
   })
+
+// US-056: the same rule for the second host. `@tauri-apps/api` is
+// Tauri's `electron` -- a package the shim may hold and nothing above
+// it may, in either spelling and at any subpath. Without this a UI
+// file could reach the Tauri host directly and the bundle would build
+// for one host only, which is exactly what ADR-014 keeps out.
+test('nothing outside the shim imports the Tauri API',
+  function (t) {
+    const patterns = [
+      /from\s*['"]@tauri-apps\/api(\/[\w-]+)*['"]/,
+      /require\s*\(\s*['"]@tauri-apps\/api(\/[\w-]+)*['"]\s*\)/
+    ]
+    const importers = rendererSources()
+      .filter((file) => patterns.some((re) =>
+        re.test(fs.readFileSync(file, 'utf8'))))
+      .map((file) => path.relative(RENDERER, file).split(path.sep).join('/'))
+      .sort()
+    t.deepEqual(importers, [],
+      'no renderer module outside the shim imports Tauri')
+    t.end()
+  })
+
+// US-042 AC-4: the sidecar endpoint reaches the renderer over the shim
+// and nowhere else. The two tempting shortcuts are the environment the
+// host happened to spawn the window with and a global the host poked
+// onto `window`, and both would survive every check above -- neither
+// touches an Electron API. This walk therefore includes
+// `lib/platform/` itself, because the shim is exactly the file that
+// would be tempted.
+test('no renderer file reads the engine endpoint from env or a global',
+  function (t) {
+    const patterns = [
+      /process\s*\.\s*env\s*\.\s*WEBTORRENT_ENGINE\w*/,
+      /WEBTORRENT_ENGINE_(TOKEN|PORT)/,
+      /\b(window|globalThis|global)\s*\.\s*\w*[eE]ngine(Endpoint|Url|Port|Token)\b/
+    ]
+    const files = rendererSources().concat(
+      fs.readdirSync(SHIM)
+        .filter((name) => name.endsWith('.js'))
+        .map((name) => path.join(SHIM, name))
+    )
+    t.ok(files.length > 20, 'walked the renderer sources and the shim')
+    for (const file of files) {
+      const rel = path.relative(RENDERER, file)
+      const hits = fs.readFileSync(file, 'utf8').split('\n')
+        // A comment explaining what the renderer must not do would
+        // otherwise fail this check (see test/AGENTS.md).
+        .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+        .map((line, i) => ({ line, n: i + 1 }))
+        .filter(({ line }) => patterns.some((re) => re.test(line)))
+        .map(({ line, n }) => n + ': ' + line.trim())
+      t.deepEqual(hits, [], rel + ' does not read the endpoint directly')
+    }
+    t.end()
+  })
+
+// -- US-046: the sidecar side of the boundary -------------------------
+
+function engineSources () {
+  return fs.readdirSync(ENGINE)
+    .filter((name) => name.endsWith('.js'))
+    .map((name) => path.join(ENGINE, name))
+}
+
+// Comment lines are dropped before every match below: these files
+// explain at length what they must not do, and a scan cannot tell code
+// from prose (see test/AGENTS.md).
+function codeLines (file) {
+  return fs.readFileSync(file, 'utf8').split('\n')
+    .map((line, i) => ({ line, n: i + 1 }))
+    .filter(({ line }) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+}
+
+function hitsIn (file, patterns) {
+  return codeLines(file)
+    .filter(({ line }) => patterns.some((re) => re.test(line)))
+    .map(({ line, n }) => n + ': ' + line.trim())
+}
+
+// AC-2: `ipc-engine.js` spoke the `wt-*` protocol over `ipcRenderer`
+// until US-044 made it a WebSocket client. It is inside the shim, so
+// every check above skips it; this one names it. The `require()`
+// spelling is here because `no-restricted-imports` cannot see it.
+test('the engine shim reaches no Electron API', function (t) {
+  const file = path.join(SHIM, 'ipc-engine.js')
+  const patterns = [
+    /from\s*['"](electron|@electron\/remote|original-fs)['"]/,
+    /require\s*\(\s*['"](electron|@electron\/remote|original-fs)['"]\s*\)/,
+    /\bipcRenderer\s*\./
+  ]
+  t.deepEqual(hitsIn(file, patterns), [],
+    'ipc-engine.js talks to the sidecar, not to Electron')
+  t.end()
+})
+
+// AC-4: the opposite mistake. The sidecar runs under
+// ELECTRON_RUN_AS_NODE, where `require('electron')` yields no `app`,
+// and a packaged sidecar has no `node_modules/electron` to resolve at
+// all -- so an Electron import there fails at load rather than
+// degrading. It has no DOM either.
+test('no engine source imports Electron', function (t) {
+  const files = engineSources()
+  t.ok(files.length > 1, 'walked the engine sources')
+  const patterns = [
+    /from\s*['"](electron|@electron\/remote|original-fs)['"]/,
+    /require\s*\(\s*['"](electron|@electron\/remote|original-fs)['"]\s*\)/
+  ]
+  for (const file of files) {
+    t.deepEqual(hitsIn(file, patterns), [],
+      path.basename(file) + ' imports no Electron module')
+  }
+  t.end()
+})
+
+test('no engine source touches a DOM global', function (t) {
+  const files = engineSources()
+  t.ok(files.length > 1, 'walked the engine sources')
+  const patterns = [
+    /\b(window|document|navigator|localStorage|sessionStorage)\s*\./,
+    /\bnew\s+(Image|Audio|XMLHttpRequest)\b/
+  ]
+  for (const file of files) {
+    t.deepEqual(hitsIn(file, patterns), [],
+      path.basename(file) + ' uses no DOM global')
+  }
+  t.end()
+})
+
+// The engine is exempt from the renderer's Node bans, and the walk
+// above must not quietly grow into policing them. Asserting the
+// sidecar does use a Node builtin keeps that explicit.
+test('the engine uses Node builtins freely', function (t) {
+  const source = fs.readFileSync(path.join(ENGINE, 'index.js'), 'utf8')
+  t.ok(/from\s*['"]fs['"]/.test(source),
+    'src/engine/index.js imports fs directly, as a Node process may')
+  t.end()
+})
+
+// US-079: the three casting packages went to the host with the code
+// that loaded them (ADR-015), and they are gone from `package.json`.
+// `depcheck` catches an unused dependency; this catches the opposite
+// mistake -- a renderer file naming one that is no longer installed --
+// which would otherwise surface as a bundler resolution failure in
+// whatever story reintroduced it.
+test('no renderer file names a casting package', function (t) {
+  const files = rendererSources()
+  t.ok(files.length > 20, 'walked the renderer sources')
+  const packages = ['chromecasts', 'dlnacasts', 'airplayer']
+  const patterns = packages.map((name) => new RegExp(
+    '(from|require\\s*\\()\\s*[\'"]' + name + '[\'"]'))
+  for (const file of files) {
+    t.deepEqual(hitsIn(file, patterns), [],
+      path.relative(RENDERER, file) + ' drives no cast device itself')
+  }
+  t.end()
+})
+
+// The counterpart: casting is behind the shim like everything else,
+// so `lib/cast.js` must not come back under any name.
+test('the renderer has no cast module outside the shim', function (t) {
+  t.equal(fs.existsSync(path.join(RENDERER, 'lib', 'cast.js')), false,
+    'src/renderer/lib/cast.js is gone')
+  t.equal(fs.existsSync(path.join(SHIM, 'cast.js')), true,
+    'and lib/platform/cast.js is where casting lives')
+  t.end()
+})

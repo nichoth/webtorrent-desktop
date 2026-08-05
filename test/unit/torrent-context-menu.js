@@ -30,8 +30,10 @@ fs.writeFileSync(
 // (test/AGENTS.md).
 let record = null
 
-function reset () {
-  record = { menus: [], dispatches: [], sent: [], copied: [], shell: [] }
+function reset (platform = 'darwin') {
+  record = {
+    menus: [], dispatches: [], sent: [], copied: [], shell: [], platform
+  }
   // `lib/dispatcher` holds one process-wide dispatch and every unit
   // test file that requires it registers its own. Re-register per test
   // rather than once at require time, or whichever file loads last
@@ -82,6 +84,22 @@ stub(path.join(BUILT, 'lib', 'platform', 'shell'), {
   async moveItemToTrash (p) { record.shell.push(['moveItemToTrash', p]) }
 })
 
+// US-072: the reveal item's label is the one string in this menu that
+// depends on the OS, and the controller reads it from `lib/os.js` now
+// rather than from `process.platform` -- the webview it runs in has no
+// such global. It is stubbed rather than left to answer for itself so
+// that both labels are exercised on every machine: read live it would
+// report whichever OS the suite happens to run on, and under plain
+// Node it reports the fallback, so the macOS branch would go
+// unasserted everywhere.
+stub(path.join(BUILT, 'lib', 'os'), {
+  __esModule: true,
+  platform: () => record.platform,
+  isDarwin: () => record.platform === 'darwin',
+  isWindows: () => record.platform === 'win32',
+  isLinux: () => record.platform === 'linux'
+})
+
 const TorrentListController = require(OUT).default
 
 const INFO_HASH = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
@@ -111,8 +129,8 @@ function makeState (overrides = {}) {
   }
 }
 
-function openMenu (overrides) {
-  reset()
+function openMenu (overrides = {}) {
+  reset(overrides.platform)
   const controller = new TorrentListController(makeState(overrides))
   controller.openTorrentContextMenu(INFO_HASH)
   return record.menus[0]
@@ -140,7 +158,7 @@ test('a torrent with files gets the full menu, in order', function (t) {
     'Remove From List',
     'Remove Data File',
     '--separator--',
-    process.platform === 'darwin' ? 'Show in Finder' : 'Show in Folder',
+    'Show in Finder',
     '--separator--',
     'Copy Magnet Link to Clipboard',
     'Copy Instant.io Link to Clipboard',
@@ -150,6 +168,24 @@ test('a torrent with files gets the full menu, in order', function (t) {
   ], 'labels and separators are unchanged')
   t.end()
 })
+
+// US-072. The label is the only thing that moves, and only the
+// reveal item moves it -- asserted item by item rather than as a
+// whole-menu deepEqual so a regression says which one changed.
+test('the reveal item is named for the platform file manager',
+  function (t) {
+    for (const [platform, label] of [
+      ['darwin', 'Show in Finder'],
+      ['win32', 'Show in Folder'],
+      ['linux', 'Show in Folder']
+    ]) {
+      const labels = openMenu({ platform }).map((i) => i.label)
+      t.ok(labels.includes(label), `${platform} says ${label}`)
+      t.equal(labels.filter(Boolean).length, 7,
+        `${platform} gets the same seven items`)
+    }
+    t.end()
+  })
 
 test('a torrent with no files drops the reveal item and its separator',
   function (t) {
@@ -223,13 +259,12 @@ test('the remove items dispatch confirmDeleteTorrent', function (t) {
   t.end()
 })
 
-test('the reveal item asks the main process to show the file', function (t) {
+test('the reveal item asks the host to show the file', function (t) {
+  // `openMenu()` builds on darwin, so this is the Finder spelling. The
+  // click handler behind either label is the same one.
   const items = openMenu()
-  const label = process.platform === 'darwin'
-    ? 'Show in Finder'
-    : 'Show in Folder'
   reset()
-  itemNamed(items, label).click()
+  itemNamed(items, 'Show in Finder').click()
   t.deepEqual(record.shell, [
     ['showItemInFolder', path.join('/tmp/downloads', 'Test Torrent')]
   ], 'sends the torrent folder')

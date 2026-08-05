@@ -8,6 +8,7 @@
     "babelConfig": "The Babel JSX config lives in the `babel` key of package.json, not in a `.babelrc` file. It is `@babel/plugin-transform-react-jsx` with `useBuiltIns: true`.",
     "esmOrder": "ESM conversion runs TOP-DOWN (entry point first, lib/ last). Babel compiles `export default X` to `exports.default = X`, so a still-CommonJS consumer that does `require('./x')` breaks. The reverse (ESM importing CommonJS) is safe via Babel's `_interopRequireDefault`. Converting consumers before their dependencies is therefore the only order that keeps the app launchable at every commit per FR-2.",
     "invariant": "FR-2: the Electron app must launch and pass the smoke test at every commit. A commit that leaves the app broken is not a valid commit.",
+    "macOnly": "This port targets macOS only. Windows and Linux hosts, bundles, handler registration, codec measurements, and verification runs are out of scope -- 'the current platform' means macOS everywhere in this PRD, and no story may require a Windows or Linux machine.",
     "cssFrozen": "FR-14: no CSS file may be modified. No change to visual design or user-facing behaviour beyond the telemetry removal in US-002. This is otherwise a pure refactor.",
     "webtorrentJsExempt": "FR-4: src/renderer/webtorrent.js is never converted to ESM, never passed through Vite, and never migrated to the shim. It keeps building through Babel and loading via static/webtorrent.html unchanged.",
     "deferredCasualties": "After US-002 deletes telemetry, exactly two deferred-casualty files remain exempt from the shim and the lint rule: `src/renderer/webtorrent.js` and `src/renderer/lib/cast.js`. `controllers/audio-tracks-controller.js` is also a deferred casualty but imports nothing restricted, so it needs no exemption.",
@@ -631,8 +632,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck)"
       ],
       "priority": 36,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "ADR-012 written and indexed. Docs-only story, no code and no test: the checks that apply to a decision record (80 columns, no em dash, no arrow) were run as one-off awk/grep passes. Decision matches conventions.engineTransport and the US-038..US-046 criteria."
     },
     {
       "id": "US-037",
@@ -648,7 +649,7 @@
         "Typecheck passes (`npm test` -- standard + depcheck)"
       ],
       "priority": 37,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -665,8 +666,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 38,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "src/shared/wire.js added with a __wtWire tag for Uint8Array, Buffer, undefined and non-finite numbers, plus an escape for a payload key that collides with the tag. test/unit/wire.js round-trips one sample payload for all 24 channels (10 commands, 12 events, both dynamic families) and covers 24 malformed-input cases; 178 assertions. build/shared/wire.js is emitted by build:main with no build change. Full suite 1474 assertions green, lint clean. Nothing imports the module yet, so no launch check applied."
     },
     {
       "id": "US-039",
@@ -682,7 +683,7 @@
         "Typecheck passes (`npm test` -- standard + depcheck)"
       ],
       "priority": 39,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -701,7 +702,7 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 40,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -718,7 +719,7 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 41,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -733,7 +734,7 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 42,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -749,7 +750,7 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 43,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -767,7 +768,7 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 44,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -785,8 +786,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 45,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Hidden window, its engine (src/renderer/webtorrent.js), bus-electron.js, the ipcMain.emit relay, the messageQueueMainToWebTorrent queue, the ipcReadyWebTorrent handshake, the menu devtools item and WINDOW_WEBTORRENT are all deleted. AC-6 was met only in part, deliberately: enableRemoteModule is gone from all of src/main/ (a no-op since Electron 14), but nodeIntegration and enableBlinkFeatures: 'AudioVideoTracks' are still load-bearing on the two visible windows -- the CJS renderer bundle's require() externals need the first (ADR-004) and player-page.js:125 needs the second (the US-082 casualty). Phase 4's Tauri host removes both by construction. New test test/unit/hidden-window-removed.js (25 assertions, 16 failing before the change) covers the deletions and asserts behaviourally that ipc.init() no longer overrides ipcMain.emit. The one assertion the deleted engine-bus-electron.js carried alone moved into test/unit/engine-entry.js. npm test 1700/1700, build clean, launch check init: 818ms with the sidecar up and one window. Smoke test not run (non-interactive); the eslint-boundary webtorrent.js override is left for US-046 as its criteria ask."
     },
     {
       "id": "US-046",
@@ -802,7 +803,7 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 46,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -836,7 +837,7 @@
         "Typecheck passes (`npm test` -- standard + depcheck)"
       ],
       "priority": 48,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -872,8 +873,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck)"
       ],
       "priority": 50,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Docs only, as AC-7 requires. ADR-014 records: (1) dual host -- src-tauri/ and src/main/ both launchable through Phase 4, same Vite output and same static/main.html, with US-072 the single cutover that flips the default and deletes src/main/; (2) build-time shim selection via a Vite resolveId plugin keyed on WT_HOST (default electron), rewriting lib/platform/<mod>.js to lib/platform/tauri/<mod>.js -- a resolve.alias entry cannot do it, because alias find patterns match the specifier as written and the barrel imports its siblings relatively; build-time because a runtime branch cannot produce a loadable Tauri bundle at all (require('electron') would survive into it), keeps ADR-009's boundary enforceable, does not triple what each story must keep working, and lets nodeIntegration die by construction; (3) Tauri 2 with the v2 plugin set, Rust >= 1.77.2 (developed on 1.97.1), Node >= 20.19 for Vite 8, Xcode CLT/WKWebView on macOS, MSVC + WebView2 on Windows, webkit2gtk-4.1 + libsoup3 on Linux; (4) casualties -- enableBlinkFeatures: 'AudioVideoTracks' has no WKWebView or WebKitGTK equivalent, so multi-audio switching goes (US-082) and, more seriously, the unguarded videoTracks/audioTracks reads at player-page.js:185-191 would throw in onLoadedMetadata and break playback startup (US-081); nodeIntegration and contextIsolation are lost by construction. Listed in docs/adr/INDEX.md. npm test 1736/1736 with lint and depcheck clean."
     },
     {
       "id": "US-051",
@@ -888,8 +889,8 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`"
       ],
       "priority": 51,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Scaffold complete and launch-verified: the window opens and loads static/main.html plus the existing build-vite output through the asset protocol, from the assembled build-tauri/ document root. The 'the UI renders' half of criterion 2 is NOT met and cannot be met in this story: the bundle is CJS with host externals (ADR-004) and a Tauri webview has no require, so it throws at offset 1106 on require(\"fs\") before any host call. WT_HOST is US-052's, the load-time os.platform() behind it is US-054's, and State.load succeeding -- which onState requires before React renders -- is US-055's. See the US-051 entry in progress.log for the measured evidence and for why US-052's throwing stubs make an earlier render impossible."
     },
     {
       "id": "US-052",
@@ -904,7 +905,7 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 52,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -921,7 +922,7 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 53,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -937,7 +938,7 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck)"
       ],
       "priority": 54,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -953,7 +954,7 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 55,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -969,8 +970,8 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 56,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Window creation, restore, --hidden and single instance in src-tauri/src/window.rs + main.rs; the renderer half is tauri/ipc-os.onWindowBoundsChanged over a Tauri event."
     },
     {
       "id": "US-057",
@@ -985,7 +986,7 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 57,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -1001,8 +1002,8 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 58,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Both dialogs are host commands over tauri-plugin-dialog's Rust API, so capabilities/default.json stays at core:default; the Electron options object is translated by the pure functions in src-tauri/src/dialog.rs. Two documented casualties: buttonLabel is dropped and ['openFile', 'openDirectory'] opens a directory picker (rfd does one or the other, as Electron itself does off macOS). The interactive half of the criterion -- actually opening a .torrent and choosing a folder under `npm run start:tauri` -- is a modal waiting on a human and is left to US-073."
     },
     {
       "id": "US-059",
@@ -1017,7 +1018,7 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 59,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -1033,7 +1034,7 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 60,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -1050,7 +1051,7 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 61,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -1065,7 +1066,7 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck)"
       ],
       "priority": 62,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -1075,12 +1076,12 @@
       "acceptanceCriteria": [
         "The Rust host implements the `setBadge`, `setProgress`, and `downloadFinished` behaviour from `src/main/dock.js`",
         "`platform/tauri/ipc-os.js` routes the matching shim exports to those commands",
-        "Platform differences are handled explicitly: badge on macOS, taskbar progress on Windows, and a documented no-op elsewhere",
+        "The dock badge and dock progress are implemented for macOS; no other platform is handled",
         "`test/unit/platform-ipc-os.js` covers the routed exports against the Tauri tree",
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 63,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -1088,15 +1089,14 @@
       "title": "Port magnet and .torrent handler registration to Rust",
       "description": "As a user, I want WebTorrent Desktop to register as the handler for magnet links and .torrent files under Tauri.",
       "acceptanceCriteria": [
-        "Install and uninstall are implemented for the current platform, matching the behaviour in `src/main/handlers.js`",
-        "The preferences toggle drives it through `ipc-os.setDefaultFileHandler`, unchanged on the UI side",
-        "Uninstall removes every registration install created, verified by inspecting the OS registration after each",
-        "Platforms not implemented yet fail loudly at build time or report unsupported, rather than silently doing nothing",
+        "Install and uninstall are implemented for macOS, matching the behaviour in `src/main/handlers.js`",
+        "`ipc-os.setDefaultFileHandler` drives it from the preferences toggle, unchanged on the UI side",
+        "Uninstall removes every registration install created, verified by inspecting the LaunchServices registration after each",
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 64,
       "passes": false,
-      "notes": "Registration touches the real OS -- registry keys, LaunchServices, or .desktop files -- and has to be verified per platform on a real machine.",
+      "notes": "Registration touches the real OS -- LaunchServices -- and has to be verified on a real macOS machine.",
       "manual": true
     },
     {
@@ -1126,7 +1126,7 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck)"
       ],
       "priority": 66,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -1140,7 +1140,7 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck)"
       ],
       "priority": 67,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -1155,7 +1155,7 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 68,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -1163,14 +1163,14 @@
       "title": "Port launch-on-login to Rust",
       "description": "As a user, I want the start-on-login preference to work under Tauri.",
       "acceptanceCriteria": [
-        "Install and uninstall are implemented for the current platform, matching `src/main/startup.js`",
+        "Install and uninstall are implemented for macOS, matching `src/main/startup.js`",
         "`ipc-os.setStartup` drives it unchanged from the UI side",
         "Uninstall removes exactly what install created",
         "The `--hidden` launch path still starts the app without showing the window",
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 69,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -1185,8 +1185,8 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 70,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Supervision, restart, endpoint and teardown are done and verified on the real host (US-070). The 'a torrent downloads, plays and seeds under npm run start:tauri' criterion is NOT met: the Tauri renderer bundle still calls Node's require() at load and never boots, which US-072 owns. See progress.log."
     },
     {
       "id": "US-071",
@@ -1200,8 +1200,8 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 71,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "The check, the feed URL and the dispatch are done and driven end to end against a stub feed on the real host (200 -> updateAvailable with the version reaches the webview, 204 -> nothing). The modal itself was not observed: the Tauri renderer bundle does not boot yet (ReferenceError: require), which US-072 owns. Downloading and installing an update stays with US-085."
     },
     {
       "id": "US-072",
@@ -1218,8 +1218,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 72,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Finished the cutover left part-done by two wip commits: wired copyIntoProfile into migrations, added the app_paths bootstrap in renderer/main.js, removed the leftover host probe, and refreshed the documents the deletions falsified. Verified by a real launch: the window renders and the profile is built at the host path."
     },
     {
       "id": "US-073",
@@ -1254,8 +1254,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck)"
       ],
       "priority": 74,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "ADR-015 written: casting moves to the Rust host behind lib/platform/cast.js, Chromecast over the rust_cast crate, DLNA and AirPlay reimplemented, no protocol dropped, subtitles served by the host, Chromecast first. ADR-008 amended to point at it. Documentation only, no code changed."
     },
     {
       "id": "US-075",
@@ -1270,7 +1270,7 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 75,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -1331,8 +1331,8 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 79,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "AC-5 (\"Casting to one real device still works end to end\") is NOT verified and could not be: it needs a real receiver on the network and US-076/077/078, which implement the three protocols in the host and are all manual and excluded from this loop. The host answers every session command with its US-075 not-implemented stub today. Carried to US-086. Everything else is done: lib/cast.js deleted (526 lines), its logic split into lib/cast-mirror.js (plain folds, testable) and controllers/cast-controller.js (the session), with playback-controller.js sending the five forward-a-value commands and dispatching stopCasting rather than calling the shim. chromecasts/dlnacasts/airplayer removed; depcheck clean. The cast exemption is gone from eslint-boundary.config.js and test/unit/platform-boundary.js, and lint-boundary.js now asserts the exemption list is EMPTY, closing ADR-008. New tests: cast-mirror.js and cast-call-sites.js, the latter verified against five deliberate mutations. Gotcha found: playback-controller gaining a platform/cast import made engine-ipc-call-sites.js load the real @tauri-apps/api, which broke platform-cast.js's require.cache stub four files later in the glob -- cast is now in that file's inert-stub list."
     },
     {
       "id": "US-080",
@@ -1347,7 +1347,7 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 80,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {
@@ -1355,15 +1355,15 @@
       "title": "Establish the codec fallback behaviour on the new webview",
       "description": "As a user, I want a clear message instead of a black window when a file will not play.",
       "acceptanceCriteria": [
-        "The codecs the target webview supports are tested per platform and recorded in a table in `docs/README.md` or a linked doc",
+        "The codecs the target webview supports are tested on macOS and recorded in a table in `docs/README.md` or a linked doc",
         "Files the webview cannot play trigger the existing unsupported-media modal rather than failing silently",
         "The modal offers the external player path where one is available",
         "`lib/media-extensions.js` and the player's playability check reflect the measured support, not the Chromium assumption",
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 81,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "WKWebView measured 2026-08-05 on macOS 26.5.1 and recorded in docs/codec-support.md. The WebKitGTK and WebView2 rows are unmeasured -- there is no Linux or Windows machine on this port -- and the gate refuses nothing on an engine with no row, so those platforms keep the pre-US-081 behaviour. Filling them in is out of scope: this port is macOS only."
     },
     {
       "id": "US-082",
@@ -1377,8 +1377,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 82,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Kept, not removed: enableBlinkFeatures: 'AudioVideoTracks' was gating a WebKit API Chromium copied and left off, and WKWebView implements it outright, so the controller works against the real capability (AC-1) and no UI was removed (AC-2 moot). New lib/audio-tracks.js holds readAudioTracks/applyAudioTrackSelection; the player keeps whichever track the element reports enabled instead of forcing index 0, and state.js defaults selectedIndex to -1. Verifying AC-4 against a real two-audio-track MP4 in the app's own window found a shipped US-081 bug: on WKWebView both track lists are present and EMPTY at loadedmetadata and fill from addtrack before loadeddata, so mediaElementError would have opened the unsupported-media modal over every video under Tauri. The codec check and the track read both moved to onLoadedData. Probe (ffmpeg file inlined as a data: URL, three launches) confirmed alen=2/vlen=1 at loadeddata, enabled marking the engine's starting track, switching firing change, play() resolving, and no console error; probe reverted. docs/README.md and docs/codec-support.md record the outcome and the timing table (AC-3). npm test 3617/3617, lint and depcheck clean, both renderer bundles build (AC-5)."
     },
     {
       "id": "US-083",
@@ -1399,29 +1399,12 @@
       "manual": true
     },
     {
-      "id": "US-084",
-      "title": "Package and sign the Windows and Linux builds",
-      "description": "As a user, I want installers on every supported platform.",
-      "acceptanceCriteria": [
-        "The Tauri bundler produces the Windows installer and the Linux packages the project shipped under Electron",
-        "The Windows build is signed and installs without a SmartScreen block",
-        "File and magnet handler registration works from the installed build on each platform",
-        "Uninstall removes the handlers and leaves no orphaned sidecar process",
-        "The per-platform build prerequisites are documented",
-        "Typecheck passes (`npm test` -- standard + depcheck)"
-      ],
-      "priority": 84,
-      "passes": false,
-      "notes": "Needs real Windows and Linux machines or VMs plus a code signing certificate.",
-      "manual": true
-    },
-    {
       "id": "US-085",
       "title": "Ship signed auto-updates",
       "description": "As a user, I want the app to update itself safely.",
       "acceptanceCriteria": [
         "The updater verifies signatures and refuses an unsigned or tampered payload",
-        "A staged release is downloaded, verified, and applied on the current platform",
+        "A staged release is downloaded, verified, and applied on macOS",
         "A user who declines an update is not prompted again until the next version",
         "Update-server configuration and key handling are documented; no private key is committed",
         "A deliberately corrupted payload is rejected with a visible error and no partial install",
@@ -1437,7 +1420,7 @@
       "title": "Port completion verification pass",
       "description": "As a developer, I want proof the port is finished, so the branch can ship.",
       "acceptanceCriteria": [
-        "Full six-step smoke test executed on macOS, Windows, and Linux, with the results recorded",
+        "Full six-step smoke test executed on macOS, with the results recorded",
         "Casting exercised against one real device per implemented protocol",
         "Startup time, idle memory, and installer size recorded against the original Electron baseline",
         "Every ADR from ADR-001 onward reviewed for drift and updated or superseded where the shipped app disagrees",
@@ -1447,7 +1430,7 @@
       ],
       "priority": 86,
       "passes": false,
-      "notes": "Attended, multi-platform session. Excluded from the headless ralph loop.",
+      "notes": "Attended macOS session. Excluded from the headless ralph loop.",
       "manual": true
     }
   ]

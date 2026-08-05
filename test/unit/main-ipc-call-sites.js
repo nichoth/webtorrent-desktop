@@ -69,7 +69,8 @@ test('main.js imports both IPC shims', function (t) {
 
 // The point of the file: every member main.js uses has to exist.
 for (const [namespace, file] of
-  [['ipcOs', 'ipc-os.js'], ['ipcEngine', 'ipc-engine.js']]) {
+  [['ipcOs', 'ipc-os.js'], ['ipcEngine', 'ipc-engine.js'],
+    ['platformWindow', 'window.js']]) {
   test(namespace + ' members used by main.js all exist', function (t) {
     const available = exportsOf(file)
     const used = [...membersUsed(namespace)].sort()
@@ -108,7 +109,7 @@ test('every wt-* listener main.js registered has a shim call',
     const required = [
       'onTorrentParsed', 'onTorrentMetadata', 'onTorrentDone',
       'onTorrentWarning', 'onTorrentError', 'onProgress',
-      'onFileModtimes', 'onTorrentFileSaved', 'onPosterSaved',
+      'onFileModtimes', 'onTorrentFileSaved',
       'onAudioMetadata', 'onServerRunning'
     ]
     t.deepEqual(required.filter((name) => !used.has(name)), [],

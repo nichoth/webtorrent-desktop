@@ -2,6 +2,7 @@ import { dispatch, reportErrors } from '../lib/dispatcher'
 import * as ipcEngine from '../lib/platform/ipc-engine'
 import * as ipcOs from '../lib/platform/ipc-os'
 import * as Playlist from '../lib/playlist'
+import { unsupportedMediaMessage } from '../lib/media-playability'
 
 // Controls local play back: the <video>/<audio> tag and VLC
 // Does not control remote casting (Chromecast etc)
@@ -16,6 +17,19 @@ export default class MediaController {
 
   mediaStalled () {
     this.state.playing.isStalled = true
+  }
+
+  // Asked once per file, as soon as the player is open (US-081). Where
+  // the webview has already been measured as unable to decode the
+  // format, say so through the same modal a failed <video> would open,
+  // rather than waiting to see whether an error event arrives at all.
+  // An unmeasured webview answers nothing here and the media element
+  // stays the only judge.
+  checkMediaPlayability () {
+    const state = this.state
+    if (state.playing.location !== 'local') return
+    const message = unsupportedMediaMessage(state.playing.fileName)
+    if (message) dispatch('mediaError', message)
   }
 
   mediaError (error) {
@@ -73,7 +87,10 @@ export default class MediaController {
 
     if (state.server != null) onServerRunning()
     else {
-      reportErrors(ipcEngine.onServerRunning(onServerRunning, { once: true }))
+      // Addressed by info hash: since ADR-013 the broadcast channel can
+      // carry a server started for poster generation.
+      reportErrors(ipcEngine.onServerRunningFor(
+        state.playing.infoHash, onServerRunning, { once: true }))
     }
   }
 

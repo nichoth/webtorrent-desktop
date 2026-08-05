@@ -1,0 +1,104 @@
+[package]
+name = "webtorrent-desktop"
+# Kept in sync with `version` in package.json by hand. Nothing reads
+# both, so nothing catches a drift; the packaging stories (US-083,
+# US-084) are where this stops being cosmetic.
+version = "0.24.0"
+description = "Streaming torrent client"
+authors = ["WebTorrent, LLC"]
+license = "MIT"
+edition = "2021"
+# Tauri 2's stated minimum (ADR-014).
+rust-version = "1.77.2"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# `tray-icon` is the tray (US-062); `image-png` and `image-ico` are the
+# decoders `Image::from_bytes` needs for the two icon files
+# `src/main/tray.js` picks between (`static/WebTorrent.png` and
+# `.ico`), which are embedded rather than read at runtime.
+tauri = { version = "2", features = ["tray-icon", "image-png", "image-ico"] }
+# Single-instance is a host concern the Electron main process gets from
+# `app.requestSingleInstanceLock()` (US-056).
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+# Not just for tests since US-056: the saved window bounds are read out
+# of the renderer's `config.json` before the renderer exists.
+serde_json = "1"
+tauri-plugin-dialog = "2"
+# `platform/shell.js` and `platform/clipboard.js` (US-059). Both are
+# used from Rust only -- the renderer reaches the app commands in
+# `main.rs`, never these plugins -- which is what keeps
+# `capabilities/default.json` at `core:default`.
+tauri-plugin-opener = "2"
+tauri-plugin-clipboard-manager = "2"
+# `shell.moveItemToTrash`: Tauri 2 has no equivalent of Electron's
+# `shell.trashItem`, and the point of the operation is that the file is
+# recoverable from the OS trash rather than unlinked.
+#
+# Pinned exactly: 5.2.6 onwards needs rustc 1.85, above the
+# `rust-version` above. Lifting the pin means raising that, which is an
+# ADR-014 decision rather than a dependency bump.
+trash = "=5.2.3"
+# The media keys, held only while the player is open (US-067). Same
+# arrangement as the plugins above: `src/shortcuts.rs` reaches it from
+# Rust, so `capabilities/default.json` stays at `core:default`. It and
+# the two crates it brings in (`global-hotkey` 0.8, MSRV 1.77, and
+# `xkeysym`, 1.58.1) are all at or below the `rust-version` above.
+tauri-plugin-global-shortcut = "2.3.2"
+# The engine sidecar's per-launch token (US-070), which is
+# `crypto.randomBytes(24)` in `src/main/engine-process.js`. `std` has no
+# random source and the supervisor needs nothing else from an RNG
+# crate, so this is the smallest thing that answers it -- and it is
+# already in the tree underneath Tauri, so it adds nothing to the
+# build. No `rust-version` of its own; it documents rustc 1.36.
+getrandom = "0.2"
+# The update check (US-071), which is one HTTPS GET -- `simple-get` in
+# `src/main/updater.js`. Tauri's own HTTP surface is `reqwest`, whose
+# 0.13 needs rustc 1.85; this is blocking, which is the shape a check
+# on its own thread wants, and it brings no async runtime with it.
+#
+# Pinned exactly: ureq 3 needs rustc 1.85 as well. Its 2.x tree tops
+# out at `zeroize` 1.85, which is under the 1.86 that Tauri's own
+# `url` -> `idna` -> `icu_*` chain already requires -- so it does not
+# raise what this crate actually builds with. Lifting the pin means
+# revisiting `rust-version` above, which is an ADR-014 decision.
+ureq = "=2.12.1"
+
+# The dock's Downloads-stack bounce (US-063). Electron's
+# `app.dock.downloadFinished` is a `com.apple.DownloadFileFinished`
+# distributed notification and nothing else; Tauri has no API for it,
+# so `src/dock.rs` posts it directly. Both crates are already in the
+# tree underneath Tauri's own macOS backend at these versions, so this
+# adds nothing to the build beyond the two extra Foundation features.
+# Their MSRV is 1.71, below the `rust-version` above.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "NSDistributedNotificationCenter",
+    "NSNotification",
+    "NSString",
+] }
+# The power save blocker's two IOKit strings (US-066). Electron's
+# `prevent-display-sleep` is `IOPMAssertionCreateWithName`, which takes
+# `CFStringRef`s; `src/power.rs` declares the two IOKit functions
+# itself, so this is only what builds their arguments. Already in the
+# tree at this version underneath Tauri's macOS backend, and its MSRV
+# is 1.71, below the `rust-version` above.
+objc2-core-foundation = { version = "0.3", default-features = false, features = [
+    "std",
+    "CFString",
+] }
+
+[dev-dependencies]
+# The accelerator parser behind `MenuItem::with_id`, which drops an
+# accelerator it cannot parse rather than failing (US-061). Tauri does
+# not re-export it, so the menu's test parses the strings through the
+# crate directly.
+#
+# Pinned to the version Tauri already resolves, so this adds nothing to
+# the build and cannot drift ahead of the `rust-version` above on its
+# own.
+muda = "=0.19.3"

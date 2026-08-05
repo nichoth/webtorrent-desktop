@@ -1,37 +1,37 @@
 /**
- * Platform shim: file system access.
+ * Platform shim.
  *
- * Exactly the operations `src/renderer/` performs today, no more. The
- * surface is deliberately callback-free and stream-free: everything
- * returns a promise so a host that has to cross a process boundary
- * can implement it.
+ * File access (US-060).
  *
- * Three shape changes the migration stories have to absorb:
+ * Nine host commands rather than the `fs` plugin's JS API, for the
+ * reason every other Phase 4 module is a command: an app command needs
+ * no capability, so `src-tauri/capabilities/default.json` stays at
+ * `core:default` and the webview never carries file access of its own.
+ * The `fs` plugin's alternative is `fs:allow-read-file` and its
+ * siblings granted to the whole webview, scoped by a glob list written
+ * in JSON -- which cannot express "the config directory, wherever it
+ * is on this platform" or "the folder the user just picked". The host
+ * knows both, so the allowlist lives there: `src-tauri/src/fs.rs`.
  *
- * 1. `stat` resolves to a plain object, not a Node `Stats` instance,
- *    so `stat.isDirectory()` becomes `stat.isDirectory`.
- * 2. There is no `createReadStream`. `subtitles-controller.js` reads
- *    the whole subtitle file with `readFile` instead; the file is
- *    small and the existing code concatenates the stream anyway.
- * 3. `readFile` resolves to a plain `Uint8Array`, not a `Buffer`, so
- *    text callers decode it themselves (`new TextDecoder().decode`).
- *    `JSON.parse(await readFile(p))` does NOT work the way
- *    `JSON.parse(readFileSync(p))` did.
+ * A path outside that allowlist is refused by the host and the promise
+ * rejects with the reason, which is a difference from `../fs.js` --
+ * there, every path the renderer can name is a path it can read.
+ * `exists` is the one export that does not surface the refusal,
+ * because its contract has no channel for one: any failure is `false`.
  *
- * Backed by `fs/promises` here; US-028 migrates the call sites. See
- * docs/platform-shim.md.
+ * Bytes cross in both directions as bytes. `readFile` gets an
+ * `ArrayBuffer` back (the host answers with `tauri::ipc::Response`,
+ * which does not JSON-encode the file), and `writeFile` sends a plain
+ * array, because a `Uint8Array` JSONifies to `{"0":4,"1":5}` and would
+ * reach the host as an object it cannot deserialize into a `Vec<u8>`.
+ *
+ * `docs/platform-shim.md` is the contract each export is written
+ * against. Until US-072 there was a second, Electron tree beside
+ * this one and a build flag to pick between them (ADR-014); the
+ * cutover deleted both, so this module is the shim.
  */
 
-import {
-  copyFile as nodeCopyFile,
-  mkdir as nodeMkdir,
-  readFile as nodeReadFile,
-  readdir as nodeReaddir,
-  rename as nodeRename,
-  stat as nodeStat,
-  unlink as nodeUnlink,
-  writeFile as nodeWriteFile
-} from 'fs/promises'
+import { invoke } from '@tauri-apps/api/core'
 
 /**
  * @typedef {object} FileStats
@@ -47,10 +47,7 @@ import {
  * @returns {Promise<Uint8Array>}
  */
 export async function readFile (path) {
-  const buffer = await nodeReadFile(path)
-  // A view, not a copy: `Buffer` is a `Uint8Array` subclass, and
-  // nothing that crosses this boundary should be a Node object.
-  return new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+  return bytes(await invoke('fs_read_file', { path }))
 }
 
 /**
@@ -61,7 +58,7 @@ export async function readFile (path) {
  * @returns {Promise<void>}
  */
 export async function writeFile (path, data) {
-  await nodeWriteFile(path, data)
+  await invoke('fs_write_file', { path, data: Array.from(encode(data)) })
 }
 
 /**
@@ -72,7 +69,7 @@ export async function writeFile (path, data) {
  * @returns {Promise<void>}
  */
 export async function copyFile (src, dest) {
-  await nodeCopyFile(src, dest)
+  await invoke('fs_copy_file', { src, dest })
 }
 
 /**
@@ -83,7 +80,7 @@ export async function copyFile (src, dest) {
  * @returns {Promise<void>}
  */
 export async function mkdir (path) {
-  await nodeMkdir(path, { recursive: true })
+  await invoke('fs_mkdir', { path })
 }
 
 /**
@@ -94,7 +91,7 @@ export async function mkdir (path) {
  * @returns {Promise<void>}
  */
 export async function rename (oldPath, newPath) {
-  await nodeRename(oldPath, newPath)
+  await invoke('fs_rename', { oldPath, newPath })
 }
 
 /**
@@ -104,7 +101,7 @@ export async function rename (oldPath, newPath) {
  * @returns {Promise<void>}
  */
 export async function unlink (path) {
-  await nodeUnlink(path)
+  await invoke('fs_unlink', { path })
 }
 
 /**
@@ -114,7 +111,7 @@ export async function unlink (path) {
  * @returns {Promise<string[]>}
  */
 export async function readdir (path) {
-  return await nodeReaddir(path)
+  return await invoke('fs_readdir', { path })
 }
 
 /**
@@ -124,27 +121,50 @@ export async function readdir (path) {
  * @returns {Promise<FileStats>}
  */
 export async function stat (path) {
-  const stats = await nodeStat(path)
-  return {
-    size: stats.size,
-    isDirectory: stats.isDirectory(),
-    isFile: stats.isFile()
-  }
+  return await invoke('fs_stat', { path })
 }
 
 /**
  * Whether a path exists. Covers the `try { statSync() } catch {}`
- * probes in `lib/migrations.js`, so any stat failure -- not just
- * ENOENT -- reads as "not there", matching what those probes do.
+ * probes in `lib/migrations.js`, so any failure -- not just a missing
+ * file, and including a path the host refuses -- reads as "not there",
+ * matching what those probes do.
  *
  * @param {string} path
  * @returns {Promise<boolean>}
  */
 export async function exists (path) {
   try {
-    await nodeStat(path)
-    return true
+    return await invoke('fs_exists', { path })
   } catch (err) {
     return false
   }
+}
+
+/**
+ * The bytes of a file, however the host sent them.
+ *
+ * An `ArrayBuffer` is the normal answer. A plain array is what a
+ * serialized `Vec<u8>` would be, and the caller cannot tell the two
+ * apart, so neither does this.
+ *
+ * @param {ArrayBuffer|number[]|Uint8Array} data
+ * @returns {Uint8Array}
+ */
+function bytes (data) {
+  if (data instanceof Uint8Array) return data
+  if (data instanceof ArrayBuffer) return new Uint8Array(data)
+  return Uint8Array.from(data)
+}
+
+/**
+ * The bytes to write. The host writes bytes, so a string is encoded
+ * here -- as UTF-8, which is what `fs.writeFile` defaults to and what
+ * `lib/state.js` reads back with a `TextDecoder`.
+ *
+ * @param {Uint8Array|string} data
+ * @returns {Uint8Array}
+ */
+function encode (data) {
+  return typeof data === 'string' ? new TextEncoder().encode(data) : data
 }

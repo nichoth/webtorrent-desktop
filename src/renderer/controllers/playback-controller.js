@@ -1,11 +1,12 @@
 import path from 'path'
 
-import * as Cast from '../lib/cast'
+import { canSetRate } from '../lib/cast-mirror'
 import { dispatch, reportErrors } from '../lib/dispatcher'
 import { UnplayableFileError, UnplayableTorrentError } from '../lib/errors'
 import * as sound from '../lib/sound'
 import * as TorrentPlayer from '../lib/torrent-player'
 import * as TorrentSummary from '../lib/torrent-summary'
+import * as cast from '../lib/platform/cast'
 import * as ipcEngine from '../lib/platform/ipc-engine'
 import * as ipcOs from '../lib/platform/ipc-os'
 import * as shell from '../lib/platform/shell'
@@ -31,8 +32,9 @@ export default class PlaybackController {
     const state = this.state
     if (state.location.url() === 'player') {
       this.updatePlayer(infoHash, index, false, (err) => {
-        if (err) dispatch('error', err)
-        else this.play()
+        if (err) return dispatch('error', err)
+        this.play()
+        dispatch('checkMediaPlayability')
       })
     } else {
       let initialized = false
@@ -54,7 +56,12 @@ export default class PlaybackController {
         },
         destroy: () => this.closePlayer()
       }, (err) => {
-        if (err) dispatch('error', err)
+        if (err) return dispatch('error', err)
+        // Not from inside `setup`: `location-history` sets the current
+        // page only once setup has called back, and the modal is
+        // opened by `mediaError`, which ignores anything dispatched
+        // while the location is still the torrent list.
+        dispatch('checkMediaPlayability')
       })
     }
   }
@@ -126,7 +133,7 @@ export default class PlaybackController {
     if (!state.playing.isPaused) return
     state.playing.isPaused = false
     if (isCasting(state)) {
-      Cast.play()
+      reportErrors(cast.play())
     }
     reportErrors(ipcOs.notifyPlayerPlay())
   }
@@ -137,7 +144,7 @@ export default class PlaybackController {
     if (state.playing.isPaused) return
     state.playing.isPaused = true
     if (isCasting(state)) {
-      Cast.pause()
+      reportErrors(cast.pause())
     }
     reportErrors(ipcOs.notifyPlayerPause())
   }
@@ -153,7 +160,7 @@ export default class PlaybackController {
       console.error('Tried to skip to a non-finite time ' + time)
       return console.trace()
     }
-    if (isCasting(this.state)) Cast.seek(time)
+    if (isCasting(this.state)) reportErrors(cast.seek(time))
     else this.state.playing.jumpToTime = time
   }
 
@@ -188,8 +195,12 @@ export default class PlaybackController {
       rate /= 2
     }
     state.playing.playbackRate = rate
-    if (isCasting(state) && !Cast.setRate(rate)) {
-      state.playing.playbackRate = 1
+    // A device that cannot change rate -- every Chromecast -- plays at
+    // normal speed and the UI says so, which is what `Cast.setRate()`'s
+    // boolean return meant before the call became asynchronous.
+    if (isCasting(state)) {
+      if (canSetRate(state)) reportErrors(cast.setRate(rate))
+      else state.playing.playbackRate = 1
     }
     // Wait a bit before we hide the controls and header again
     state.playing.mouseStationarySince = new Date().getTime()
@@ -209,7 +220,7 @@ export default class PlaybackController {
 
     const state = this.state
     if (isCasting(state)) {
-      Cast.setVolume(volume)
+      reportErrors(cast.setVolume(volume))
     } else {
       state.playing.setVolume = volume
     }
@@ -260,9 +271,14 @@ export default class PlaybackController {
     }
 
     function onTorrentReady () {
+      // Addressed by info hash: since ADR-013 poster generation starts
+      // servers too, so the broadcast channel can carry a server for a
+      // torrent the user is not watching.
+      reportErrors(ipcEngine.onServerRunningFor(
+        torrentSummary.infoHash,
+        () => { state.playing.isReady = true },
+        { once: true }))
       reportErrors(ipcEngine.startServer(torrentSummary.infoHash))
-      reportErrors(ipcEngine.onServerRunning(
-        () => { state.playing.isReady = true }, { once: true }))
     }
   }
 
@@ -345,10 +361,13 @@ export default class PlaybackController {
   closePlayer () {
     console.log('closePlayer')
 
-    // Quit any external players, like Chromecast/Airplay/etc or VLC
+    // Quit any external players, like Chromecast/Airplay/etc or VLC.
+    // Through the cast controller rather than straight at the shim:
+    // ending a session also drops the mirrored device, which is state
+    // this controller does not own.
     const state = this.state
     if (isCasting(state)) {
-      Cast.stop()
+      dispatch('stopCasting')
     }
     if (state.playing.location === 'external') {
       reportErrors(ipcOs.quitExternalPlayer())
@@ -356,6 +375,10 @@ export default class PlaybackController {
 
     // Save volume (this session only, not in state.saved)
     state.previousVolume = state.playing.volume
+
+    // wt-stop-server is per-torrent since ADR-013, so the info hash
+    // has to be read before the play state is reset below.
+    const playingInfoHash = state.playing.infoHash
 
     // Reset the window contents back to the home screen
     state.playing = State.getDefaultPlayState()
@@ -367,8 +390,8 @@ export default class PlaybackController {
     }
     restoreBounds(state)
 
-    // Tell the WebTorrent process to kill the torrent-to-HTTP server
-    reportErrors(ipcEngine.stopServer())
+    // Release our hold on the torrent-to-HTTP server
+    reportErrors(ipcEngine.stopServer(playingInfoHash))
 
     reportErrors(ipcOs.notifyPlayerClose())
 

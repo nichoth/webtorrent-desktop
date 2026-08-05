@@ -4,6 +4,7 @@ import * as TorrentSummary from '../lib/torrent-summary'
 import * as sound from '../lib/sound'
 import * as ipcEngine from '../lib/platform/ipc-engine'
 import * as ipcOs from '../lib/platform/ipc-os'
+import { generateTorrentPoster as makePoster } from '../lib/torrent-poster'
 import { dispatch, reportErrors } from '../lib/dispatcher'
 
 export default class TorrentController {
@@ -80,9 +81,11 @@ export default class TorrentController {
       reportErrors(ipcEngine.saveTorrentFile(torrentKey))
     }
 
-    // Auto-generate a poster image, if it hasn't been generated already
+    // Auto-generate a poster image, if it hasn't been generated already.
+    // ADR-013: the poster is made here, in the window that has a media
+    // decoder and a canvas, not by the engine.
     if (!torrentSummary.posterFileName) {
-      reportErrors(ipcEngine.generateTorrentPoster(torrentKey))
+      reportErrors(this.generateTorrentPoster(torrentKey))
     }
   }
 
@@ -144,8 +147,19 @@ export default class TorrentController {
     dispatch('stateSave')
   }
 
+  // Make a poster for a torrent and record it, if one could be made.
+  // Failure is quiet, as it was on wt-generate-torrent-poster: the
+  // torrent list keeps the default placeholder.
+  async generateTorrentPoster (torrentKey) {
+    const torrentSummary = this.getTorrentSummary(torrentKey)
+    const posterFileName = await makePoster(torrentSummary)
+    if (posterFileName) this.torrentPosterSaved(torrentKey, posterFileName)
+  }
+
   torrentPosterSaved (torrentKey, posterFileName) {
     const torrentSummary = this.getTorrentSummary(torrentKey)
+    // The torrent may have been removed while the poster was being made
+    if (!torrentSummary) return
     torrentSummary.posterFileName = posterFileName
     dispatch('stateSave')
   }
@@ -158,6 +172,13 @@ export default class TorrentController {
   }
 
   torrentServerRunning (serverInfo) {
+    // `state.server` is the *playing* torrent's server. Since ADR-013
+    // poster generation starts servers too, so a wt-server-running
+    // broadcast can be for a torrent the user is not watching -- taking
+    // it would point playback at the wrong port.
+    const playing = this.state.playing &&
+      this.getTorrentSummary(this.state.playing.infoHash)
+    if (!playing || playing.torrentKey !== serverInfo.torrentKey) return
     this.state.server = serverInfo
   }
 

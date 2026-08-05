@@ -6,9 +6,14 @@
  * engine is swapped at: a librqbit implementation has to satisfy
  * exactly this surface and nothing more.
  *
- * The counterparty is `src/renderer/webtorrent.js`, running in the
- * hidden window. Per FR-4 it is *not* migrated to the shim and stays
- * a direct `ipcRenderer` consumer.
+ * The counterparty is the engine sidecar, `src/engine/index.js`,
+ * reached over a localhost WebSocket (US-044, ADR-012). This module
+ * owns that socket and is the only place in the UI that knows the
+ * engine is a separate process: the endpoint comes from
+ * `ipc-os.getEngineEndpoint()`, every frame is encoded by
+ * `src/shared/wire.js`, and the two behaviours a socket has that
+ * `ipcRenderer` did not -- a pre-connect queue and a reconnect loop --
+ * live below in `send` and `retry`.
  *
  * The two dynamic channels (`wt-ready-${infoHash}` and
  * `wt-server-${infoHash}`) are addressed by passing the info hash as
@@ -19,13 +24,21 @@
  * site now goes through here. The protocol itself is documented in
  * US-033. See docs/platform-shim.md.
  *
- * `onServerRunningFor` has no caller in the renderer UI: the engine
- * sends `wt-server-${infoHash}` but nothing subscribes to it. It is
- * kept because the channel is part of the protocol a librqbit
- * implementation has to satisfy.
+ * US-043 deleted `generateTorrentPoster` and `onPosterSaved` from this
+ * surface: poster generation runs in the UI renderer now (ADR-013), so
+ * there is nothing left for `wt-generate-torrent-poster` or `wt-poster`
+ * to carry. `startServer` and `stopServer` became per-torrent in the
+ * same story, and `onServerRunningFor` gained its first caller --
+ * poster generation and playback can each hold a server, for different
+ * torrents, at the same time.
+ *
+ * US-044 replaced the transport. The exported surface is unchanged --
+ * same names, same arguments, same return types -- so no call site in
+ * `controllers/` or `main.js` moved.
  */
 
-import { ipcRenderer } from 'electron'
+import { decode, encode } from '../../../shared/wire'
+import { getEngineEndpoint } from './ipc-os'
 
 /**
  * @typedef {() => void} Unsubscribe
@@ -36,9 +49,159 @@ import { ipcRenderer } from 'electron'
  * @property {boolean} [once] Remove the listener after one event.
  */
 
+// `WebSocket.OPEN`. Read as a literal rather than off the constructor
+// so the class can be swapped wholesale in a test.
+const OPEN = 1
+
+// Reconnect backoff. The first retry is immediate because
+// `getEngineEndpoint()` already waits out a sidecar restart on the host
+// side; the doubling is for the cases it cannot help with (no engine at
+// all, an endpoint that refuses the upgrade).
+const RETRY_BASE_MS = 100
+const RETRY_MAX_MS = 5000
+
+// channel -> Set of listener. The subscriptions live here rather than
+// on the socket, which is what makes a reconnect transparent: nothing
+// has to be re-registered on the new socket, because nothing was ever
+// registered on the old one.
+const handlers = new Map()
+
+// Frames issued before a socket was open. `main.js` sends
+// `wt-set-global-trackers` and `wt-start-torrenting` during startup and
+// expects delivery, not a drop (ADR-012), so this queue is protocol.
+const outbox = []
+
+let socket = null
+let connecting = false
+let failures = 0
+let retryTimer = null
+
 /**
- * Register a listener on `channel`, hiding both the Electron event
- * object and `removeListener` from the caller.
+ * Ensure a connection is up or on its way. Called by every send and
+ * every subscription, so the socket is opened by first use and the
+ * module has no init step for a caller to forget.
+ */
+function connect () {
+  if (socket || connecting || retryTimer !== null) return
+  connecting = true
+  getEngineEndpoint().then(endpoint => {
+    connecting = false
+    // `null` means the host has no engine to offer *yet* -- it already
+    // waits out a restart before answering, so this is a real absence
+    // and the only thing to do is ask again later.
+    if (!endpoint) return retry()
+    open(endpoint)
+  }, err => {
+    connecting = false
+    report(err)
+    retry()
+  })
+}
+
+function open (endpoint) {
+  let next
+  try {
+    next = new globalThis.WebSocket(socketURL(endpoint))
+  } catch (err) {
+    report(err)
+    return retry()
+  }
+  socket = next
+
+  next.onopen = () => {
+    failures = 0
+    flush()
+  }
+  next.onmessage = event => dispatch(event.data)
+  // A socket error is always followed by a close in the browser, but
+  // not necessarily in every host webview, so both routes end up in
+  // `lost` and `lost` is idempotent.
+  next.onerror = () => lost(next)
+  next.onclose = () => lost(next)
+}
+
+function lost (dead) {
+  if (socket !== dead) return
+  socket = null
+  retry()
+}
+
+function retry () {
+  if (socket || retryTimer !== null) return
+  const delay = failures === 0
+    ? 0
+    : Math.min(RETRY_MAX_MS, RETRY_BASE_MS * Math.pow(2, failures - 1))
+  failures++
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    connect()
+  }, delay)
+}
+
+/**
+ * The endpoint carries a bare `ws://host:port`; the token goes on the
+ * query string, which is where `src/engine/bus-websocket.js` reads it
+ * in `verifyClient`.
+ */
+function socketURL (endpoint) {
+  const url = new URL(endpoint.url)
+  if (endpoint.token) url.searchParams.set('token', endpoint.token)
+  return url.href
+}
+
+function dispatch (data) {
+  let frame
+  try {
+    frame = decode(data)
+  } catch (err) {
+    // A frame the codec rejects is a bug on the engine side. Report it
+    // and keep the connection: one bad message is not a reason to lose
+    // the session, the same rule the engine's bus follows.
+    return report(err)
+  }
+  for (const listener of [...(handlers.get(frame.channel) || [])]) {
+    try {
+      listener(...frame.args)
+    } catch (err) {
+      report(err)
+    }
+  }
+}
+
+function flush () {
+  const live = socket
+  if (live === null || live.readyState !== OPEN) return
+  while (outbox.length > 0) {
+    try {
+      live.send(outbox[0])
+    } catch (err) {
+      // The socket died between the readyState read and the send. Leave
+      // the frame at the head of the queue for the next open one.
+      report(err)
+      return
+    }
+    outbox.shift()
+  }
+}
+
+/**
+ * Queue one command and deliver it as soon as there is a socket.
+ *
+ * @param {string} channel
+ * @param {any[]} args
+ */
+function send (channel, args) {
+  // `encode` throws on a value the wire cannot carry, which is a caller
+  // bug and belongs at the caller: every export is async, so it arrives
+  // as a rejected promise on the shim's usual `dispatch('error')` path.
+  outbox.push(encode(channel, args))
+  connect()
+  flush()
+}
+
+/**
+ * Register a listener on `channel`, hiding both the transport's event
+ * object and the unsubscribe bookkeeping from the caller.
  *
  * @param {string} channel
  * @param {(...args: any[]) => void} listener
@@ -46,10 +209,31 @@ import { ipcRenderer } from 'electron'
  * @returns {Unsubscribe}
  */
 function listen (channel, listener, options) {
-  const wrapped = (e, ...args) => listener(...args)
-  if (options && options.once) ipcRenderer.once(channel, wrapped)
-  else ipcRenderer.on(channel, wrapped)
-  return () => ipcRenderer.removeListener(channel, wrapped)
+  const wrapped = options && options.once
+    ? (...args) => {
+        remove(channel, wrapped)
+        listener(...args)
+      }
+    : listener
+
+  if (!handlers.has(channel)) handlers.set(channel, new Set())
+  handlers.get(channel).add(wrapped)
+  connect()
+  return () => remove(channel, wrapped)
+}
+
+function remove (channel, listener) {
+  const set = handlers.get(channel)
+  if (!set) return
+  set.delete(listener)
+  if (set.size === 0) handlers.delete(channel)
+}
+
+// Transport faults have no caller to reject at -- a dropped socket and
+// a malformed frame both happen between calls -- so they go to the
+// console rather than to `dispatch('error')`.
+function report (err) {
+  console.error('ipc-engine: ' + (err && err.message ? err.message : err))
 }
 
 // -- Commands: UI -> engine -----------------------------------------
@@ -61,7 +245,7 @@ function listen (channel, listener, options) {
  * @returns {Promise<void>}
  */
 export async function setGlobalTrackers (trackers) {
-  ipcRenderer.send('wt-set-global-trackers', trackers)
+  send('wt-set-global-trackers', [trackers])
 }
 
 /**
@@ -79,8 +263,8 @@ export async function setGlobalTrackers (trackers) {
 export async function startTorrenting (
   torrentKey, torrentId, path, fileModtimes, selections
 ) {
-  ipcRenderer.send('wt-start-torrenting',
-    torrentKey, torrentId, path, fileModtimes, selections)
+  send('wt-start-torrenting',
+    [torrentKey, torrentId, path, fileModtimes, selections])
 }
 
 /**
@@ -90,7 +274,7 @@ export async function startTorrenting (
  * @returns {Promise<void>}
  */
 export async function stopTorrenting (infoHash) {
-  ipcRenderer.send('wt-stop-torrenting', infoHash)
+  send('wt-stop-torrenting', [infoHash])
 }
 
 /**
@@ -101,7 +285,7 @@ export async function stopTorrenting (infoHash) {
  * @returns {Promise<void>}
  */
 export async function createTorrent (torrentKey, options) {
-  ipcRenderer.send('wt-create-torrent', torrentKey, options)
+  send('wt-create-torrent', [torrentKey, options])
 }
 
 /**
@@ -112,18 +296,7 @@ export async function createTorrent (torrentKey, options) {
  * @returns {Promise<void>}
  */
 export async function saveTorrentFile (torrentKey) {
-  ipcRenderer.send('wt-save-torrent-file', torrentKey)
-}
-
-/**
- * Ask the engine to generate a poster image. The reply arrives on
- * `onPosterSaved`.
- *
- * @param {number} torrentKey
- * @returns {Promise<void>}
- */
-export async function generateTorrentPoster (torrentKey) {
-  ipcRenderer.send('wt-generate-torrent-poster', torrentKey)
+  send('wt-save-torrent-file', [torrentKey])
 }
 
 /**
@@ -135,27 +308,31 @@ export async function generateTorrentPoster (torrentKey) {
  * @returns {Promise<void>}
  */
 export async function getAudioMetadata (infoHash, index) {
-  ipcRenderer.send('wt-get-audio-metadata', infoHash, index)
+  send('wt-get-audio-metadata', [infoHash, index])
 }
 
 /**
- * Start the local streaming HTTP server for a torrent. The reply
- * arrives on `onServerRunning`.
+ * Start the local streaming HTTP server for one torrent. Idempotent
+ * per torrent, and it always replies -- on `onServerRunning` and on
+ * `onServerRunningFor` -- whether or not a server was already up.
+ * Every caller that starts a server must release it with `stopServer`.
  *
  * @param {string} infoHash
  * @returns {Promise<void>}
  */
 export async function startServer (infoHash) {
-  ipcRenderer.send('wt-start-server', infoHash)
+  send('wt-start-server', [infoHash])
 }
 
 /**
- * Stop the local streaming HTTP server.
+ * Release this caller's hold on one torrent's streaming server. The
+ * server is destroyed once its last holder releases it.
  *
+ * @param {string} infoHash
  * @returns {Promise<void>}
  */
-export async function stopServer () {
-  ipcRenderer.send('wt-stop-server')
+export async function stopServer (infoHash) {
+  send('wt-stop-server', [infoHash])
 }
 
 /**
@@ -166,7 +343,7 @@ export async function stopServer () {
  * @returns {Promise<void>}
  */
 export async function selectFiles (infoHash, selections) {
-  ipcRenderer.send('wt-select-files', infoHash, selections)
+  send('wt-select-files', [infoHash, selections])
 }
 
 // -- Events: engine -> UI -------------------------------------------
@@ -283,18 +460,6 @@ export async function onFileModtimes (listener, options) {
  */
 export async function onTorrentFileSaved (listener, options) {
   return listen('wt-file-saved', listener, options)
-}
-
-/**
- * A poster image was written to disk.
- *
- * @param {(torrentKey: number, posterFileName: string) => void}
- *   listener
- * @param {ListenOptions} [options]
- * @returns {Promise<Unsubscribe>}
- */
-export async function onPosterSaved (listener, options) {
-  return listen('wt-poster', listener, options)
 }
 
 /**
