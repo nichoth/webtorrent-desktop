@@ -77,11 +77,6 @@ fn app_paths(paths: tauri::State<'_, AppPaths>) -> AppPaths {
     paths.inner().clone()
 }
 
-#[tauri::command]
-fn probe(message: String) {
-    println!("PROBE {message}");
-}
-
 // -- The window, as the renderer drives it (US-057) -------------------
 //
 // Everything the shim's `window.js` and the window half of its
@@ -1515,41 +1510,7 @@ fn main() {
             app.on_menu_event(|app, event| on_menu_click(app, event.id().as_ref()));
             Ok(())
         })
-        .append_invoke_initialization_script(
-            r#";
-            window.__WT_PROBE = [];
-            window.addEventListener('error', function (e) {
-              window.__WT_PROBE.push('error: ' + String(e.message || e.error));
-            });
-            window.addEventListener('unhandledrejection', function (e) {
-              window.__WT_PROBE.push('rejection: ' + String(e.reason));
-            });
-            setTimeout(function () {
-              var invoke = window.__TAURI_INTERNALS__.invoke;
-              var report = { baseURI: document.baseURI };
-              Promise.all([
-                invoke('app_paths').then(function (p) {
-                  report.appPaths = p;
-                }, function (e) { report.appPathsError = String(e); }),
-                fetch(new URL('bigBuckBunny.torrent', document.baseURI))
-                  .then(function (r) {
-                    report.torrentStatus = r.status;
-                    return r.arrayBuffer();
-                  })
-                  .then(function (b) { report.torrentBytes = b.byteLength; },
-                    function (e) { report.torrentError = String(e); }),
-                fetch(new URL('sound/add.wav', document.baseURI))
-                  .then(function (r) { report.wavStatus = r.status },
-                    function (e) { report.wavError = String(e) })
-              ]).then(function () {
-                report.errors = window.__WT_PROBE;
-                invoke('probe', { message: JSON.stringify(report) });
-              });
-            }, 6000);
-            "#,
-        )
         .invoke_handler(tauri::generate_handler![
-            probe,
             app_paths,
             window_is_visible,
             window_is_maximized,

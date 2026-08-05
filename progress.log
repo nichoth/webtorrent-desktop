@@ -6025,3 +6025,94 @@ subscription the folder watcher already uses.
     the network half of the module a unit test rather than something
     only a manual launch covers.
 ---
+
+## 2026-08-04 - US-072 - Cut the app over to Tauri
+
+Finished the cutover that the two `wip` commits (`f46cabb`, `e8475db`)
+left part-done, and verified it against a real launch rather than
+against the tree.
+
+What was already in place at HEAD and needed only checking: `src/main/`,
+`index.js`, `bin/package.js`, `bin/shim-resolver.js`,
+`bin/build-renderer.js` and the whole Spectron suite deleted;
+`platform/tauri/` promoted to `platform/`; `WT_HOST` and the `resolveId`
+plugin gone; every Electron package out of `package.json`; `build:main`
+renamed `build:node`; the replacement plan for the integration suite
+recorded in `test/AGENTS.md`; and `test/unit/electron-removed.js` as the
+regression gate over all of it.
+
+What was actually broken, in the order it was found:
+
+- **`npm test` did not pass at HEAD.** `lib/migrations.js` had the new
+  `copyIntoProfile` helper written and documented but not called: three
+  call sites still joined `config.STATIC_PATH`, which no longer exists.
+  Wired the helper in; the migrations tests that were written for it
+  pass.
+- **Nothing consumed `app_paths`.** `config.js` exported empty strings
+  for `CONFIG_PATH` and its siblings and `src/renderer/main.js` called
+  `State.load` straight away, so the profile was `./config.json`
+  relative to nothing. Added `bootstrap()`: await
+  `platform/paths.appPaths()`, `useHostPaths`, then `State.load`.
+- **And the bootstrap called it through the wrong surface.** Only a
+  launch caught this -- see the learnings below.
+- Removed the `probe` command and the
+  `append_invoke_initialization_script` block that `e8475db` left in
+  `src-tauri/src/main.rs` (39 lines, deletions only).
+- Documentation that the cutover had falsified: `src/AGENTS.md` still
+  described externals, `nodeIntegration` and a `file://` document;
+  ADR-004 (reversed), ADR-003 and ADR-010 (amended) had no note saying
+  the ground had moved.
+
+Verified by launch, `HOME=/tmp/wt-072`: the window renders (header,
+five default torrents, 11KB of DOM), the host's `app_paths` answer is
+what the profile is built at, and `config.json`, `Torrents/` and
+`Posters/` are written there with the five bundled torrents and their
+posters. One error remains at the 6s `delayedInit`, from
+`Cast.init()` -> `util.inherits` in the casting stack: that is the
+PRD's deferred casualty (ADR-008), it fires after render, and US-076
+through US-079 own it.
+
+Files changed: `src/renderer/main.js`, `src/renderer/lib/migrations.js`,
+`src-tauri/src/main.rs`, `test/unit/renderer-boots.js`, `src/AGENTS.md`,
+`bin/build-tauri.js`, `docs/adr/ADR-003`, `ADR-004`, `ADR-010`,
+`specs/prd.json`.
+
+- **Learnings for future iterations:**
+  - **A green sandbox is not a launch, and the gap is exactly one
+    tick.** `test/unit/renderer-boots.js` answers `invoke` with a
+    promise that never settles, so it proves the *synchronous*
+    initialization of the bundle and nothing after the first host
+    call. The bootstrap's `useHostPaths` was reached through the
+    default export -- which carries the path values and deliberately
+    not the function that moves them -- and that threw on a promise
+    nobody awaited: no render, no message, and every unit test green.
+    The fix is a second boot test that **answers one command** and
+    leaves the rest pending, so startup advances exactly one step and
+    the answer's use is assertable. Capture `unhandledRejection`
+    around it: a bootstrap with no `catch` (which is right -- there is
+    no UI to report into that early) otherwise takes the `tape`
+    process down from a later tick.
+  - **`npm run build:tauri` alone does not change what the binary
+    runs.** `tauri.conf.json` points `frontendDist` at `build-tauri/`
+    and `generate_context!` embeds it at *compile* time, so a renderer
+    fix needs `cargo build` after it. Two launches in a row reported a
+    bug I had already fixed before this was obvious -- if a launch
+    contradicts a passing unit test, check the binary's age first.
+  - **A throwaway probe left in `main.rs` is worth grepping for at the
+    *start* of a session, not just before committing.** The one
+    `e8475db` left behind is what made this session's diagnosis cheap,
+    and it would equally have shipped. `grep -n "probe\|append_invoke"
+    src-tauri/src/main.rs` is the check, and it belongs in both places.
+  - **A `wip` commit is not a finished story.** HEAD failed `npm run
+    lint`, and the failure (`copyIntoProfile is defined but never
+    used`) was pointing straight at the unfinished work. Run `npm test`
+    before reading anything else when a session inherits a dirty
+    handover: the first failure is usually the map.
+  - **Deleting a mechanism falsifies the documents that explain it.**
+    ADR-004 decided CommonJS output with host externals; the cutover
+    reverses both halves, and an ADR that still reads as a rule is
+    worse than no ADR. The convention this repo has settled on is a
+    dated banner under the title -- **Reversed by**, **Amended by** or
+    **Spent as of** -- that says which story moved it and what is still
+    live in the record, leaving the body intact as history.
+---

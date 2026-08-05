@@ -88,13 +88,9 @@ async function migrate_0_7_0 (saved) {
     // * Finally, now we're getting rid of torrentPath altogether
     let src, dst
     if (ts.torrentPath) {
-      if (path.isAbsolute(ts.torrentPath) || ts.torrentPath.startsWith('..')) {
-        src = ts.torrentPath
-      } else {
-        src = path.join(config.STATIC_PATH, ts.torrentPath)
-      }
+      src = ts.torrentPath
       dst = path.join(config.TORRENT_PATH, infoHash + '.torrent')
-      if (src !== dst) await fs.copyFile(src, dst)
+      if (src !== dst) await copyIntoProfile(src, dst)
 
       delete ts.torrentPath
       ts.torrentFileName = infoHash + '.torrent'
@@ -103,11 +99,9 @@ async function migrate_0_7_0 (saved) {
     // Replace posterURL with posterFileName
     if (ts.posterURL) {
       const extension = path.extname(ts.posterURL)
-      src = path.isAbsolute(ts.posterURL)
-        ? ts.posterURL
-        : path.join(config.STATIC_PATH, ts.posterURL)
+      src = ts.posterURL
       dst = path.join(config.POSTER_PATH, infoHash + extension)
-      if (src !== dst) await fs.copyFile(src, dst)
+      if (src !== dst) await copyIntoProfile(src, dst)
 
       delete ts.posterURL
       ts.posterFileName = infoHash + extension
@@ -228,8 +222,8 @@ async function migrate_0_17_2 (saved) {
   try {
     await fs.unlink(path.join(config.TORRENT_PATH, ts.torrentFileName))
   } catch (err) {}
-  await fs.copyFile(
-    path.join(config.STATIC_PATH, 'wiredCd.torrent'),
+  await copyIntoProfile(
+    'wiredCd.torrent',
     path.join(config.TORRENT_PATH, NEW_HASH + '.torrent')
   )
   ts.torrentFileName = NEW_HASH + '.torrent'

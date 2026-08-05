@@ -79,7 +79,7 @@ test('the bundle asks for no Node module at load', function (t) {
 // `module`, `exports` or `global`. Anything the bundle needs from Node
 // is therefore a failure here rather than a blank window nobody sees
 // until a human launches the app.
-function webviewSandbox () {
+function webviewSandbox (invoked = [], answer = null) {
   const listeners = () => ({
     addEventListener () {}, removeEventListener () {}, dispatchEvent () {}
   })
@@ -181,7 +181,10 @@ function webviewSandbox () {
     // later tick, outside any `try` this file can write, where it
     // takes the whole `tape` process down with it.
     __TAURI_INTERNALS__: {
-      invoke: () => new Promise(() => {}),
+      invoke: (command, args) => {
+        invoked.push({ command, args })
+        return answer ? answer(command) : new Promise(() => {})
+      },
       transformCallback: (fn) => fn,
       convertFileSrc: (src) => src
     }
@@ -232,5 +235,104 @@ test('neither Node-environment failure is reachable', function (t) {
     'no `require is not defined` -- ADR-004 externals are gone')
   t.notOk(/\bprocess\b.*(is not defined|find variable)/.test(message),
     'no `process is not defined` -- config.js reads no Node globals')
+  t.end()
+})
+
+// -- the first thing it asks the host --------------------------------
+
+// The startup ordering the cutover depends on. `src/config.js` cannot
+// resolve `CONFIG_PATH` in a webview -- it has no `$HOME` and no
+// platform convention -- so every path it exports is the empty string
+// until the host's `app_paths` answer lands in `config.useHostPaths`.
+// A `State.load()` that runs before that reads and writes
+// `./config.json`, relative to whatever the webview considers its
+// working directory, and the user's profile is silently not the one on
+// disk.
+//
+// Asserted on the emitted bundle rather than on `main.js` because the
+// ordering is a runtime fact, not a lexical one: an `await` in the
+// wrong place reorders it while the source still reads correctly.
+// `invoke` never settles here, so the startup chain stops at its first
+// host call -- which means the recorded commands are exactly what the
+// bundle asks for before it has any answer at all.
+test('the bundle asks the host for its paths before reading state',
+  function (t) {
+    const invoked = []
+    const sandbox = webviewSandbox(invoked)
+    try {
+      vm.runInNewContext(source, sandbox, {
+        filename: 'main.js',
+        timeout: 30000
+      })
+    } catch (err) {
+      t.fail(`threw ${err.name}: ${err.message}`)
+    }
+
+    const commands = invoked.map((call) => call.command)
+    t.ok(commands.includes('app_paths'),
+      `app_paths was invoked (saw: ${commands.join(', ') || 'nothing'})`)
+    t.deepEqual(commands.filter((name) => name.startsWith('fs_')), [],
+      'and no filesystem command ran while the paths were unknown')
+    t.end()
+  })
+
+// The other half, and the half a pending `invoke` cannot show: what
+// the bundle does with the answer. This one lets `app_paths` resolve
+// and leaves every other command pending, so startup advances exactly
+// one step -- into `State.load`, whose first act is to read the config
+// file. The path it reads is the assertion: it has to be the one the
+// host just supplied, which is true only if the answer reached *both*
+// surfaces of `src/config.js` (the named exports and the default one).
+//
+// A launch caught this where the ordering test above could not: the
+// bootstrap called `config.useHostPaths` through the default export,
+// which carries the path values and not the function that moves them,
+// so it threw `undefined is not a function` on a promise nobody was
+// awaiting. Nothing rendered and nothing said why.
+test('and it uses the answer, on both config surfaces', async (t) => {
+  const HOST = {
+    configPath: '/host/Profile',
+    torrentPath: '/host/Profile/Torrents',
+    posterPath: '/host/Profile/Posters',
+    tempPath: '/host/Temp',
+    defaultDownloadPath: '/host/Downloads',
+    isPortable: false
+  }
+
+  // The bootstrap deliberately has no `catch` -- there is no UI to
+  // report into that early -- so a failure arrives as an unhandled
+  // rejection on a later tick, where no `try` here could see it. It
+  // would otherwise take the whole `tape` process down.
+  const rejections = []
+  const onRejection = (err) => rejections.push(err)
+  process.on('unhandledRejection', onRejection)
+
+  const invoked = []
+  const sandbox = webviewSandbox(invoked, (command) => (
+    command === 'app_paths'
+      ? Promise.resolve(HOST)
+      : new Promise(() => {})
+  ))
+
+  try {
+    vm.runInNewContext(source, sandbox, {
+      filename: 'main.js',
+      timeout: 30000
+    })
+
+    // Two turns of the loop: one for the `app_paths` answer, one for
+    // the read `State.load` starts on the back of it.
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    t.deepEqual(rejections.map(String), [],
+      'the bootstrap ran to completion')
+
+    const read = invoked.find((call) => call.command === 'fs_read_file')
+    t.ok(read, 'State.load ran once the host had answered')
+    t.equal(read && read.args.path, '/host/Profile/config.json',
+      'and read the config file out of the host\'s profile directory')
+  } finally {
+    process.removeListener('unhandledRejection', onRejection)
+  }
   t.end()
 })

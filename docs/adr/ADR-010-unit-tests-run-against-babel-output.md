@@ -2,6 +2,17 @@
 
 **Date:** 2026-07-28
 
+**Amended by US-072 (2026-08-04).** The decision holds -- unit tests
+are still CommonJS over `build/` -- but two of its surroundings moved.
+`npm run test-unit` runs `npm run build` (both halves, so the Vite
+bundle the boot test loads is current) rather than the renamed
+`build:main`, and the Spectron suite the alternatives below weigh
+against is deleted with the host it drove; `test/AGENTS.md` records
+what replaces it. The shim modules no longer import `electron`, so the
+second obstacle below is now solved by the port rather than by this
+record -- what remains is stubbing `@tauri-apps/api` through
+`require.cache`, which works the same way for the same reason.
+
 ## Context
 
 Before Phase 2 the only automated coverage was `standard`, `depcheck`

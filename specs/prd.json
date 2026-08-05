@@ -1218,8 +1218,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 72,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Finished the cutover left part-done by two wip commits: wired copyIntoProfile into migrations, added the app_paths bootstrap in renderer/main.js, removed the leftover host probe, and refreshed the documents the deletions falsified. Verified by a real launch: the window renders and the profile is built at the host path."
     },
     {
       "id": "US-073",

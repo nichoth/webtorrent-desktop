@@ -10,7 +10,10 @@ import dragDrop from 'drag-drop'
 import React from 'react'
 import ReactDOM from 'react-dom'
 
-import config from '../config'
+// `useHostPaths` by name: the default export is the values, and it is
+// one of the two surfaces this call writes to, so it cannot be reached
+// through it. See the "Keep in sync" comment in `src/config.js`.
+import config, { useHostPaths } from '../config'
 import * as Cast from './lib/cast'
 import State from './lib/state'
 import * as sound from './lib/sound'
@@ -20,6 +23,7 @@ import * as clipboard from './lib/platform/clipboard'
 import * as platformFs from './lib/platform/fs'
 import * as ipcEngine from './lib/platform/ipc-engine'
 import * as ipcOs from './lib/platform/ipc-os'
+import * as paths from './lib/platform/paths'
 import * as platformWindow from './lib/platform/window'
 
 // Perf optimization: Needed immediately, so do not lazy load it below
@@ -45,7 +49,26 @@ console.time('init')
 // This used to sit above the module's other require() calls, so that the
 // asynchronous config file read overlapped with them. ESM hoists every import
 // to the top of the module, so that overlap is no longer expressible here.
-State.load(onState)
+bootstrap()
+
+// The host answers first, and that ordering is load-bearing. In a
+// webview `src/config.js` cannot resolve where the user's data lives
+// -- it has no `$HOME` and no platform convention -- so `CONFIG_PATH`
+// and its siblings are empty strings until `app_paths` lands in
+// `config.useHostPaths` (US-054, US-072). A `State.load()` that ran
+// first would read and write `./config.json`, relative to whatever the
+// webview considers its working directory: not an error, just the
+// wrong profile, invisibly.
+//
+// No `catch`. There is no UI to report into at this point -- `onError`
+// writes into `state`, which `onState` below is what creates -- and a
+// failure here leaves nothing to continue with, since every path the
+// app would touch is still the empty string. The rejection surfaces in
+// the webview console carrying the host's own message.
+async function bootstrap () {
+  useHostPaths(await paths.appPaths())
+  State.load(onState)
+}
 
 // Yo-yo pattern: state object lives here and percolates down thru all the views.
 // Events come back up from the views via dispatch(...)

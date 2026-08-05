@@ -109,9 +109,16 @@ constant answers with the reasoning in a comment at each, because
 neither of the two runtimes that still load this file -- plain `node`
 for the sidecar, the webview for the renderer -- can answer them.
 
-One consequence is open and is recorded against US-072 in
-`progress.log`: nothing in the renderer consumes `app_paths` yet, so
-`DEFAULT_DOWNLOAD_PATH` is empty in a profile created before it does.
+The consequence is a startup ordering rule. Every path this file
+exports is the empty string until `bootstrap()` in
+`src/renderer/main.js` awaits `lib/platform/paths.appPaths()` and feeds
+the answer to `useHostPaths`, which it does before `State.load`.
+Anything that reads `CONFIG_PATH`, `TORRENT_PATH`, `POSTER_PATH` or
+`DEFAULT_DOWNLOAD_PATH` must therefore read it **at call time**, never
+capture it at module load -- `stateFile()` in `lib/state.js` is a
+function for exactly this reason. `test/unit/renderer-boots.js` runs
+the emitted bundle and asserts the ordering; `test/unit/state-file.js`
+asserts the late read.
 
 ## `src/renderer/lib/`
 
@@ -142,9 +149,12 @@ that could reach it.
 **Do not use dynamic `import()` in `src/renderer/`.** It never settles
 there -- no resolve, no reject, no console error, and control never
 returns to the caller. `static/main.html` loads
-`build-vite/renderer/main.js` from a classic `<script src>` in a
-`file://` document, so `import()` goes through Chromium's loader rather
-than Node's, and a bare specifier just hangs.
+`build-vite/renderer/main.js` from a classic `<script src>`, so
+`import()` goes through the webview's loader rather than Node's, and a
+bare specifier just hangs. That was measured under Electron on a
+`file://` document; the document is served over Tauri's asset protocol
+now, out of the root `bin/build-tauri.js` assembles, and the bundle is
+an `iife` with no bare specifiers left in it either way.
 
 That leaves only two ways to load a module, and the choice is a
 measurement, not a preference:
@@ -165,33 +175,33 @@ Measure with `git stash && npm start` for the before, and
 
 ## Node builtins in `src/renderer/`
 
-Every builtin the renderer imports needs an entry in `vite.config.js`,
-or Rolldown silently swaps in a browser stub that throws on first use.
-A green `npx vite build` does not catch this -- it is a *warning*
-(`Module "x" has been externalized for browser compatibility`), not an
-error. So after adding any new builtin import, check the build's stderr
-for that warning; the expected count is 0.
+**There are no externals.** Until US-072 a builtin could be left as a
+`require()` and answered at runtime by the Electron window's
+`nodeIntegration: true` (ADR-004). A webview has no `require` and no
+module registry, so that list came out with the host; everything the
+bundle names is now bundled into it.
 
-There are two strategies, and the choice is deliberate:
+That leaves one strategy and one trap. The strategy: if the renderer
+needs a builtin, give it a **first-party implementation** and alias it
+in `vite.config.js`. `path` (`lib/path.js`, ADR-011), `events`,
+`stream` and `util` are aliased this way, which is why `path`'s 13
+renderer call sites need no shim and no change; each has a unit test,
+and extending one means adding cases there rather than trusting a
+package. Anything that needs the *real* Node module belongs behind the
+platform shim or in the sidecar, not in the bundle.
 
-- **Bundle** it, if a browser-safe implementation is equivalent. `path`
-  is aliased to `src/renderer/lib/path.js` this way, which is why its 13
-  renderer call sites need no shim and no change. That module is
-  first-party (ADR-011) and its unit test diffs it against Node's
-  `path.posix`, so extending it means adding cases to
-  `test/unit/path.js`, not trusting a package.
-- **Externalize** it, for anything that needs the real Node module.
-  Works because the Vite output format is `'cjs'` and the renderer runs
-  with `nodeIntegration: true`, so an emitted `require()` resolves
-  against Electron's module registry at load time. Do not change that
-  format without re-checking every external.
+The trap: Vite rewrites an un-aliased builtin to an **empty object**,
+not to an error, so a green `vite build` proves nothing. The failure is
+`undefined()` inside some module body at load, one frame further in
+with each fix. `test/unit/renderer-boots.js` runs the emitted bundle in
+a webview-shaped sandbox with no `require` and no `process` and is what
+catches it -- run that, read the stack, and do not try to reason the
+list out in advance. The comment block above `PROCESS_SHIM` in
+`vite.config.js` is the current inventory of what is aliased, what is
+left as the empty object, and why each one is safe there.
 
-`electron` and `@electron/remote` MUST stay external. A bundler resolves
-`require('electron')` to `node_modules/electron/index.js` -- the npm CLI
-helper, which exports a path string, not the runtime API -- and emits no
-warning at all, so `ipcRenderer` ends up `undefined` while the build
-reports success.
-
-`vite.config.js` keeps first-party externals and dependency-only ones in
-separate lists on purpose: the first list is the inventory of what the
-Phase 2 platform shim has to cover. Add to the right one.
+A bundler resolves `require('electron')` to
+`node_modules/electron/index.js` -- the npm CLI helper, which exports a
+path string, not the runtime API -- and emits no warning at all. That
+is why `test/unit/electron-removed.js` scans the AST of every source
+for the import rather than trusting the build to complain.

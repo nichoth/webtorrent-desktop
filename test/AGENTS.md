@@ -326,6 +326,29 @@ The behaviour of the shim functions themselves stays in
 `platform-ipc-os.js` / `platform-ipc-engine.js`; do not duplicate it
 here.
 
+What *is* testable is the emitted bundle, which
+`test/unit/renderer-boots.js` runs in a webview-shaped sandbox: a
+`vm` context with a minimal DOM and deliberately no `require`,
+`process`, `module` or `global`. Its `__TAURI_INTERNALS__.invoke`
+records every command and has two modes, and the difference matters:
+
+- **Nothing answers.** Every `invoke` returns a promise that never
+  settles, so startup stops at the first host call and the recorded
+  commands are exactly what the bundle asks for before it knows
+  anything. This is how the load itself and the startup *ordering*
+  are asserted.
+- **One command answers.** Resolve `app_paths` and leave the rest
+  pending, and startup advances exactly one step further -- far
+  enough to assert what the bundle did with the answer. US-072 needed
+  this: the bootstrap reached `useHostPaths` through the wrong export
+  and threw one tick after every other test had gone green.
+
+Anything asserted in the second mode runs on a later tick, so wrap it
+in a `process.on('unhandledRejection')` capture. `main.js`'s
+`bootstrap()` deliberately has no `catch` -- there is no UI to report
+into that early -- and an uncaught rejection there lands outside any
+`try` in the test file and takes the whole `tape` process with it.
+
 ## Testing the engine sidecar
 
 `test/unit/engine-entry.js` runs the real thing: it spawns

@@ -3,11 +3,11 @@
 /**
  * Assembles the document root that the Tauri window loads.
  *
- * Both hosts load the same `static/main.html` and the same Vite output
- * (ADR-014), and that HTML reaches the bundle through a relative
- * `<script src="../build-vite/renderer/main.js">`. Electron loads the
- * file straight off disk, so the `..` resolves; Tauri serves a single
- * directory through its asset protocol and cannot see outside it.
+ * The window loads `static/main.html`, and that HTML reaches the Vite
+ * output through a relative `<script src="../build-vite/renderer/main.js">`.
+ * Electron loaded the file straight off disk until US-072, so the `..`
+ * resolved; Tauri serves a single directory through its asset protocol
+ * and cannot see outside it.
  *
  * So the document root is this repo's layout, minus everything the
  * window does not load: `static/` and `build-vite/` copied side by
@@ -21,9 +21,9 @@ const path = require('path')
 
 const ROOT_PATH = path.join(__dirname, '..')
 
-// The directory name is duplicated in five other places -- .gitignore,
-// nodemon's --ignore list, depcheck's --ignore-dirs, bin/clean.js and
-// bin/package.js -- because none of those can require this module.
+// The directory name is duplicated in four other places -- .gitignore,
+// nodemon's --ignore list, depcheck's --ignore-dirs and bin/clean.js --
+// because none of those can require this module.
 const OUT_DIR = 'build-tauri'
 
 // Repo-relative directories copied into the document root, in the
