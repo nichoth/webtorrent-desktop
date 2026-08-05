@@ -1,133 +1,20 @@
 const test = require('tape')
 
-// `@electron/remote` sets `__esModule` and exposes `dialog` as a lazy
-// getter, so the shim imports it by name and Babel emits a per-call
-// `_remote.dialog` / `(0, _remote.getCurrentWindow)()` read. Seeding
-// `require.cache` with getters therefore stubs the whole module and
-// lets the stubs be swapped between tests -- the same route as
-// `platform-shell.js`, just a different specifier.
-const remotePath = require.resolve('@electron/remote')
-
-const CURRENT_WINDOW = { id: 'current-window' }
-
-function makeDialogStub (openResult, saveResult) {
-  return {
-    calls: [],
-    showOpenDialogSync (win, options) {
-      this.calls.push({ method: 'showOpenDialogSync', win, options })
-      return openResult
-    },
-    showSaveDialogSync (win, options) {
-      this.calls.push({ method: 'showSaveDialogSync', win, options })
-      return saveResult
-    }
-  }
-}
-
-let dialog = makeDialogStub()
-let windowCalls = 0
-require.cache[remotePath] = {
-  id: remotePath,
-  filename: remotePath,
-  loaded: true,
-  exports: {
-    __esModule: true,
-    get dialog () { return dialog },
-    getCurrentWindow () {
-      windowCalls++
-      return CURRENT_WINDOW
-    }
-  }
-}
-
-const platformDialog = require('../../build/renderer/lib/platform/dialog')
-
-function reset (openResult, saveResult) {
-  dialog = makeDialogStub(openResult, saveResult)
-  windowCalls = 0
-}
-
-test('dialog.showOpenDialog resolves to the selected paths',
-  async function (t) {
-    reset(['/tmp/a.torrent', '/tmp/b.torrent'])
-    const opts = { title: 'Pick one', properties: ['openFile'] }
-    const result = await platformDialog.showOpenDialog(opts)
-    t.deepEqual(result, ['/tmp/a.torrent', '/tmp/b.torrent'],
-      'resolves to the paths the dialog returned')
-    t.equal(dialog.calls.length, 1, 'called the sync dialog once')
-    t.equal(dialog.calls[0].method, 'showOpenDialogSync',
-      'used showOpenDialogSync')
-    t.equal(dialog.calls[0].options, opts, 'forwarded the options')
-    t.end()
-  })
-
-test('dialog.showOpenDialog parents the dialog to the current window',
-  async function (t) {
-    reset([])
-    await platformDialog.showOpenDialog({})
-    t.equal(windowCalls, 1, 'asked for the current window itself')
-    t.equal(dialog.calls[0].win, CURRENT_WINDOW,
-      'passed the current window as the parent')
-    t.end()
-  })
-
-test('dialog.showOpenDialog resolves to an empty array on cancel',
-  async function (t) {
-    reset(undefined)
-    const result = await platformDialog.showOpenDialog({})
-    t.deepEqual(result, [], 'empty array, not undefined')
-    t.end()
-  })
-
-test('dialog.showSaveDialog resolves to the chosen path',
-  async function (t) {
-    reset(undefined, '/tmp/out.torrent')
-    const opts = { title: 'Save As' }
-    const result = await platformDialog.showSaveDialog(opts)
-    t.equal(result, '/tmp/out.torrent', 'resolves to the chosen path')
-    t.equal(dialog.calls.length, 1, 'called the sync dialog once')
-    t.equal(dialog.calls[0].method, 'showSaveDialogSync',
-      'used showSaveDialogSync')
-    t.equal(dialog.calls[0].options, opts, 'forwarded the options')
-    t.equal(dialog.calls[0].win, CURRENT_WINDOW,
-      'passed the current window as the parent')
-    t.end()
-  })
-
-test('dialog.showSaveDialog resolves to null on cancel',
-  async function (t) {
-    reset(undefined, undefined)
-    const result = await platformDialog.showSaveDialog({})
-    t.equal(result, null, 'null, not undefined')
-    t.end()
-  })
-
-test('every dialog export is async', function (t) {
-  const names = ['showOpenDialog', 'showSaveDialog']
-  for (const name of names) {
-    reset([], '/tmp/out.torrent')
-    const returned = platformDialog[name]({})
-    t.ok(returned instanceof Promise, `${name} returns a promise`)
-  }
-  t.end()
-})
-
-// -- the same contract, against the Tauri tree (US-058) --------------
+// US-058: the file dialogs, behind the shim (FR-8).
 //
-// Under Tauri each dialog is one host command: the picker itself, the
-// options mapping and the parent window all live in
-// `src-tauri/src/dialog.rs`, for the same reason the window operations
-// do (see docs/platform-shim.md). So what is asserted here is the
-// command name, the argument object that reaches the host, and that
-// the host's answer is normalised into the shape callers already
-// handle -- `[]` and `null` on cancel.
+// Each is one host command: the picker itself, the options mapping and
+// the parent window all live in `src-tauri/src/dialog.rs` (see
+// docs/platform-shim.md). So what is asserted here is the command
+// name, the argument object that reaches the host, and that the host's
+// answer is normalised into the shape callers already handle -- `[]`
+// and `null` on cancel.
 //
 // The stub is seeded at `@tauri-apps/api/core`, which several files in
 // this directory do; each overwrites the previous entry and each
 // module keeps the object that was there when it was first required,
-// so `tauri/dialog` binds this one (see test/AGENTS.md). It is held in
-// a local rather than reached for through `require.cache`, which by the
-// time the tests run belongs to whichever file loaded last.
+// so `platform/dialog` binds this one (see test/AGENTS.md). It is held
+// in a local rather than reached for through `require.cache`, which by
+// the time the tests run belongs to whichever file loaded last.
 
 const corePath = require.resolve('@tauri-apps/api/core')
 
@@ -150,7 +37,7 @@ require.cache[corePath] = {
 }
 
 const tauriDialog = require(
-  '../../build/renderer/lib/platform/tauri/dialog'
+  '../../build/renderer/lib/platform/dialog'
 )
 
 function resetTauri (answer) {
@@ -239,13 +126,14 @@ test('tauri dialog resolves plain paths, never a host object',
     t.end()
   })
 
-test('the two dialog trees answer the same questions', function (t) {
-  const electron = Object.keys(platformDialog).filter(k => k !== '__esModule')
-  const tauri = Object.keys(tauriDialog).filter(k => k !== '__esModule')
-
-  t.deepEqual(tauri.sort(), electron.sort(), 'the same two dialogs')
-  t.end()
-})
+test('the shim exports exactly the dialog surface',
+  function (t) {
+    const found = Object.keys(tauriDialog)
+      .filter(k => k !== '__esModule')
+    t.deepEqual(found.sort(), ['showOpenDialog', 'showSaveDialog'],
+      'no export appeared or vanished')
+    t.end()
+  })
 
 test('every tauri dialog export is async and rejects on host failure',
   async function (t) {

@@ -68,23 +68,28 @@ because they were spelled `ipcRenderer.send`, not `electron.shell`.
 Line references below are against the tree at US-018 and will drift
 as call sites move. They are a starting point, not a contract.
 
-### Two implementations of that layout (US-052)
+### One implementation of that layout (US-052, US-072)
 
-Since US-052 the table above describes an *interface* with two
-implementations, per ADR-014. `src/renderer/lib/platform/*.js` is the
-Electron one and `src/renderer/lib/platform/tauri/*.js` is the Tauri
-one, and **exactly one of the two is in a given bundle**. Everything
-this document says about a module's arguments, return values and
-error behaviour is the contract both trees are written against.
+US-052 made the table above an *interface* with two implementations,
+per ADR-014: `src/renderer/lib/platform/*.js` was the Electron one and
+`src/renderer/lib/platform/tauri/*.js` the Tauri one, exactly one of
+them in a given bundle. **US-072 cut that down to one.** The Tauri
+tree was promoted to `src/renderer/lib/platform/`, the Electron tree
+and the `WT_HOST` selection mechanism were deleted, and everything
+this document says about a module's arguments, return values and error
+behaviour is now the contract of the only implementation there is.
 
-The Tauri tree is mostly stubs: an unported export is `async`, takes
-the same arguments, and throws a `NotImplementedError` carrying
+A handful of exports are still stubs, because their stories have not
+landed: an unported export is `async`, takes the documented arguments,
+and throws a `NotImplementedError` carrying
 `code: 'WT_TAURI_NOT_IMPLEMENTED'` naming the module and the export.
-Each Phase 4 story turns one module's throws into working calls;
-`test/unit/platform-tauri.js` keeps the two trees exporting the same
-names with the same arities in the meantime, and holds the register of
-which exports are ported (`IMPLEMENTED`) so the not-implemented sweep
-skips exactly those and no more.
+`test/unit/platform-stubs.js` holds the register of which those are
+(`UNIMPLEMENTED`) and fails in both directions -- a story that
+implements one and does not remove it from the register, and a
+regression that stubs one that is not in it. That file was
+`platform-tauri.js` until US-072, where the parity half of its job
+(same export names, same arities across the two trees) went away with
+the second tree.
 
 Ported so far:
 
@@ -230,41 +235,28 @@ Four things follow that the Electron tree has no equivalent of:
   such property, so dropped paths have to arrive from the host -- and
   US-065, which delivers them, is the story that should grant them.
 
-A ported listener export is a `listen()` (or `once()`) from
+A listener export is a `listen()` (or `once()`) from
 `@tauri-apps/api/event`, wrapped so the caller sees the payload alone
 and gets the unsubscribe function back -- the same contract the
-Electron tree's private `listen()` provides over `ipcRenderer`. The
+Electron tree's private `listen()` provided over `ipcRenderer`. The
 host emits on the **Electron channel name unchanged**
 (`windowBoundsChanged`), because the renderer above the shim is the
 same renderer.
 
-`tauri/ipc-engine.js` is the one exception, and re-exports the sibling
-rather than stubbing it. That module has been host-free since US-044 --
-it is a WebSocket client of the sidecar, banned from importing Electron
-by the boundary config -- so there is nothing for a Tauri version to do
-differently, and no Phase 4 story reimplements it. The host knowledge
-it depends on is `ipc-os.getEngineEndpoint()`, and US-070 gave that one
-a host: `src-tauri/src/engine.rs` supervises the same sidecar the
-Electron main process does, and answers the same `{ url, token }`.
+`ipc-engine.js` is the one module the cutover carried across
+untouched. It has been host-free since US-044 -- a WebSocket client of
+the sidecar, and banned from importing a host module by a per-file
+override in the boundary config that survives the blanket shim
+exemption. The host knowledge it depends on is
+`ipc-os.getEngineEndpoint()`, and US-070 gave that a host:
+`src-tauri/src/engine.rs` supervises the sidecar and answers the same
+`{ url, token }` the Electron main process did.
 
-Selection is by `WT_HOST`, defaulting to `electron`:
-
-| Command | `WT_HOST` | Tree |
-| --- | --- | --- |
-| `npm run build:renderer` | unset | Electron |
-| `npm run build:renderer:tauri` | `tauri` | Tauri |
-
-The mechanism is a `resolveId` plugin in `vite.config.js` over the
-decision in `bin/shim-resolver.js`, which rewrites any resolution
-landing on `lib/platform/<mod>.js` to `lib/platform/tauri/<mod>.js` and
-leaves imports made from inside `tauri/` alone. It matches the resolved
-*file*, not the import specifier, because the specifiers that matter
-are relative (`./clipboard`, from the barrel) -- a `resolve.alias`
-entry would miss those and ship a bundle with half of each tree in it,
-which is the worst available failure because it builds cleanly.
-
-Nothing outside the shim may name `lib/platform/tauri/`: a UI file that
-did would pin itself to one host. Both boundary checks cover it.
+There is nothing left to select. `npm run build:renderer` is the one
+renderer build; `bin/shim-resolver.js`, `bin/build-renderer.js`, the
+`resolveId` plugin they fed and the `WT_HOST` variable were all
+deleted by US-072, along with `npm run build:renderer:tauri`.
+`test/unit/electron-removed.js` is what keeps them gone.
 
 ## `shell.js`
 

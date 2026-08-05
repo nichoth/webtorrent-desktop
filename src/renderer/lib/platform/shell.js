@@ -1,25 +1,30 @@
 /**
- * Platform shim: handing paths and URLs to the host OS.
+ * Platform shim.
  *
- * `openExternal` is the only one of these the renderer performs
- * directly today; the other three are already relayed to the main
- * process over IPC. They live here rather than in `ipc-os.js` because
- * they are one concern -- "ask the OS to do something with this
- * path" -- and a non-Electron host will implement all four the same
- * way. `ipc-os.js` deliberately exports none of them (FR-9 keeps
- * engine and OS IPC apart; this keeps OS IPC grouped by concern).
+ * Handing paths and URLs to the host OS (US-059).
  *
- * `openExternal` goes straight to Electron's `shell`, which the
- * renderer already has; the other three keep their existing trip to
- * the main process, because `moveItemToTrash` is main-only and the
- * three main-side handlers already exist (`src/main/ipc.js`).
+ * All four are host commands rather than plugin calls from the webview,
+ * for the reason the window and dialog operations are: three of them
+ * were the Electron *main* process's behaviour already (the deleted
+ * `src/main/shell.js`, reached over IPC), and an app command needs no
+ * capability, so `src-tauri/capabilities/default.json` stays at
+ * `core:default`. The opener plugin and the trash crate are reached
+ * from `src-tauri/src/shell.rs`.
  *
- * Implemented in US-022; the `openExternal` call sites were
- * migrated in US-026. See
- * docs/platform-shim.md.
+ * One difference from the Electron implementation, recorded in
+ * docs/platform-shim.md: there, three of these were `ipcRenderer.send`
+ * and so resolved whatever the OS did with them. Here the host
+ * answers, so a genuine failure rejects. `moveItemToTrash` still
+ * resolves for a path that is already gone, which is the contract
+ * docs/platform-shim.md documents.
+ *
+ * `docs/platform-shim.md` is the contract each export is written
+ * against. Until US-072 there was a second, Electron tree beside
+ * this one and a build flag to pick between them (ADR-014); the
+ * cutover deleted both, so this module is the shim.
  */
 
-import { ipcRenderer, shell } from 'electron'
+import { invoke } from '@tauri-apps/api/core'
 
 /**
  * Open a URL in the user's default browser.
@@ -28,7 +33,7 @@ import { ipcRenderer, shell } from 'electron'
  * @returns {Promise<void>}
  */
 export async function openExternal (url) {
-  await shell.openExternal(url)
+  await invoke('open_external', { url })
 }
 
 /**
@@ -38,7 +43,7 @@ export async function openExternal (url) {
  * @returns {Promise<void>}
  */
 export async function showItemInFolder (path) {
-  ipcRenderer.send('showItemInFolder', path)
+  await invoke('show_item_in_folder', { path })
 }
 
 /**
@@ -48,16 +53,17 @@ export async function showItemInFolder (path) {
  * @returns {Promise<void>}
  */
 export async function openPath (path) {
-  ipcRenderer.send('openPath', path)
+  await invoke('open_path', { path })
 }
 
 /**
- * Move a file to the OS trash. Resolves even when the path is
- * already gone, matching today's fire-and-forget IPC behaviour.
+ * Move a file to the OS trash. Resolves even when the path is already
+ * gone, matching the Electron tree's fire-and-forget IPC behaviour --
+ * the host makes that decision, in `shell::plan_trash`.
  *
  * @param {string} path
  * @returns {Promise<void>}
  */
 export async function moveItemToTrash (path) {
-  ipcRenderer.send('moveItemToTrash', path)
+  await invoke('move_item_to_trash', { path })
 }

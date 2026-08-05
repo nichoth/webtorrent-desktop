@@ -6,10 +6,7 @@ const applicationConfig = require('application-config')
 
 // US-055: the saved-state file belongs to the renderer. `State.load`
 // and `State.saveImmediate` read and write it through
-// `lib/platform/fs.js` rather than through `application-config`, and
-// the main process no longer requires the renderer's state module --
-// it reads the same file for itself, read-only, in
-// `src/main/saved-state.js`.
+// `lib/platform/fs.js` rather than through `application-config`.
 //
 // Four halves:
 //
@@ -19,9 +16,13 @@ const applicationConfig = require('application-config')
 //      `application-config` (write-json-file) wrote, so a config
 //      saved by the current version loads unchanged;
 //   3. migrations -- they run on a fresh profile and on an existing
-//      one, with no `process.type` test in the way;
-//   4. the main process -- a source scan proving the require is gone,
-//      plus the behaviour of its own reader.
+//      one, with no `process.type` test in the way.
+//
+// There was a fourth: the Electron main process read the same file for
+// itself, read-only, in `src/main/saved-state.js`. US-072 deleted the
+// main process, and the Rust host reads its window bounds through
+// `src-tauri/src/window.rs`, so that half of the story is asserted in
+// `tauri-host.js` now.
 
 const ROOT = path.join(__dirname, '..', '..')
 const TMP = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-state-'))
@@ -67,18 +68,24 @@ const RENDERER_CONFIG = {
 
 const STATE_FILE = path.join(RENDERER_CONFIG.CONFIG_PATH, 'config.json')
 
-// A recording wrapper around the *real* shim, so the assertions are
-// about real filesystem behaviour and about the routing at the same
-// time. Anything reaching for `fs` directly leaves no trace here.
+// A recording wrapper around a filesystem-backed stand-in for the
+// shim, so the assertions are about real filesystem behaviour and
+// about the routing at the same time. Anything reaching for `fs`
+// directly leaves no trace here.
+//
+// It was the real shim until US-072, when the shim became nine Tauri
+// commands and stopped having a filesystem under it outside a running
+// host. `test/fs-shim.js` holds the contract those commands answer,
+// and `platform-fs.js` is what holds the shim to it.
 const shimPath = require.resolve('../../build/renderer/lib/platform/fs')
-const realShim = require('../../build/renderer/lib/platform/fs')
+const backing = require('../fs-shim')
 const shimCalls = []
 const recordingShim = { __esModule: true }
-for (const name of Object.keys(realShim)) {
-  if (typeof realShim[name] !== 'function') continue
+for (const name of Object.keys(backing)) {
+  if (typeof backing[name] !== 'function') continue
   recordingShim[name] = async (...args) => {
     shimCalls.push([name, ...args])
-    return await realShim[name](...args)
+    return await backing[name](...args)
   }
 }
 
@@ -97,7 +104,8 @@ const State = withConfig(
 
 // Withdrawn now that `state` has bound it: `platform-fs.js` later in
 // the same run tests the real module at this path.
-require.cache[shimPath] = previousShim
+if (previousShim) require.cache[shimPath] = previousShim
+else delete require.cache[shimPath]
 
 function load () {
   return new Promise((resolve, reject) => {
@@ -260,66 +268,6 @@ test('a config written by application-config loads unchanged', async (t) => {
   t.end()
 })
 
-// --- the main process ------------------------------------------------
-
-const MAIN_CONFIG = { CONFIG_PATH: path.join(TMP, 'MainConfig') }
-const MAIN_STATE_FILE = path.join(MAIN_CONFIG.CONFIG_PATH, 'config.json')
-
-const savedState = withConfig(
-  MAIN_CONFIG,
-  () => require('../../build/main/saved-state')
-)
-
-function loadMain () {
-  return new Promise((resolve, reject) => {
-    savedState.load((err, state) => err ? reject(err) : resolve(state))
-  })
-}
-
-function writeMainState (text) {
-  fs.mkdirSync(MAIN_CONFIG.CONFIG_PATH, { recursive: true })
-  fs.writeFileSync(MAIN_STATE_FILE, text)
-}
-
-test('the main process reads the saved state for itself', async (t) => {
-  writeMainState(JSON.stringify({
-    version: '9.9.9',
-    bounds: { x: 1, y: 2, width: 300, height: 400 },
-    prefs: { autoAddTorrents: true, torrentsFolderPath: '/tmp/watch' }
-  }))
-
-  const state = await loadMain()
-
-  t.deepEqual(
-    state.saved.bounds, { x: 1, y: 2, width: 300, height: 400 },
-    'windows/main.js gets the saved bounds'
-  )
-  t.equal(
-    state.saved.prefs.torrentsFolderPath, '/tmp/watch',
-    'folder-watcher.js gets the saved prefs'
-  )
-  t.end()
-})
-
-test('the main process tolerates a missing config file', async (t) => {
-  fs.rmSync(MAIN_CONFIG.CONFIG_PATH, { recursive: true, force: true })
-
-  const state = await loadMain()
-
-  t.equal(state.saved.bounds, undefined, 'there are no saved bounds')
-  t.deepEqual(state.saved.prefs, {}, 'prefs is still an object')
-  t.end()
-})
-
-test('the main process tolerates an unreadable config file', async (t) => {
-  writeMainState('{ not json')
-
-  const state = await loadMain()
-
-  t.deepEqual(state.saved.prefs, {}, 'the defaults stand in')
-  t.end()
-})
-
 // --- source scans ----------------------------------------------------
 
 // Comment lines are dropped before matching: a file that *explains*
@@ -335,21 +283,6 @@ function hits (rel, re) {
     .filter(({ line }) => re.test(line))
     .map(({ line, n }) => rel + ':' + n + ': ' + line)
 }
-
-test('the main process does not reach into the renderer for state', (t) => {
-  const mainFiles = fs.readdirSync(path.join(ROOT, 'src', 'main'))
-    .filter((name) => name.endsWith('.js'))
-    .map((name) => path.join('src', 'main', name))
-
-  const found = mainFiles.flatMap((rel) => hits(rel, /renderer\/lib\/state/))
-  t.deepEqual(found, [], 'nothing in src/main/ requires lib/state')
-
-  t.equal(
-    hits('src/main/index.js', /require\('\.\/saved-state'\)/).length, 1,
-    'src/main/index.js reads the state file for itself'
-  )
-  t.end()
-})
 
 test('lib/state.js writes only through the shim', (t) => {
   t.deepEqual(

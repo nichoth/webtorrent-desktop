@@ -1,24 +1,37 @@
 /**
- * Platform shim: system clipboard.
+ * Platform shim.
  *
- * Electron's clipboard is synchronous and available in the renderer,
- * so both exports are thin async wrappers -- a host that has to cross
- * a process boundary can fill them in without a caller changing
- * (FR-10).
+ * System clipboard (US-059).
  *
- * Implemented in US-022; call sites migrated in US-026. See
- * docs/platform-shim.md.
+ * Two host commands over the clipboard-manager plugin's *Rust* API
+ * rather than its JS one, which is what keeps the renderer's capability
+ * at `core:default`: the JS plugin would need
+ * `clipboard-manager:allow-read-text` and `allow-write-text` granted to
+ * the whole webview. `src-tauri/src/clipboard.rs` is the other half,
+ * and is also where an empty clipboard -- an error in the underlying
+ * library, `''` under Electron -- is turned back into a string.
+ *
+ * `docs/platform-shim.md` is the contract each export is written
+ * against. Until US-072 there was a second, Electron tree beside
+ * this one and a build flag to pick between them (ADR-014); the
+ * cutover deleted both, so this module is the shim.
  */
 
-import { clipboard } from 'electron'
+import { invoke } from '@tauri-apps/api/core'
 
 /**
  * Read the clipboard's plain-text contents.
  *
+ * Electron's synchronous `clipboard.readText()` answers `''` for an
+ * empty clipboard and for one holding something that is not text, so
+ * the contract is a string and never `null` -- the same normalising
+ * `../dialog.js` does for a cancelled dialog.
+ *
  * @returns {Promise<string>}
  */
 export async function readText () {
-  return clipboard.readText()
+  const text = await invoke('clipboard_read_text')
+  return text == null ? '' : text
 }
 
 /**
@@ -28,5 +41,5 @@ export async function readText () {
  * @returns {Promise<void>}
  */
 export async function writeText (text) {
-  clipboard.writeText(text)
+  await invoke('clipboard_write_text', { text })
 }

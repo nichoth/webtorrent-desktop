@@ -11,7 +11,6 @@ const path = require('path')
 const rimraf = require('rimraf')
 
 const config = require('../src/config')
-const handlers = require('../src/main/handlers')
 
 // First, remove generated files
 rimraf.sync('build/')
@@ -31,5 +30,7 @@ try {
 }
 rimraf.sync(tmpPath)
 
-// Uninstall .torrent file and magnet link handlers
-handlers.uninstall()
+// Registering (and so unregistering) the .torrent and magnet handlers
+// was `src/main/handlers.js`, which left with the Electron main
+// process in US-072. The Rust host owns it from US-064; this script
+// gets its uninstall step back when that lands.

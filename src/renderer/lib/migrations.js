@@ -2,7 +2,6 @@
 
 import path from 'path'
 import semver from 'semver'
-import { sync as rimrafSync } from 'rimraf'
 
 import config from '../../config'
 import * as fs from './platform/fs'
@@ -190,7 +189,18 @@ async function migrate_0_17_2 (saved) {
   } catch (err) {}
   ts.posterFileName = NEW_HASH + '.jpg'
 
-  rimrafSync(path.join(config.TORRENT_PATH, ts.torrentFileName))
+  // `rimraf.sync` until US-072. The target is a single `.torrent`
+  // file, never a directory, so `unlink` is the same operation -- and
+  // `rimraf` is a static import that pulls `graceful-fs` into the
+  // renderer bundle, whose module body rewrites `process.cwd` at load
+  // and so threw in the webview before anything rendered.
+  //
+  // `rimraf.sync` ignored a missing path; `unlink` rejects on one, so
+  // the catch keeps the old behaviour. It is the same shape as the
+  // `rename` above, which is optional for the same reason.
+  try {
+    await fs.unlink(path.join(config.TORRENT_PATH, ts.torrentFileName))
+  } catch (err) {}
   await fs.copyFile(
     path.join(config.STATIC_PATH, 'wiredCd.torrent'),
     path.join(config.TORRENT_PATH, NEW_HASH + '.torrent')

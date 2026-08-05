@@ -1,67 +1,59 @@
 /**
- * Platform shim: native file dialogs.
+ * Platform shim.
  *
- * Both of today's call sites use the *Sync variants of
- * `@electron/remote`'s dialog API. These wrappers are async anyway
- * (FR-10) so a message-passing host does not force a second refactor.
+ * Native open and save dialogs (US-058).
  *
- * Callers never pass a parent window: the shim parents every dialog
- * to the current window internally, which is what removes
- * `remote.getCurrentWindow()` from `components/path-selector.js` and
- * `controllers/torrent-list-controller.js`.
+ * Under Electron these are `@electron/remote` calls, which is the main
+ * process's dialog parented to the current window; under Tauri they
+ * are host commands, for the same reason the window operations are --
+ * and with the same consequence, that the renderer needs no capability
+ * for them. The dialog plugin is reached from Rust, never from here.
  *
- * Implemented in US-024; call sites are migrated in US-027. See
- * docs/platform-shim.md.
+ * The options object crosses unchanged: `src-tauri/src/dialog.rs`
+ * translates Electron's `properties`, `filters` and `defaultPath` into
+ * the plugin's spellings, and records the two options it cannot
+ * honour. Callers see exactly the contract `../dialog.js` documents --
+ * plain paths, `[]` and `null` on cancel -- so no call site knows
+ * which host it is on.
+ *
+ * `docs/platform-shim.md` is the contract each export is written
+ * against. Until US-072 there was a second, Electron tree beside
+ * this one and a build flag to pick between them (ADR-014); the
+ * cutover deleted both, so this module is the shim.
  */
 
-import { dialog, getCurrentWindow } from '@electron/remote'
-
-/**
- * @typedef {object} FileFilter
- * @property {string} name       Human-readable filter name.
- * @property {string[]} extensions Extensions without a leading dot.
- */
-
-/**
- * @typedef {object} OpenDialogOptions
- * @property {string} [title]
- * @property {string} [defaultPath]
- * @property {string} [buttonLabel]
- * @property {FileFilter[]} [filters]
- * @property {Array<'openFile'|'openDirectory'|'multiSelections'>} [properties]
- */
-
-/**
- * @typedef {object} SaveDialogOptions
- * @property {string} [title]
- * @property {string} [defaultPath]
- * @property {string} [buttonLabel]
- * @property {FileFilter[]} [filters]
- */
+import { invoke } from '@tauri-apps/api/core'
 
 /**
  * Show a native open dialog.
  *
- * @param {OpenDialogOptions} options
+ * @param {object} options See `../dialog.js` for the shape.
  * @returns {Promise<string[]>} Selected paths, or an empty array if
- *   the user cancelled. Note this differs from
- *   `showOpenDialogSync`, which returns `undefined` on cancel;
- *   callers currently guard with `Array.isArray(...)` and become a
- *   `.length` check.
+ *   the user cancelled.
  */
 export async function showOpenDialog (options) {
-  const filenames = dialog.showOpenDialogSync(getCurrentWindow(), options)
-  return Array.isArray(filenames) ? filenames : []
+  const filenames = await invoke('show_open_dialog', { options: args(options) })
+  return filenames === null ? [] : filenames
 }
 
 /**
  * Show a native save dialog.
  *
- * @param {SaveDialogOptions} options
+ * @param {object} options See `../dialog.js` for the shape.
  * @returns {Promise<string|null>} The chosen path, or `null` if the
  *   user cancelled.
  */
 export async function showSaveDialog (options) {
-  const savePath = dialog.showSaveDialogSync(getCurrentWindow(), options)
+  const savePath = await invoke('show_save_dialog', { options: args(options) })
   return savePath === undefined ? null : savePath
+}
+
+/**
+ * The host deserialises the options into a struct, so the argument has
+ * to be an object even when the caller passed nothing: `undefined` is
+ * dropped by JSON and arrives as a missing argument, which fails the
+ * call rather than meaning "no options".
+ */
+function args (options) {
+  return options || {}
 }

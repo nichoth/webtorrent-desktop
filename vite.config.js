@@ -1,8 +1,6 @@
 import { fileURLToPath } from 'node:url'
 import { defineConfig, transformWithOxc } from 'vite'
 
-import { host, redirect } from './bin/shim-resolver.js'
-
 // Replaces the old `Module.prototype.require` hook in
 // `src/renderer/main.js`. Matched exactly (not as a prefix) so that
 // material-ui's deep imports -- `inline-style-prefixer/static/...`,
@@ -43,40 +41,6 @@ const inlineStylePrefixerStub = fileURLToPath(
 // has no counterpart to carry over.
 const srcDir = fileURLToPath(new URL('./src/', import.meta.url))
 
-// Build-time selection between the two platform shim trees (ADR-014).
-// The decision itself lives in `bin/shim-resolver.js` so it can be
-// unit-tested without running a build; this is the bundler half of it.
-//
-// `enforce: 'pre'` is required, not stylistic. Vite inserts its own
-// `vite:resolve` ahead of normal user plugins, so a plugin without it
-// would never see a resolution that Vite can already answer -- which
-// is every one of these.
-//
-// `this.resolve` does the real work and `skipSelf` keeps it from
-// calling back into here. The result is matched as a *file*, because
-// the specifiers that matter are relative (`./clipboard` from the
-// barrel) and an alias list matching specifiers would miss them and
-// ship a mixed bundle.
-const repoRoot = fileURLToPath(new URL('.', import.meta.url))
-const WT_HOST = host()
-
-const shimTree = {
-  name: 'webtorrent:shim-tree',
-  enforce: 'pre',
-  async resolveId (source, importer, options) {
-    if (WT_HOST !== 'tauri') return null
-    const resolved = await this.resolve(source, importer, {
-      ...options,
-      skipSelf: true
-    })
-    if (!resolved) return null
-    const id = redirect({
-      root: repoRoot, id: resolved.id, importer, host: WT_HOST
-    })
-    return id ? { ...resolved, id } : resolved
-  }
-}
-
 const jsxInJs = {
   name: 'webtorrent:jsx-in-js',
   enforce: 'pre',
@@ -110,90 +74,73 @@ const rendererPath = fileURLToPath(
   new URL('./src/renderer/lib/path.js', import.meta.url)
 )
 
-// Externals. The bundle is emitted as CommonJS and loaded by an Electron
-// renderer with `nodeIntegration: true`, so a `require()` left in the
-// output resolves against the real Node/Electron module registry at load
-// time. That is what makes externalizing meaningful here: without it
-// Rolldown silently swaps in a browser stub that throws on first use, and
-// without CJS output the `require()` calls could not be emitted at all.
-//
-// - `fs`: 6 first-party renderer files. Phase 2 replaces these call sites
-//   with the platform shim; until then external keeps them working.
-// - `fs/promises`: the shim itself (`lib/platform/fs.js`, US-023). It was
-//   in the transitive list until then, reached only through
-//   dependencies. As US-028 moves call sites, `fs` drains from this list
-//   and `fs/promises` is what remains.
-// - `http`: only `lib/cast.js`, the deferred casualty the PRD exempts
-//   from the shim.
-// - `events`: only `lib/state.js`, for `EventEmitter`.
-// - `electron` / `@electron/remote`: these MUST be external. Left to the
-//   bundler, `electron` resolves to `node_modules/electron/index.js` --
-//   the npm CLI helper, which exports a path string, not the runtime API
-//   -- with no warning at all, so `ipcRenderer` would be `undefined` at
-//   runtime while the build reported success.
-//
-// `crypto` and `os` are deliberately absent from this list: grep confirms
-// `crypto` is used only by the engine (`src/engine/index.js`, which runs
-// as a sidecar under plain Node and never goes through this build), and
-// `os` has had no renderer importer since the US-002 telemetry deletion.
-// Until US-045 the `crypto` importer was `src/renderer/webtorrent.js`,
-// exempt from this build for the same reason. See docs/vite-baseline.md.
-const firstPartyExternals = [
-  'fs',
-  'fs/promises',
-  'http',
-  'events',
-  'electron',
-  '@electron/remote'
-]
+// `events` is aliased for the same reason and on the same terms: one
+// first-party file needs it (`lib/state.js`, for `EventEmitter`) and
+// several bundled dependencies inherit from it. Left un-aliased, Vite
+// rewrites it to an empty object for the browser and `new
+// EventEmitter()` throws at load, which took the whole renderer down
+// before US-072. See `src/renderer/lib/events.js`.
+const rendererEvents = fileURLToPath(
+  new URL('./src/renderer/lib/events.js', import.meta.url)
+)
 
-// Builtins no first-party renderer file imports, reached only through
-// dependencies -- the config-persistence stack under `src/config.js`
-// (`application-config`, and through it `write-file-atomic` and
-// `graceful-fs`), `rimraf` under `lib/migrations.js`, and the casting
-// stack under `lib/cast.js`. Since US-055 `lib/state.js` reads and
-// writes through the shim rather than through `application-config`,
-// but `src/config.js` still takes the config path from it, so the
-// stack is still in the bundle. They are externalized for
-// the same reason as the list above: the alternative is a browser stub
-// that throws the first time config is written or a cast device is
-// discovered. Kept in a separate list so the first-party inventory above
-// stays an accurate statement of what Phase 2's shim has to cover -- `os`
-// in particular is here for `application-config-path` and
-// `multicast-dns`, NOT for any renderer file.
+// `application-config` is dead code in this bundle -- `getConfigPath()`
+// never reaches it in a webview -- but dead code still runs: a static
+// ESM import of a CommonJS module evaluates it at the importer's
+// initialization, and this one's dependency chain reassigns
+// `process.cwd` at load. Stubbed rather than externalized so the
+// package and its `graceful-fs`/`write-json-file` chain leave the
+// bundle entirely.
+const applicationConfigStub = fileURLToPath(
+  new URL('./stubs/application-config.js', import.meta.url)
+)
+
+// No externals. Every module the bundle names is bundled into it.
 //
-// Enumerated from the externalization warnings of a build with only the
-// list above applied, rather than taken wholesale from
-// `module.builtinModules`, so that a dependency reaching for a new
-// builtin shows up as a warning instead of being silently absorbed.
-const transitiveExternals = [
-  'assert', 'constants', 'dgram', 'https', 'net', 'os',
-  'querystring', 'stream', 'timers', 'tls', 'url', 'util',
-  'worker_threads'
-]
-
-// Dependencies spell builtins either way, so both forms are listed.
-const external = [...firstPartyExternals, ...transitiveExternals]
-  .flatMap(id => (
-    id === '@electron/remote' || id === 'electron'
-      ? [id]
-      : [id, `node:${id}`]
-  ))
-
-// Vite targets browsers, so it statically replaces bare `process.env`
-// with `{}` -- which turned `application-config-path`'s
-// `process.env.HOME` into `{}["HOME"]` and made the very first
-// `path.join()` of startup throw "Path must be a string. Received
-// undefined". This renderer runs with `nodeIntegration: true`, so
-// `process.env` is the real thing at runtime; routing the replacement
-// through `globalThis` hands it back without re-triggering the
-// substitution. `process.env.NODE_ENV` is a longer key and still wins,
-// so React et al. keep whatever Vite decides for the mode.
-const processEnv = { 'process.env': 'globalThis.process.env' }
+// Until US-072 the Node builtins below were left as `require()`
+// calls and answered at runtime by the Electron window's
+// `nodeIntegration: true` (ADR-004). A WKWebView/WebView2 has no
+// `require`, so in the Tauri host the very first line of the bundle
+// threw `ReferenceError: Can't find variable: require` and nothing
+// rendered -- recorded against US-070 and US-071, and fixed here.
+//
+// Removing the list is most of the fix but not all of it. Vite
+// rewrites an un-externalized builtin to an **empty object** rather
+// than to an error, so the failure moves rather than disappearing: the
+// next thing to run is `os.platform()` inside `application-config`,
+// which is `undefined()`. Two builtins therefore have real
+// first-party implementations aliased in above -- `path`
+// (`lib/path.js`, ADR-011) and `events` (`lib/events.js`) -- and
+// `src/config.js` no longer reads a Node global at load.
+//
+// What is left resolves to that empty object, and every one of them is
+// reached only from code that cannot work in a webview anyway:
+//
+// - `fs`, `util`, `os`, `stream`: the `application-config` stack
+//   under `src/config.js`. Its module body never runs now, because
+//   `getConfigPath()` stops before constructing it.
+// - `http`, `https`, `net`, `tls`, `dgram`, `url`, `querystring`,
+//   `timers`: the casting stack under `lib/cast.js`, whose three
+//   `require()` calls are inside `init()` and so never evaluate at
+//   load. Casting is the PRD's deferred casualty; US-076 through
+//   US-079 move it to the host, and it stays broken until they do.
+//
+// `test/unit/renderer-boots.js` runs the emitted bundle in a
+// webview-shaped sandbox with no `require` and no `process`, which is
+// what holds all of this in place.
+// No `define` for `process`.
+//
+// This used to map `process.env` to `globalThis.process.env`, which
+// under Electron's `nodeIntegration: true` handed back the real
+// environment. The Tauri webview has no `globalThis.process` either,
+// so the mapping turned one failure into another. Vite's own default
+// applies instead: bare `process.env` becomes `{}` and
+// `process.env.NODE_ENV` becomes the mode, which is what React and
+// friends want. `src/config.js` reads its own guarded reference
+// rather than relying on either substitution.
 
 export default defineConfig({
-  define: processEnv,
-  plugins: [shimTree, jsxInJs],
+  plugins: [jsxInJs],
   resolve: {
     alias: [
       {
@@ -201,7 +148,13 @@ export default defineConfig({
         replacement: inlineStylePrefixerStub
       },
       { find: /^path$/, replacement: rendererPath },
-      { find: /^node:path$/, replacement: rendererPath }
+      { find: /^node:path$/, replacement: rendererPath },
+      { find: /^events$/, replacement: rendererEvents },
+      { find: /^node:events$/, replacement: rendererEvents },
+      {
+        find: /^application-config$/,
+        replacement: applicationConfigStub
+      }
     ]
   },
   build: {
@@ -209,9 +162,15 @@ export default defineConfig({
     emptyOutDir: true,
     rollupOptions: {
       input: 'src/renderer/main.js',
-      external,
       output: {
-        format: 'cjs',
+        // `iife`, not `cjs`. The output was CommonJS so that the
+        // externals above could stay `require()` calls (ADR-004);
+        // with nothing external there is nothing to require, and a
+        // module format the webview does not implement is a trap
+        // waiting for the first top-level export. `iife` is what a
+        // classic `<script src>` wants, and it keeps the bundle's
+        // internals off `window`.
+        format: 'iife',
         // `static/main.html` references the entry with a plain
         // `<script src>`, so the entry filename has to be stable --
         // the default `assets/main-[hash].js` would change on every

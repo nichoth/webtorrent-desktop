@@ -4,10 +4,15 @@ const path = require('path')
 
 // US-051: the Tauri host scaffold. Nothing here can launch a window, so
 // what these tests hold is the wiring that a launch depends on: the
-// document root the Tauri window is pointed at has to be the same
-// `static/main.html` and the same Vite output Electron loads, and the
-// two hosts have to stay side by side (ADR-014) rather than one
-// replacing the other.
+// document root the Tauri window is pointed at has to be the assembled
+// `static/main.html` plus the Vite output.
+//
+// Until US-072 it also held ADR-014's other half -- that the Electron
+// host stayed launchable beside this one. The cutover removed the
+// second host, so those assertions became the opposite ones: one start
+// script, one build, no flag to select between them. The rest of this
+// file is unchanged, because the wiring a launch depends on did not
+// move.
 
 const REPO = path.join(__dirname, '..', '..')
 const TAURI_DIR = path.join(REPO, 'src-tauri')
@@ -115,19 +120,24 @@ test('the renderer is allowed to listen for host events', function (t) {
   t.end()
 })
 
-test('both hosts stay launchable side by side', function (t) {
-  t.equal(
-    pkg.scripts.start,
-    'npm run build && electron --no-sandbox .',
-    'npm start still launches Electron unchanged'
-  )
-  t.ok(pkg.scripts['start:tauri'], 'npm run start:tauri exists')
+// US-072: there is one host now. `npm start` launches it, and it does
+// so through `build:tauri` rather than through `tauri dev` alone --
+// the Tauri document root is assembled by `bin/build-tauri.js` out of
+// the Vite output and `static/`, so a launch that skips the assembly
+// step opens a window on a stale or missing document root.
+test('npm start launches the one host', function (t) {
+  const start = pkg.scripts.start
   t.ok(
-    pkg.scripts['start:tauri'].includes('build:tauri'),
-    'start:tauri builds the renderer first'
+    start.includes('build:tauri'),
+    `start assembles the document root first: ${start}`
+  )
+  t.ok(/tauri dev/.test(start), 'start runs the Tauri host')
+  t.notOk(
+    pkg.scripts['start:tauri'],
+    'there is no second start script, because there is no second host'
   )
   t.ok(
-    pkg.scripts['build:tauri'].includes('build:renderer'),
+    pkg.scripts['build:tauri'].includes('npm run build'),
     'build:tauri builds the renderer bundle'
   )
   t.end()
@@ -160,15 +170,16 @@ test('the Tauri build output is not committed or scanned', function (t) {
 
 // US-070: the Tauri host supervises the engine sidecar itself, so a
 // Tauri launch needs the sidecar on disk the way an Electron one does.
-// It is the Babel output of `src/engine/`, which only `build:main`
-// produces -- and nothing else in the Tauri build has ever needed it,
-// so it is easy to leave out and the symptom is a window with no
-// torrenting rather than a build error.
+// It is the Babel output of `src/engine/`, which only `build:node`
+// produces (`build:main` until US-072 renamed it) -- and nothing else
+// in the Tauri build has ever needed it, so it is easy to leave out
+// and the symptom is a window with no torrenting rather than a build
+// error.
 
 test('the Tauri build produces the engine sidecar it spawns', function (t) {
   t.ok(
-    pkg.scripts['build:tauri'].includes('build:main'),
-    'build:tauri builds the sidecar entry point'
+    pkg.scripts.build.includes('build:node'),
+    'the build the host launches through compiles the sidecar entry point'
   )
 
   const entry = path.join('build', 'engine', 'index.js')

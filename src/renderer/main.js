@@ -1,3 +1,9 @@
+// First, and deliberately: it installs the `Buffer` global that the
+// torrent stack below assumes. ES modules initialize in import order,
+// so anything above this line would run without one. See
+// `lib/buffer-global.js`.
+import './lib/buffer-global'
+
 import createGetter from 'fn-getter'
 import debounce from 'debounce'
 import dragDrop from 'drag-drop'

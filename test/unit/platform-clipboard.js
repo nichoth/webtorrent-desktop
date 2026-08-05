@@ -1,72 +1,12 @@
 const test = require('tape')
 
-// See `platform-ipc-os.js` for why seeding `require.cache` is enough
-// to stub `electron` here.
-const electronPath = require.resolve('electron')
-
-function makeClipboardStub () {
-  return {
-    text: '',
-    writes: [],
-    readText () {
-      return this.text
-    },
-    writeText (text) {
-      this.writes.push(text)
-      this.text = text
-    }
-  }
-}
-
-let clipboard = makeClipboardStub()
-require.cache[electronPath] = {
-  id: electronPath,
-  filename: electronPath,
-  loaded: true,
-  exports: {
-    get clipboard () { return clipboard }
-  }
-}
-
-const platformClipboard =
-  require('../../build/renderer/lib/platform/clipboard')
-
-test('clipboard.readText resolves with the clipboard contents',
-  async function (t) {
-    clipboard = makeClipboardStub()
-    clipboard.text = 'magnet:?xt=urn:btih:abc'
-    const text = await platformClipboard.readText()
-    t.equal(text, 'magnet:?xt=urn:btih:abc', 'read through')
-    t.end()
-  })
-
-test('clipboard.writeText replaces the clipboard contents',
-  async function (t) {
-    clipboard = makeClipboardStub()
-    await platformClipboard.writeText('https://instant.io/#abc')
-    t.deepEqual(clipboard.writes, ['https://instant.io/#abc'],
-      'written through')
-    t.equal(await platformClipboard.readText(), 'https://instant.io/#abc',
-      'readable afterwards')
-    t.end()
-  })
-
-test('every clipboard export is async', function (t) {
-  clipboard = makeClipboardStub()
-  t.ok(platformClipboard.readText() instanceof Promise,
-    'readText returns a promise')
-  t.ok(platformClipboard.writeText('x') instanceof Promise,
-    'writeText returns a promise')
-  t.end()
-})
-
-// -- the same contract, against the Tauri tree (US-059) --------------
+// US-059: the clipboard, behind the shim (FR-8).
 //
-// Under Tauri the clipboard is two host commands over the
-// clipboard-manager plugin's *Rust* API, which is what keeps the
-// renderer's capability at `core:default` -- the JS plugin would need
-// `clipboard-manager:allow-read-text` and `allow-write-text` granted to
-// the whole webview. See `src-tauri/src/clipboard.rs`.
+// Two host commands over the clipboard-manager plugin's *Rust* API,
+// which is what keeps the renderer's capability at `core:default` --
+// the JS plugin would need `clipboard-manager:allow-read-text` and
+// `allow-write-text` granted to the whole webview. See
+// `src-tauri/src/clipboard.rs`.
 //
 // This file is the first in the directory's glob order to seed
 // `@tauri-apps/api/core`; the later ones overwrite the `require.cache`
@@ -93,7 +33,7 @@ require.cache[corePath] = {
 }
 
 const tauriClipboard = require(
-  '../../build/renderer/lib/platform/tauri/clipboard'
+  '../../build/renderer/lib/platform/clipboard'
 )
 
 function resetTauri (answer) {
@@ -139,14 +79,14 @@ test('tauri clipboard.writeText hands the text to the host',
     t.end()
   })
 
-test('the two clipboard trees answer the same questions', function (t) {
-  const electron = Object.keys(platformClipboard)
-    .filter(k => k !== '__esModule')
-  const tauri = Object.keys(tauriClipboard).filter(k => k !== '__esModule')
-
-  t.deepEqual(tauri.sort(), electron.sort(), 'the same two operations')
-  t.end()
-})
+test('the shim exports exactly the clipboard surface',
+  function (t) {
+    const found = Object.keys(tauriClipboard)
+      .filter(k => k !== '__esModule')
+    t.deepEqual(found.sort(), ['readText', 'writeText'],
+      'no export appeared or vanished')
+    t.end()
+  })
 
 test('every tauri clipboard export is async and rejects on host failure',
   async function (t) {

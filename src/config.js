@@ -28,7 +28,33 @@ import arch from 'arch'
 import applicationConfig from 'application-config'
 import pkg from '../package.json' with { type: 'json' }
 
-const appConfig = applicationConfig('WebTorrent')
+// `process` is a Node global, and since US-072 this module has a
+// consumer that has no such thing: the webview. The engine sidecar
+// (ADR-012) and the `bin/` dev scripts still do, so the reads below
+// are guarded rather than deleted -- `null` here is "ask the host
+// instead", and every use of it says what it falls back to.
+//
+// Tested on `process.versions` rather than on `process` alone because
+// a bundler is entitled to substitute a stub: Vite rewrites bare
+// `process.env` to `{}` for the browser, and a stub with an `env` and
+// nothing else would pass a bare `typeof` check and then fail on the
+// first real read.
+const NODE_PROCESS =
+  typeof process !== 'undefined' && process.versions != null
+    ? process
+    : null
+
+// Constructed on demand, not at module load. `application-config`
+// resolves the config directory through `os.platform()` and
+// `process.env.HOME`, neither of which the webview can answer; in the
+// bundle both are empty objects, so merely *constructing* this threw
+// and took the whole renderer down before anything rendered. Nothing
+// in the webview reaches it now -- see `getConfigPath()`.
+let appConfig = null
+function applicationConfigFor (name) {
+  if (appConfig === null) appConfig = applicationConfig(name)
+  return appConfig
+}
 
 // Babel compiles this module to CommonJS for both Electron processes,
 // so `__dirname` is defined in every runtime that actually runs the
@@ -36,18 +62,29 @@ const appConfig = applicationConfig('WebTorrent')
 // ESM, which happens exclusively for the `bin/` dev scripts -- they are
 // npm scripts, so they always run with the repo root as the cwd, and
 // this file always sits in `<repo>/src`.
+// The third branch is the webview, which has neither. Every value
+// derived from `DIRNAME` is a path into the repo or the app bundle,
+// and the webview addresses those over the asset protocol rather than
+// as files, so an empty base is the honest answer there.
 const DIRNAME = typeof __dirname !== 'undefined'
   ? __dirname
-  : path.join(process.cwd(), 'src')
+  : NODE_PROCESS
+    ? path.join(NODE_PROCESS.cwd(), 'src')
+    : ''
 
 export const APP_NAME = 'WebTorrent'
 export const APP_TEAM = 'WebTorrent, LLC'
 export const APP_VERSION = pkg.version
 
 export const IS_TEST = isTest()
-const PORTABLE_PATH = IS_TEST
-  ? path.join(process.platform === 'win32' ? 'C:\\Windows\\Temp' : '/tmp', 'WebTorrentTest')
-  : path.join(path.dirname(process.execPath), 'Portable Settings')
+// `process.execPath` is the packaged binary, so only a Node runtime
+// can answer this. The webview gets `''`, which `isPortable()` below
+// never compares against because it returns early there.
+const PORTABLE_PATH = !NODE_PROCESS
+  ? ''
+  : IS_TEST
+    ? path.join(NODE_PROCESS.platform === 'win32' ? 'C:\\Windows\\Temp' : '/tmp', 'WebTorrentTest')
+    : path.join(path.dirname(NODE_PROCESS.execPath), 'Portable Settings')
 export const IS_PRODUCTION = isProduction()
 export const IS_PORTABLE = isPortable()
 
@@ -178,9 +215,22 @@ export default {
 function getConfigPath () {
   if (IS_PORTABLE) {
     return PORTABLE_PATH
-  } else {
-    return path.dirname(appConfig.filePath)
   }
+
+  // The webview cannot resolve this: the directory depends on the
+  // platform and on `$HOME`, and it has neither. The host already
+  // knows it -- `src-tauri/src/paths.rs` resolves the whole layout and
+  // `app_paths` hands it over -- but nothing in the renderer consumes
+  // that command yet, so `CONFIG_PATH` is empty in the webview and
+  // `lib/state.js` falls back to a default state rather than reading a
+  // saved one. That gap is recorded for US-072 in progress.log; it is
+  // the renderer half of US-054 and it needs a bootstrap that can
+  // await the host, which is a decision rather than an oversight.
+  if (!NODE_PROCESS) {
+    return ''
+  }
+
+  return path.dirname(applicationConfigFor(APP_NAME).filePath)
 }
 
 function getDefaultDownloadPath () {
@@ -191,32 +241,30 @@ function getDefaultDownloadPath () {
   }
 }
 
-// Both Electron modules are required lazily, inside the branch that
-// needs them. A top-level `import electron from 'electron'` would make
-// this module unloadable in the engine sidecar (US-040), which runs
-// under plain `node` and, once packaged, has no `node_modules/electron`
-// to resolve at all -- even though the branch that uses it can never be
-// reached there.
+// The OS directory lookup this used to do was `app.getPath()`, which
+// belonged to Electron and left with it in US-072. The host owns it
+// now: `src-tauri/src/paths.rs` resolves the whole layout, downloads
+// directory included, and hands it to the renderer through the
+// `app_paths` command.
+//
+// Nothing in the renderer consumes that command yet, so this returns
+// `''` -- which is exactly what it already returned in the two
+// processes that are left. The engine sidecar (ADR-012) is a plain
+// Node process and never had a `process.type`, and the Tauri webview
+// has no `process` at all. The remaining caller is
+// `DEFAULT_DOWNLOAD_PATH`, so a profile created before the renderer
+// reads `app_paths` gets an empty default download directory. That is
+// recorded as an open gap in progress.log for US-072, not a decision.
 function getPath (key) {
-  if (process.type === 'renderer') {
-    // Electron renderer process
-    return require('@electron/remote').app.getPath(key)
-  } else if (process.type === 'browser') {
-    // Electron main process
-    return require('electron').app.getPath(key)
-  } else {
-    // A plain Node process -- which includes the engine sidecar when it
-    // is the Electron binary running as Node (US-041). There
-    // `process.versions.electron` is still set but `process.type` is
-    // not, and `require('electron')` yields a module with no `app`, so
-    // the test has to be on `process.type` rather than on the presence
-    // of Electron.
-    return ''
-  }
+  return ''
 }
 
+// Read off `NODE_PROCESS` rather than off `process.env` directly so
+// this keeps working without a bundler substitution: Vite rewrites
+// bare `process.env` for the browser, and relying on that would make
+// the answer depend on the build rather than on the runtime.
 function isTest () {
-  return process.env.NODE_ENV === 'test'
+  return NODE_PROCESS != null && NODE_PROCESS.env.NODE_ENV === 'test'
 }
 
 function isPortable () {
@@ -224,7 +272,14 @@ function isPortable () {
     return true
   }
 
-  if (process.platform !== 'win32' || !IS_PRODUCTION) {
+  // Only a packaged Windows build can be portable, and the webview
+  // cannot be one: the host decides, and `src-tauri/src/paths.rs`
+  // reports the portable layout for real.
+  if (!NODE_PROCESS) {
+    return false
+  }
+
+  if (NODE_PROCESS.platform !== 'win32' || !IS_PRODUCTION) {
     // Fast path: Non-Windows platforms should not check for path on disk
     return false
   }
@@ -239,18 +294,18 @@ function isPortable () {
   }
 }
 
+// This asked whether the running binary was the packaged app or the
+// `electron` development binary, by matching `process.execPath`
+// against the three platforms' spellings of it. Both the binary and
+// the question left with US-072: the host decides now, and it decides
+// it at compile time -- `src-tauri/src/paths.rs` uses
+// `!cfg!(debug_assertions)`, so a debug build is never production.
+//
+// Everything reachable from here runs under `node` (the engine
+// sidecar, ADR-012) or in the webview, and neither can answer it, so
+// this is `false` rather than a guess. The one consequence is that
+// `isPortable()` below takes its fast path on Windows; the host's
+// `AppPaths` reports the portable layout for real.
 function isProduction () {
-  if (!process.versions.electron) {
-    // Node.js process
-    return false
-  }
-  if (process.platform === 'darwin') {
-    return !/\/Electron\.app\//.test(process.execPath)
-  }
-  if (process.platform === 'win32') {
-    return !/\\electron\.exe$/.test(process.execPath)
-  }
-  if (process.platform === 'linux') {
-    return !/\/electron$/.test(process.execPath)
-  }
+  return false
 }

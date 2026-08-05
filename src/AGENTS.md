@@ -1,13 +1,16 @@
 # src/
 
-## The four trees, and the boundary between them
+## The three trees, and the boundary between them
 
-Since US-045 the app is three processes and there is no hidden window:
+Since US-072 there is no JavaScript host. The app is two processes
+plus the Rust host in `src-tauri/`, and this directory holds no host
+code at all:
 
-- `src/main/` -- the Electron host. Imports Electron and Node freely;
-  ported to Rust in Phase 4. It spawns and supervises the engine
-  (`engine-process.js`) and hands the UI its endpoint over the
-  `getEngineEndpoint` channel.
+- `src-tauri/` -- the host, in Rust. It creates the window, owns the
+  menus, tray, dialogs and paths, and spawns and supervises the engine
+  (`src-tauri/src/engine.rs`), handing the UI its endpoint through the
+  `get_engine_endpoint` command. It was `src/main/` until US-072; see
+  `src-tauri/AGENTS.md`.
 - `src/renderer/` -- the one UI window. Reaches the host **only**
   through `src/renderer/lib/platform/` (FR-8/FR-11), and reaches the
   engine only through that directory's `ipc-engine.js`.
@@ -33,39 +36,39 @@ topology and the pre-connect queue.
 
 ## Module systems
 
-`src/renderer/` is being converted to ESM; `src/main/` stays CommonJS.
-Both reach Electron as CommonJS, but by two different routes, and
-`npm run build` runs both:
+`src/renderer/` is ESM; `src/config.js`, `src/shared/` and
+`src/engine/` are loaded by plain Node and stay CommonJS.
+`npm run build` runs two halves:
 
 - `npm run build:renderer` (`vite build`) bundles the renderer entry
   `src/renderer/main.js` and everything it reaches into
-  `build-vite/renderer/main.js`, which `static/main.html` loads.
-- `npm run build:main` (`babel src --out-dir build`) compiles
-  everything else: `src/config.js`, `src/main/**`,
-  `src/shared/**` (see `src/shared/AGENTS.md`),
-  `src/engine/**` (see `src/engine/AGENTS.md`) and
-  `src/renderer/lib/**`, which the unit tests require.
+  `build-vite/renderer/main.js`, which `static/main.html` loads. There
+  is one of these now: US-072 deleted the `WT_HOST` flag and the
+  second, Tauri-specific renderer build that went with it.
+- `npm run build:node` (`babel src --out-dir build`) compiles
+  everything else: `src/config.js`, `src/shared/**` (see
+  `src/shared/AGENTS.md`), `src/engine/**` (see
+  `src/engine/AGENTS.md`) and `src/renderer/lib/**`, which the unit
+  tests require. It was `build:main` until US-072; the name went with
+  the main process it built.
 
-`build:main` therefore passes `--ignore` for the four paths Vite now
-owns exclusively -- `src/renderer/main.js`, `components/`,
-`controllers/` and `pages/`. Nothing outside the Vite bundle requires
-them, so Babel emitting them again would only leave a stale second copy
-of the renderer that nothing loads. If a *new* non-Vite consumer ever
-needs one of those files, shrink the ignore list rather than adding a
-second build step. `src/renderer/lib/**` is deliberately NOT ignored.
-It was shared with the main process until US-055 moved the last
-require (`lib/state.js`) out of `src/main/index.js`; it is still built
-both ways because `test/unit/*.js` is CommonJS and requires the Babel
-output, never the ESM sources.
+`build:node` therefore passes `--ignore` for the four paths Vite owns
+exclusively -- `src/renderer/main.js`, `components/`, `controllers/`
+and `pages/`. Nothing outside the Vite bundle requires them, so Babel
+emitting them again would only leave a stale second copy of the
+renderer that nothing loads. If a *new* non-Vite consumer ever needs
+one of those files, shrink the ignore list rather than adding a second
+build step. `src/renderer/lib/**` is deliberately NOT ignored: it is
+built twice because `test/unit/*.js` is CommonJS and requires the Babel
+output, never the ESM sources (ADR-010).
 
 The `babel` key in `package.json` carries
 `@babel/plugin-transform-modules-commonjs` with
 `sourceType: "unambiguous"`. Without that plugin Babel leaves `import`
-and `export` untouched in the output, and Electron 27 (Node 18) cannot
-`require()` an ES module -- the app dies at startup. Do not remove it.
-`unambiguous` is what keeps files with no `import`/`export` compiling as
-scripts, so the still-CommonJS files are not silently switched to strict
-mode.
+and `export` untouched in the output, and the sidecar and the unit
+suite cannot `require()` the result. Do not remove it. `unambiguous` is
+what keeps files with no `import`/`export` compiling as scripts, so the
+still-CommonJS files are not silently switched to strict mode.
 
 Convert consumers before their dependencies. Babel compiles
 `export default X` to `exports.default = X`, so a CommonJS caller doing
@@ -78,7 +81,8 @@ the value. The reverse (ESM importing CommonJS) is safe via Babel's
 Exports every value **twice**: once as a named export and once inside
 the default export object. Both are load-bearing.
 
-- Named exports serve `src/main/` (`config.APP_NAME` and
+- Named exports serve the CommonJS consumers -- the engine sidecar,
+  `src/shared/`, `bin/` and the unit suite (`config.APP_NAME` and
   `const { APP_NAME } = require('../config')`).
 - The default export serves ESM renderer code
   (`import config from '../config'`).
@@ -87,29 +91,27 @@ Adding a value to one and not the other makes it silently missing for
 half the codebase. There is a "keep in sync" comment on the default
 export object.
 
-`bin/clean.js`, `bin/package.js` and `bin/open-config.js` require this
-file **straight from source**, so plain Node loads it as real ESM rather
-than through Babel. That is why `__dirname` is read through the
-`DIRNAME` guard at the top -- it does not exist in an ES module scope.
-Anything new added here that depends on a CommonJS-only global will
-break those three npm scripts, and nothing else will notice.
+`bin/clean.js` and `bin/open-config.js` require this file **straight
+from source**, so plain Node loads it as real ESM rather than through
+Babel. That is why `__dirname` is read through the `DIRNAME` guard at
+the top -- it does not exist in an ES module scope. Anything new added
+here that depends on a CommonJS-only global will break those two npm
+scripts, and nothing else will notice.
 
-A fourth consumer arrived with US-040: the engine sidecar, under plain
-`node`. That is why `electron` and `@electron/remote` are both required
-lazily, inside the branch of `getPath()` that needs them, rather than
-imported at the top. A top-level `import electron from 'electron'` makes
-this module unloadable wherever `node_modules/electron` is absent --
-which is every packaged sidecar. Keep new host imports out of module
-scope here for the same reason.
+**Do not put a host import in this file at all.** It used to require
+`electron` and `@electron/remote` lazily, inside the branch of
+`getPath()` that needed them, so that the sidecar -- which has no
+`node_modules/electron` once packaged -- could still load it. US-072
+removed both branches with the host: the OS directory lookup is
+`src-tauri/src/paths.rs` now and reaches the renderer through the
+`app_paths` command. `getPath()` and `isProduction()` are left as
+constant answers with the reasoning in a comment at each, because
+neither of the two runtimes that still load this file -- plain `node`
+for the sidecar, the webview for the renderer -- can answer them.
 
-`getPath()` branches on `process.type`, and that spelling matters. The
-sidecar is spawned as Electron in Node mode (`ELECTRON_RUN_AS_NODE=1`,
-see `src/main/engine-process.js`), where `process.versions.electron` is
-set but `process.type` is not and `require('electron')` has no `app`.
-Testing for the presence of Electron therefore sends the sidecar down
-the main-process branch and it dies at load -- but only when
-`NODE_ENV` is not `test`, because portable config never calls
-`getPath()`.
+One consequence is open and is recorded against US-072 in
+`progress.log`: nothing in the renderer consumes `app_paths` yet, so
+`DEFAULT_DOWNLOAD_PATH` is empty in a profile created before it does.
 
 ## `src/renderer/lib/`
 
@@ -121,18 +123,19 @@ Do not reintroduce a default export object for these -- a default and a
 namespace would drift apart.
 
 The single-value modules (`media-extensions.js`, `state.js`) use
-`export default`. Their remaining CommonJS consumers therefore have to
-say `require('...').default`; see `src/main/index.js`.
-`torrent-poster.js` has both a default export (`torrentPoster`) and
-named ones (`generateTorrentPoster`, `choosePosterSource`), because
-US-043 gave it a job as well as an answer.
+`export default`. Their remaining CommonJS consumers -- the unit suite,
+which requires the Babel output -- therefore have to say
+`require('...').default`. `torrent-poster.js` has both a default export
+(`torrentPoster`) and named ones (`generateTorrentPoster`,
+`choosePosterSource`), because US-043 gave it a job as well as an
+answer.
 
-`state.js` is the only renderer module the **main** process consumes
-(`src/main/index.js` calls `State.load(cb)`). It is also imported by
-both processes at once, so it must stay free of renderer-only globals:
-anything that needs the renderer belongs behind the
-`process.type === 'renderer'` guard in `load()`, the way `migrations.run`
-is.
+`state.js` was imported by the main process as well until US-055 moved
+its save and load behind the shim, and US-072 deleted the last caller
+with the process. It is renderer-only now, and the
+`process.type === 'renderer'` guard it kept in `load()` for that reason
+is dead weight rather than a constraint -- there is no other process
+that could reach it.
 
 ## Deferring a module load in the renderer
 
@@ -156,9 +159,9 @@ measurement, not a preference:
 `lib/cast.js:47-49` is the only such exception today: the casting stack
 blocks the renderer for ~3.8 seconds.
 
-Measure with `git stash && npm run build && npx electron --no-sandbox .`
-for the before, and `performance.now()` either side of the `require` in
-`build/renderer/main.js` for the where.
+Measure with `git stash && npm start` for the before, and
+`performance.now()` either side of the `require` in
+`build-vite/renderer/main.js` for the where.
 
 ## Node builtins in `src/renderer/`
 

@@ -1,329 +1,301 @@
 /**
- * Platform shim: OS-facing IPC.
+ * Platform shim.
  *
- * Per FR-9 this module covers every renderer<->main channel *except*
- * the `wt-*` engine protocol, which lives in `ipc-engine.js`. The two
- * modules share no exports. It also does not export the four
- * path/URL channels owned by `shell.js`.
+ * The OS-facing command surface, to be backed by Tauri commands and
+ * events in `src-tauri/`.
  *
- * Channel names never reach a caller: each one gets a named function,
- * because a non-Electron host has to implement them one by one and a
- * generic `send(channel, ...)` would just move the string literals
- * around.
+ * This is the widest module in the tree, and many Phase 4 stories
+ * fill it in rather than one: window state (US-056, US-057), dock
+ * and taskbar progress (US-063), the power save blocker (US-066),
+ * file and magnet open events (US-065), the folder watcher (US-068),
+ * launch-on-login (US-069) and the sidecar endpoint (US-070).
  *
- * Every listener registration resolves to an unsubscribe function, so
- * no caller ever touches `removeListener`.
- *
- * Implemented in US-020; call sites were migrated in US-030 (the
- * controllers) and US-031 (`main.js`). See docs/platform-shim.md.
+ * `docs/platform-shim.md` is the contract each export is written
+ * against. Until US-072 there was a second, Electron tree beside
+ * this one and a build flag to pick between them (ADR-014); the
+ * cutover deleted both, so this module is the shim.
  */
 
-import { ipcRenderer } from 'electron'
-
-/**
- * @typedef {() => void} Unsubscribe
- */
+import { invoke } from '@tauri-apps/api/core'
+import { listen, once } from '@tauri-apps/api/event'
+import { notImplemented } from './not-implemented'
 
 /**
- * @typedef {object} ListenOptions
- * @property {boolean} [once] Remove the listener after one event.
- */
-
-/**
- * Register a listener on `channel`, hiding both the Electron event
- * object and `removeListener` from the caller.
+ * Register a listener on a host event, hiding both the Tauri event
+ * envelope and the unsubscribe bookkeeping from the caller.
  *
- * @param {string} channel
- * @param {(...args: any[]) => void} listener
- * @param {ListenOptions} [options]
- * @returns {Unsubscribe}
+ * Electron's `listen()` dropped an event object and spread
+ * the rest of the arguments; a Tauri event carries exactly one
+ * payload, so the wrapper unwraps `event.payload` instead. Both hand
+ * the caller the same thing: the value the host sent, and a function
+ * that stops the subscription.
+ *
+ * @param {string} event
+ * @param {(payload: any) => void} listener
+ * @param {{ once?: boolean }} [options]
+ * @returns {Promise<() => void>}
  */
-function listen (channel, listener, options) {
-  const wrapped = (e, ...args) => listener(...args)
-  if (options && options.once) ipcRenderer.once(channel, wrapped)
-  else ipcRenderer.on(channel, wrapped)
-  return () => ipcRenderer.removeListener(channel, wrapped)
+function subscribe (event, listener, options) {
+  const register = options && options.once ? once : listen
+  return register(event, (received) => listener(received.payload))
 }
 
-// -- Window chrome and OS integration -------------------------------
+/**
+ * An optional argument, as a Tauri command reads it.
+ *
+ * `undefined` is dropped by JSON serialisation, and a dropped key is
+ * not the same thing as an argument the caller left out on purpose:
+ * `toggleFullScreen()` with no flag means *toggle*, and the host has
+ * to be told that rather than left to guess from a missing key.
+ *
+ * @param {any} value
+ * @returns {any}
+ */
+function optional (value) {
+  return value === undefined ? null : value
+}
 
 /**
- * Set the window title.
+ * Set the window title (US-057).
  *
  * @param {string} title
  * @returns {Promise<void>}
  */
 export async function setTitle (title) {
-  ipcRenderer.send('setTitle', title)
+  return invoke('set_title', { title })
 }
 
 /**
- * Set the dock/taskbar progress bar, 0..1. Negative hides it.
+ * Set the taskbar progress bar, 0..1. Negative hides it, above 1 is
+ * indeterminate -- the host reads those the way Electron does, so the
+ * number crosses unchanged (US-057).
  *
  * @param {number} progress
  * @returns {Promise<void>}
  */
 export async function setProgress (progress) {
-  ipcRenderer.send('setProgress', progress)
+  return invoke('set_progress', { progress })
 }
 
 /**
- * Set the dock/taskbar badge count.
+ * Set the dock badge to a download count, or clear it with `0`
+ * (US-063).
+ *
+ * The count crosses as the caller computed it and the host decides
+ * what it means: on macOS and Linux it is drawn, on Windows there is
+ * no badge and the command does nothing. See `src-tauri/src/dock.rs`.
  *
  * @param {number} count
  * @returns {Promise<void>}
  */
 export async function setBadge (count) {
-  ipcRenderer.send('setBadge', count)
+  return invoke('set_badge', { count })
 }
 
 /**
- * @typedef {object} WindowBounds
- * @property {number|null} [x]
- * @property {number|null} [y]
- * @property {number} [width]
- * @property {number} [height]
- * @property {boolean} [contentBounds] Treat the bounds as the content
- *   area rather than the whole window.
- */
-
-/**
- * Move and resize the window.
+ * Move and resize the window (US-057).
  *
- * @param {WindowBounds} bounds
- * @param {boolean} [maximize] Whether to restore a maximised window.
+ * @param {object} bounds `{ x, y, width, height, contentBounds }`,
+ *   any of which may be absent; `x` and `y` are null together to mean
+ *   "centre on the current display".
+ * @param {boolean} [maximize] Whether to maximise or restore.
  * @returns {Promise<void>}
  */
 export async function setBounds (bounds, maximize) {
-  ipcRenderer.send('setBounds', bounds, maximize)
+  return invoke('set_bounds', { bounds, maximize: optional(maximize) })
 }
 
 /**
- * Lock the window to an aspect ratio. `0` unlocks it.
+ * Lock the window to an aspect ratio -- **not supported under Tauri**.
+ *
+ * The host has no aspect-ratio API to call, so this reaches a command
+ * that does nothing. The visible consequence, on macOS only: dragging
+ * the player window's edge no longer snaps to the video's shape, and
+ * the video letterboxes inside whatever rectangle the drag makes. The
+ * window still *opens* at the video's shape, because every caller in
+ * `src/renderer/main.js` follows this with a `setBounds`. See the
+ * command's own comment in `src-tauri/src/main.rs`.
  *
  * @param {number} aspectRatio
  * @returns {Promise<void>}
  */
 export async function setAspectRatio (aspectRatio) {
-  ipcRenderer.send('setAspectRatio', aspectRatio)
+  return invoke('set_aspect_ratio', { aspectRatio })
 }
 
 /**
- * Enter or leave full screen.
+ * Enter or leave full screen (US-057).
  *
  * @param {boolean} [setTo] Toggles when omitted.
  * @returns {Promise<void>}
  */
 export async function toggleFullScreen (setTo) {
-  ipcRenderer.send('toggleFullScreen', setTo)
+  return invoke('toggle_full_screen', { setTo: optional(setTo) })
 }
 
 /**
- * Show and focus the main window.
+ * Show and focus the main window (US-057).
  *
  * @returns {Promise<void>}
  */
 export async function show () {
-  ipcRenderer.send('show')
+  return invoke('show')
 }
 
-// -- Renderer lifecycle ---------------------------------------------
-
-/**
- * Tell the main process the UI is ready to receive events
- * (the `ipcReady` channel).
- *
- * @returns {Promise<void>}
- */
 export async function signalReady () {
-  ipcRenderer.send('ipcReady')
+  notImplemented('ipc-os', 'signalReady')
 }
 
-/**
- * Tell the main process saved state has been flushed to disk
- * (the `stateSaved` channel).
- *
- * @returns {Promise<void>}
- */
 export async function signalStateSaved () {
-  ipcRenderer.send('stateSaved')
+  notImplemented('ipc-os', 'signalStateSaved')
 }
 
-// -- Dialogs owned by the main process ------------------------------
-
-/**
- * Ask the main process to show its "open torrent file" dialog. The
- * result comes back as a `dispatch` event, not a return value.
- *
- * @returns {Promise<void>}
- */
 export async function openTorrentFileDialog () {
-  ipcRenderer.send('openTorrentFile')
+  notImplemented('ipc-os', 'openTorrentFileDialog')
 }
 
-/**
- * Ask the main process to show its "open files" dialog. The result
- * comes back as a `dispatch` event, not a return value.
- *
- * @returns {Promise<void>}
- */
 export async function openFilesDialog () {
-  ipcRenderer.send('openFiles')
+  notImplemented('ipc-os', 'openFilesDialog')
 }
 
-// -- Preferences ----------------------------------------------------
-
 /**
- * Allow or block in-window navigation, used while a preferences
- * field is focused.
+ * Allow or block opening another screen on top of the current one,
+ * which is the File and Preferences items of the host's menu
+ * (US-061). The menu is the host's, so this is a command rather than
+ * anything the renderer can do itself.
  *
  * @param {boolean} allow
  * @returns {Promise<void>}
  */
 export async function setAllowNav (allow) {
-  ipcRenderer.send('setAllowNav', allow)
+  return invoke('set_allow_nav', { allow })
 }
 
-/**
- * Register or deregister the app as the OS handler for torrent files
- * and magnet links.
- *
- * @param {boolean} isFileHandler
- * @returns {Promise<void>}
- */
 export async function setDefaultFileHandler (isFileHandler) {
-  ipcRenderer.send('setDefaultFileHandler', isFileHandler)
+  notImplemented('ipc-os', 'setDefaultFileHandler')
 }
 
 /**
- * Enable or disable launching the app at login.
+ * Enable or disable launching the app at login (US-069).
+ *
+ * The mechanism is the host's and differs by platform -- a login
+ * item, an autostart entry or a registry value -- so the renderer
+ * says only whether it wants one, exactly as it does under Electron.
  *
  * @param {boolean} startup
  * @returns {Promise<void>}
  */
 export async function setStartup (startup) {
-  ipcRenderer.send('setStartup', startup)
+  return invoke('set_startup', { startup })
 }
 
-// -- Folder watcher -------------------------------------------------
-
 /**
- * Start watching the configured torrents folder.
+ * Start watching the configured torrents folder (US-068).
+ *
+ * No argument, as Electron's had none: which folder, and
+ * whether the preference is on at all, is in the saved state, and the
+ * host reads it for itself. A torrent that appears there arrives back
+ * as `addTorrent` on the `onDispatch` channel above.
  *
  * @returns {Promise<void>}
  */
 export async function startFolderWatcher () {
-  ipcRenderer.send('startFolderWatcher')
+  return invoke('start_folder_watcher')
 }
 
 /**
- * Stop watching the configured torrents folder.
+ * Stop watching the configured torrents folder (US-068).
  *
  * @returns {Promise<void>}
  */
 export async function stopFolderWatcher () {
-  ipcRenderer.send('stopFolderWatcher')
+  return invoke('stop_folder_watcher')
 }
 
-// -- External media player ------------------------------------------
-
-/**
- * Check whether an external player is installed at `path`. Collapses
- * today's send-then-`once` pair into one round trip.
- *
- * @param {string} path Empty string means "use the OS default".
- * @returns {Promise<boolean>}
- */
 export async function checkForExternalPlayer (path) {
-  return await new Promise(resolve => {
-    ipcRenderer.once('checkForExternalPlayer',
-      (e, isInstalled) => resolve(isInstalled))
-    ipcRenderer.send('checkForExternalPlayer', path)
-  })
+  notImplemented('ipc-os', 'checkForExternalPlayer')
 }
 
-/**
- * Launch the external player.
- *
- * @param {string} path Empty string means "use the OS default".
- * @param {string} url  Media URL to play.
- * @param {string} title Window title to pass through.
- * @returns {Promise<void>}
- */
 export async function openExternalPlayer (path, url, title) {
-  ipcRenderer.send('openExternalPlayer', path, url, title)
+  notImplemented('ipc-os', 'openExternalPlayer')
 }
 
-/**
- * Quit the external player if it is running.
- *
- * @returns {Promise<void>}
- */
 export async function quitExternalPlayer () {
-  ipcRenderer.send('quitExternalPlayer')
+  notImplemented('ipc-os', 'quitExternalPlayer')
 }
 
-// -- Player state notifications -------------------------------------
-
 /**
- * Notify the main process that playback started.
+ * Playback started: hold the display awake until it stops (US-066).
  *
  * @returns {Promise<void>}
  */
 export async function notifyPlayerPlay () {
-  ipcRenderer.send('onPlayerPlay')
+  return invoke('notify_player_play')
 }
 
 /**
- * Notify the main process that playback paused.
+ * Playback paused: let the display sleep again. The player is still
+ * open, which is what makes this different from `notifyPlayerClose`
+ * (US-066).
  *
  * @returns {Promise<void>}
  */
 export async function notifyPlayerPause () {
-  ipcRenderer.send('onPlayerPause')
+  return invoke('notify_player_pause')
 }
 
 /**
- * Notify the main process that the player opened.
+ * The player opened, so the Playback menu applies to something
+ * (US-061) and the display is to stay awake (US-066).
+ *
+ * Electron's handler also starts the media keys; those land on the
+ * same command when they are ported (US-067), so the renderer's side
+ * of it does not change again.
  *
  * @returns {Promise<void>}
  */
 export async function notifyPlayerOpen () {
-  ipcRenderer.send('onPlayerOpen')
+  return invoke('notify_player_open')
 }
 
 /**
- * Notify the main process which playlist controls are available.
+ * Which playlist controls apply: Skip Next and Skip Previous follow
+ * these two flags (US-061).
  *
  * @param {boolean} hasNext
  * @param {boolean} hasPrevious
  * @returns {Promise<void>}
  */
 export async function notifyPlayerUpdate (hasNext, hasPrevious) {
-  ipcRenderer.send('onPlayerUpdate', hasNext, hasPrevious)
+  return invoke('notify_player_update', { hasNext, hasPrevious })
 }
 
 /**
- * Notify the main process that the player closed.
+ * The player closed: nothing in the Playback menu applies (US-061)
+ * and the display may sleep (US-066).
  *
  * @returns {Promise<void>}
  */
 export async function notifyPlayerClose () {
-  ipcRenderer.send('onPlayerClose')
+  return invoke('notify_player_close')
 }
 
 /**
- * Notify the main process that a download finished, so it can show
- * the OS notification and bounce the dock.
+ * A torrent finished downloading to `path`, which bounces the macOS
+ * Downloads stack if that is where it landed (US-063).
+ *
+ * A no-op on Windows and Linux, neither of which has a Downloads
+ * stack -- the same platforms the old `src/main/dock.js` returned
+ * early on.
  *
  * @param {string} path
  * @returns {Promise<void>}
  */
 export async function notifyDownloadFinished (path) {
-  ipcRenderer.send('downloadFinished', path)
+  return invoke('download_finished', { path })
 }
 
-// -- The engine sidecar ---------------------------------------------
+// -- The engine sidecar -----------------------------------------------
 
 /**
  * @typedef {object} EngineEndpoint
@@ -332,80 +304,77 @@ export async function notifyDownloadFinished (path) {
  */
 
 /**
- * Ask the host where the engine sidecar is listening (US-042). Plain
- * data, one round trip, the same send-then-`once` pair
- * `checkForExternalPlayer` uses -- the host holds the port and the
- * token, and nothing about the sidecar is discoverable from the
- * renderer's environment.
+ * Ask the host where the engine sidecar is listening (US-070).
+ *
+ * Electron asked the deleted `src/main/engine-process.js`; this one
+ * asks `src-tauri/src/engine.rs`, which supervises the same sidecar
+ * (ADR-012) and answers the same `{ url, token }`. The host waits out
+ * a restart before replying, so a slow answer here means the engine is
+ * on its way back rather than that the call was lost.
  *
  * The port changes when the sidecar restarts, so this is a question to
  * ask on every connect rather than a value to cache. `null` means the
- * host has no engine to offer.
+ * host has no engine to offer -- `ipc-engine.js` retries.
  *
  * @returns {Promise<EngineEndpoint|null>}
  */
 export async function getEngineEndpoint () {
-  return await new Promise(resolve => {
-    ipcRenderer.once('getEngineEndpoint',
-      (e, endpoint) => resolve(endpoint))
-    ipcRenderer.send('getEngineEndpoint')
-  })
+  return invoke('get_engine_endpoint')
 }
 
-// -- Inbound events -------------------------------------------------
-
-/**
- * Console output forwarded from the main process.
- *
- * @param {(...args: any[]) => void} listener
- * @param {ListenOptions} [options]
- * @returns {Promise<Unsubscribe>}
- */
 export async function onLog (listener, options) {
-  return listen('log', listener, options)
+  notImplemented('ipc-os', 'onLog')
 }
 
-/**
- * Errors forwarded from the main process.
- *
- * @param {(...args: any[]) => void} listener
- * @param {ListenOptions} [options]
- * @returns {Promise<Unsubscribe>}
- */
 export async function onError (listener, options) {
-  return listen('error', listener, options)
+  notImplemented('ipc-os', 'onError')
 }
 
 /**
- * Actions the main process wants the renderer to dispatch, for
- * example from the application menu.
+ * Actions the host wants the renderer to dispatch, which is what every
+ * application-menu item that is not a role does (US-061).
+ *
+ * A Tauri event carries one payload where Electron's `send` carries an
+ * argument list, so the host sends the list as an array and it is
+ * spread here: the caller's signature is `(action, ...args)` against
+ * either host.
  *
  * @param {(action: string, ...args: any[]) => void} listener
- * @param {ListenOptions} [options]
- * @returns {Promise<Unsubscribe>}
+ * @param {{ once?: boolean }} [options]
+ * @returns {Promise<() => void>}
  */
 export async function onDispatch (listener, options) {
-  return listen('dispatch', listener, options)
+  return subscribe('dispatch', (args) => listener(...args), options)
 }
 
 /**
- * The window entered or left full screen.
+ * The window entered or left full screen (US-057).
+ *
+ * Tauri has no enter/leave-fullscreen event, so the host reads the
+ * state on every resize and emits only the transitions -- including
+ * one the user made from the OS window chrome, which is what Electron
+ * reports too. The payload is the same boolean.
  *
  * @param {(isFullScreen: boolean) => void} listener
- * @param {ListenOptions} [options]
- * @returns {Promise<Unsubscribe>}
+ * @param {{ once?: boolean }} [options]
+ * @returns {Promise<() => void>}
  */
 export async function onFullscreenChanged (listener, options) {
-  return listen('fullscreenChanged', listener, options)
+  return subscribe('fullscreenChanged', listener, options)
 }
 
 /**
- * The window was moved or resized.
+ * The window was moved or resized (US-056).
  *
- * @param {(bounds: WindowBounds) => void} listener
- * @param {ListenOptions} [options]
- * @returns {Promise<Unsubscribe>}
+ * The host emits this on the same name the Electron main process
+ * sends it on, already debounced and already in logical pixels, so
+ * the payload is the `{ x, y, width, height }` the caller saves
+ * either way.
+ *
+ * @param {(bounds: object) => void} listener
+ * @param {{ once?: boolean }} [options]
+ * @returns {Promise<() => void>}
  */
 export async function onWindowBoundsChanged (listener, options) {
-  return listen('windowBoundsChanged', listener, options)
+  return subscribe('windowBoundsChanged', listener, options)
 }

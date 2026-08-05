@@ -7,7 +7,7 @@
 // other's settings.
 //
 // The rule: nothing under `src/renderer/` may import the host
-// directly. Every Electron and Node surface the UI needs is reachable
+// directly. Every Tauri and Node surface the UI needs is reachable
 // through `src/renderer/lib/platform/`, so a new direct import is
 // always the decoupling eroding rather than a legitimate need.
 //
@@ -15,11 +15,16 @@
 // torrent sidecar (ADR-012): a plain Node process, so it is exempt
 // from the renderer's Node bans and may use `fs`, `os`, `crypto` and
 // `http` freely. What it may not do is the mirror-image mistake --
-// reach for Electron or for a DOM. It runs under
-// `ELECTRON_RUN_AS_NODE`, where `require('electron')` returns no
-// `app`, and a packaged sidecar has no `node_modules/electron` to
-// resolve at all, so an Electron import there fails at load rather
-// than degrading. There is no `window` either. Both are banned below.
+// reach for a host API or for a DOM. It is spawned by
+// `src-tauri/src/engine.rs` as a plain `node` child, so
+// `@tauri-apps/api` there is a load error rather than a degraded
+// feature, and there is no `window`. Both are banned below.
+//
+// The Electron specifiers are still banned by name after US-072
+// deleted the host. Nothing imports them any more, and that is
+// exactly the state worth pinning: the ban costs nothing and turns a
+// reflexive `import { shell } from 'electron'` into a lint failure
+// rather than a missing-module error at build time.
 //
 // Scope note: `no-restricted-imports` sees `import` declarations only,
 // not `require()`. The `require()` spellings of the same specifiers
@@ -47,11 +52,10 @@ const HOST = [
   banned('original-fs', ELECTRON)
 ]
 
-// US-056: the second host's API package is a host module like any
-// other, and it arrives with subpaths (`@tauri-apps/api/event`,
-// `/core`, ...), so it is a pattern rather than a path. Same rule as
-// `electron`: only the shim may name it, and only in the tree the
-// build selects.
+// US-056: the host's API package is a host module like any other, and
+// it arrives with subpaths (`@tauri-apps/api/event`, `/core`, ...),
+// so it is a pattern rather than a path. Same rule as `electron`:
+// only the shim may name it.
 const TAURI_API = [{
   group: ['@tauri-apps/api', '@tauri-apps/api/**'],
   message: 'The renderer must not reach Tauri directly. Import ' +
@@ -61,17 +65,21 @@ const TAURI_API = [{
 // The host half of the renderer ban on its own, for the one shim file
 // that is exempt from the Node half but not from this one:
 // `ipc-engine.js` below.
-const ELECTRON_ONLY = ['error', { paths: HOST, patterns: TAURI_API }]
+const HOST_ONLY = ['error', { paths: HOST, patterns: TAURI_API }]
 
 // The same specifiers for the sidecar, which is not a renderer and has
-// no shim to be pointed at -- it simply has no Electron.
-const ENGINE_ELECTRON = ['error', {
-  paths: HOST.map(({ name }) => ({
-    name,
-    message: 'The engine sidecar is a plain Node process: it runs ' +
-      'under ELECTRON_RUN_AS_NODE and a packaged sidecar has no ' +
-      'node_modules/electron to resolve (ADR-012).'
-  }))
+// no shim to be pointed at -- it simply has no host.
+const ENGINE_SIDECAR = 'The engine sidecar is a plain Node process ' +
+  'spawned by src-tauri/src/engine.rs: it has no host API to reach, ' +
+  'and importing one is a load error rather than a degraded ' +
+  'feature (ADR-012).'
+
+const ENGINE_HOST = ['error', {
+  paths: HOST.map(({ name }) => ({ name, message: ENGINE_SIDECAR })),
+  patterns: [{
+    group: ['@tauri-apps/api', '@tauri-apps/api/**'],
+    message: ENGINE_SIDECAR
+  }]
 }]
 
 // The DOM globals a Node process cannot have. `no-restricted-globals`
@@ -86,23 +94,8 @@ const NO_DOM = ['error',
   { name: 'XMLHttpRequest', message: 'The engine is a Node process.' }
 ]
 
-// US-052: the shim has two implementations now (ADR-014), and which
-// one a build talks to is a property of the build -- the `WT_HOST`
-// resolver in `bin/shim-resolver.js` swaps the whole tree. A UI file
-// that named `lib/platform/tauri/` directly would pin itself to one
-// host and defeat that, so the subdirectory is banned by name while
-// `lib/platform/` itself stays the way in. The shim override below
-// switches this off inside the shim, which is where the Tauri tree's
-// own relative imports live.
-const TAURI_TREE = [{
-  group: ['**/platform/tauri', '**/platform/tauri/**'],
-  message: 'The Tauri shim tree is selected at build time by ' +
-    'WT_HOST (ADR-014), never imported by name. Import ' +
-    SHIM + ' instead (FR-11).'
-}]
-
 const RESTRICTED = ['error', {
-  patterns: [...TAURI_TREE, ...TAURI_API],
+  patterns: [...TAURI_API],
   paths: [
     ...HOST,
 
@@ -141,8 +134,8 @@ module.exports = {
     ecmaFeatures: { jsx: true }
   },
   // No rules at the top level: this config polices `src/renderer/` and
-  // nothing else. `src/main/` is the host process and is supposed to
-  // import Electron and Node freely.
+  // `src/engine/`, and nothing else. The host process is Rust now
+  // (`src-tauri/`), so there is no third JavaScript tree to exempt.
   rules: {},
   overrides: [
     {
@@ -159,12 +152,13 @@ module.exports = {
       // ...with one exception. `ipc-engine.js` needed `ipcRenderer`
       // while the `wt-*` protocol rode Electron IPC; since US-044 it
       // is a WebSocket client of the sidecar and needs no host module
-      // at all. The blanket shim exemption would let that quietly
-      // regress, so the Electron ban goes back on for this one file.
-      // The Node half stays off: it is still a shim module, and the
-      // next thing it needs may legitimately be a builtin.
+      // at all -- which is why US-072 could promote it unchanged. The
+      // blanket shim exemption would let that quietly regress, so the
+      // host ban goes back on for this one file. The Node half stays
+      // off: it is still a shim module, and the next thing it needs
+      // may legitimately be a builtin.
       files: [SHIM + 'ipc-engine.js'],
-      rules: { 'no-restricted-imports': ELECTRON_ONLY }
+      rules: { 'no-restricted-imports': HOST_ONLY }
     },
     {
       // Deferred casualty: `lib/cast.js` runs an http server inside
@@ -176,11 +170,11 @@ module.exports = {
     {
       // The sidecar (US-046). Exempt from the renderer rules by not
       // matching them, and policed for the opposite mistake instead:
-      // no Electron module, no DOM global. Node builtins are its
+      // no host module, no DOM global. Node builtins are its
       // native surface and are deliberately unrestricted here.
       files: ['src/engine/**/*.js'],
       rules: {
-        'no-restricted-imports': ENGINE_ELECTRON,
+        'no-restricted-imports': ENGINE_HOST,
         'no-restricted-globals': NO_DOM
       }
     }

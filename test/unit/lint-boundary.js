@@ -49,10 +49,13 @@ const EXEMPT = [
 ]
 
 // A file outside the renderer must not be touched by this config at
-// all -- it exists to police `src/renderer/`, not the main process.
+// all -- it exists to police `src/renderer/` and `src/engine/`, and
+// nothing else. Until US-072 the example was the Electron main
+// process; the build scripts and the config module the renderer shares
+// with the sidecar make the same point and are still here.
 const OUTSIDE = [
-  'src/main/index.js',
-  'bin/package.js'
+  'bin/build-tauri.js',
+  'src/config.js'
 ]
 
 function boundaryEslint () {
@@ -117,27 +120,28 @@ test('the boundary config allows the imports the renderer still needs',
     t.end()
   })
 
-// US-052: `lib/platform/` is the way in; `lib/platform/tauri/` is one
-// of the two trees behind it and is selected by the build, never
-// named by a caller.
-test('the boundary config rejects a direct Tauri-tree import',
+// US-052 banned `lib/platform/tauri/` here: it was one of two trees
+// behind the barrel, selected by `WT_HOST`, and naming it directly
+// pinned a caller to one host. US-072 promoted that tree to
+// `lib/platform/` and deleted the flag, so there is nothing left to
+// ban -- and the rule that replaces it is the one below: a module
+// inside the shim is reachable, because there is only one of it.
+test('a shim module is importable by its own name now',
   async function (t) {
     const specifiers = [
-      '../lib/platform/tauri',
-      '../lib/platform/tauri/window',
-      './platform/tauri/fs.js',
-      'src/renderer/lib/platform/tauri/clipboard'
+      '../lib/platform',
+      '../lib/platform/window',
+      './platform/fs.js',
+      'src/renderer/lib/platform/clipboard'
     ]
     for (const specifier of specifiers) {
       const messages = await lintAs(
         "import x from '" + specifier + "'\nexport default x\n",
         'src/renderer/probe.js'
       )
-      const restricted = messages
-        .filter((m) => m.ruleId === 'no-restricted-imports')
-      t.equal(restricted.length, 1, specifier + ' is rejected')
-      t.ok(/WT_HOST/.test(restricted[0].message || ''),
-        specifier + ' is pointed at the build flag')
+      t.deepEqual(
+        messages.filter((m) => m.ruleId === 'no-restricted-imports'), [],
+        specifier + ' is allowed')
     }
     t.end()
   })
@@ -168,11 +172,11 @@ test('the boundary config rejects a direct Tauri API import',
     // that is meant to need no host at all.
     const inShim = await lintAs(
       "import { listen } from '@tauri-apps/api/event'\nexport { listen }\n",
-      'src/renderer/lib/platform/tauri/ipc-os.js'
+      'src/renderer/lib/platform/ipc-os.js'
     )
     t.deepEqual(
       inShim.filter((m) => m.ruleId === 'no-restricted-imports'), [],
-      'the Tauri shim tree may import it')
+      'the shim may import it')
 
     const inEngine = await lintAs(
       "import { listen } from '@tauri-apps/api/event'\nexport { listen }\n",
@@ -180,21 +184,24 @@ test('the boundary config rejects a direct Tauri API import',
     )
     t.equal(
       inEngine.filter((m) => m.ruleId === 'no-restricted-imports').length, 1,
-      'the engine shim stays host-free under both hosts')
+      'the engine shim stays host-free')
     t.end()
   })
 
-test('the shim itself may still reach both trees', async function (t) {
+// The shim's barrel imports its siblings relatively. That was true
+// with two trees and is true with one; what changed is that there is
+// no second tree for the exemption to have to reach.
+test('the shim may reach its own siblings', async function (t) {
   const inside = [
-    'src/renderer/lib/platform/tauri/index.js',
-    'src/renderer/lib/platform/tauri/ipc-engine.js'
+    'src/renderer/lib/platform/index.js',
+    'src/renderer/lib/platform/window.js'
   ]
   for (const relPath of inside) {
     const messages = await lintAs(
-      "import * as x from '../ipc-engine'\nexport { x }\n", relPath)
+      "import * as x from './ipc-engine'\nexport { x }\n", relPath)
     t.deepEqual(
       messages.filter((m) => m.ruleId === 'no-restricted-imports'), [],
-      relPath + ' may import its sibling tree')
+      relPath + ' may import its sibling')
   }
   t.end()
 })

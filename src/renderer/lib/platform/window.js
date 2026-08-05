@@ -1,22 +1,22 @@
 /**
- * Platform shim: reading the current window's state.
+ * Platform shim.
  *
- * This module covers only the *reads* that `@electron/remote`
- * supplies today. Everything that *changes* the window (title,
- * bounds, aspect ratio, full screen, dock badge) already goes to the
- * main process over IPC and therefore lives in `ipc-os.js`.
+ * Reading the current window's state (US-057).
  *
- * Current-window access is the module's own business: it resolves
- * the window per call and never hands the handle out, because a
- * `BrowserWindow` proxy is not serialisable and would put an
- * Electron object back in front of the callers this shim exists to
- * keep clean (FR-12). The two reads below are the whole surface.
+ * Under Electron these are `@electron/remote` calls into the main
+ * process; under Tauri they are host commands, for the same reason
+ * every other window operation is one -- see the block above the
+ * window commands in `src-tauri/src/main.rs`. The window handle stays
+ * inside the host either way, which is the whole point of the module
+ * (FR-12).
  *
- * Implemented in US-024; call sites are migrated in US-027. See
- * docs/platform-shim.md.
+ * `docs/platform-shim.md` is the contract each export is written
+ * against. Until US-072 there was a second, Electron tree beside
+ * this one and a build flag to pick between them (ADR-014); the
+ * cutover deleted both, so this module is the shim.
  */
 
-import { getCurrentWindow } from '@electron/remote'
+import { invoke } from '@tauri-apps/api/core'
 
 /**
  * Whether the current window is visible (not hidden or minimised).
@@ -24,7 +24,7 @@ import { getCurrentWindow } from '@electron/remote'
  * @returns {Promise<boolean>}
  */
 export async function isVisible () {
-  return getCurrentWindow().isVisible()
+  return invoke('window_is_visible')
 }
 
 /**
@@ -33,5 +33,5 @@ export async function isVisible () {
  * @returns {Promise<boolean>}
  */
 export async function isMaximized () {
-  return getCurrentWindow().isMaximized()
+  return invoke('window_is_maximized')
 }

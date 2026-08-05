@@ -44,12 +44,29 @@ require.cache[ipcOsPath] = {
   }
 }
 
+// Since US-072 the fs shim is nine Tauri commands, which need a
+// running host. `test/fs-shim.js` is the filesystem-backed stand-in
+// that lets the real migrations run against the throwaway profile
+// above; `platform-fs.js` holds the real shim to the same contract.
+const fsShimPath = require.resolve(
+  '../../build/renderer/lib/platform/fs'
+)
+const previousFsShim = require.cache[fsShimPath]
+require.cache[fsShimPath] = {
+  id: fsShimPath,
+  filename: fsShimPath,
+  loaded: true,
+  exports: require('../fs-shim')
+}
+
 const migrations = require('../../build/renderer/lib/migrations')
 
-// `require.cache` is process-wide, so the shim stub is withdrawn now
-// that `migrations` has bound it -- `platform-ipc-os.js` later in the
-// same run tests the real module.
+// `require.cache` is process-wide, so both shim stubs are withdrawn
+// now that `migrations` has bound them -- `platform-ipc-os.js` and
+// `platform-fs.js` later in the same run test the real modules.
 delete require.cache[ipcOsPath]
+if (previousFsShim) require.cache[fsShimPath] = previousFsShim
+else delete require.cache[fsShimPath]
 
 const PLAIN_HASH = 'aaaabbbbccccddddeeeeffff0000111122223333'
 const OLD_HASH = '3ba219a8634bf7bae3d848192b2da75ae995589d'

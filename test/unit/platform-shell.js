@@ -1,109 +1,12 @@
 const test = require('tape')
 
-// Same stubbing route as `platform-ipc-os.js`: Babel compiles the
-// named imports to lazy `_electron.shell` / `_electron.ipcRenderer`
-// property reads, so seeding `require.cache` with getters stubs the
-// whole module and lets the stubs be swapped between tests.
-const electronPath = require.resolve('electron')
-
-function makeShellStub () {
-  return {
-    calls: [],
-    openExternal (url) {
-      this.calls.push({ method: 'openExternal', args: [url] })
-      return Promise.resolve()
-    }
-  }
-}
-
-function makeIpcStub () {
-  return {
-    sent: [],
-    send (channel, ...args) {
-      this.sent.push({ channel, args })
-    }
-  }
-}
-
-let shell = makeShellStub()
-let ipc = makeIpcStub()
-require.cache[electronPath] = {
-  id: electronPath,
-  filename: electronPath,
-  loaded: true,
-  exports: {
-    get shell () { return shell },
-    get ipcRenderer () { return ipc }
-  }
-}
-
-const platformShell = require('../../build/renderer/lib/platform/shell')
-
-function reset () {
-  shell = makeShellStub()
-  ipc = makeIpcStub()
-}
-
-test('shell.openExternal hands the URL to the OS', async function (t) {
-  reset()
-  const result = await platformShell.openExternal('https://example.com')
-  t.deepEqual(shell.calls, [
-    { method: 'openExternal', args: ['https://example.com'] }
-  ], 'forwarded to electron shell')
-  t.equal(result, undefined, 'resolves with nothing')
-  t.equal(ipc.sent.length, 0, 'does not go over IPC')
-  t.end()
-})
-
-test('shell.showItemInFolder relays the path to the main process',
-  async function (t) {
-    reset()
-    await platformShell.showItemInFolder('/tmp/a.mkv')
-    t.deepEqual(ipc.sent, [
-      { channel: 'showItemInFolder', args: ['/tmp/a.mkv'] }
-    ], 'sent on the showItemInFolder channel')
-    t.end()
-  })
-
-test('shell.openPath relays the path to the main process',
-  async function (t) {
-    reset()
-    await platformShell.openPath('/tmp/a.mkv')
-    t.deepEqual(ipc.sent, [
-      { channel: 'openPath', args: ['/tmp/a.mkv'] }
-    ], 'sent on the openPath channel')
-    t.end()
-  })
-
-test('shell.moveItemToTrash relays the path to the main process',
-  async function (t) {
-    reset()
-    await platformShell.moveItemToTrash('/tmp/a.mkv')
-    t.deepEqual(ipc.sent, [
-      { channel: 'moveItemToTrash', args: ['/tmp/a.mkv'] }
-    ], 'sent on the moveItemToTrash channel')
-    t.end()
-  })
-
-test('every shell export is async', function (t) {
-  const names = ['openExternal', 'showItemInFolder', 'openPath',
-    'moveItemToTrash']
-  for (const name of names) {
-    reset()
-    const returned = platformShell[name]('/tmp/a.mkv')
-    t.ok(returned instanceof Promise, `${name} returns a promise`)
-  }
-  t.end()
-})
-
-// -- the same contract, against the Tauri tree (US-059) --------------
+// US-059: handing paths and URLs to the OS, behind the shim (FR-8).
 //
-// Under Tauri all four are host commands rather than plugin calls from
-// the webview, for the reason the window and dialog operations are:
-// three of them are already the Electron *main* process's behaviour,
-// and an app command needs no capability, so the renderer stays at
-// `core:default`. The opener plugin and the trash crate are reached
-// from `src-tauri/src/shell.rs`, never from here.
+// All four are host commands rather than plugin calls from the
+// webview: three of them were the Electron main process's behaviour
+// already, and an app command needs no capability, so the renderer
+// stays at `core:default`. The opener plugin and the trash crate are
+// reached from `src-tauri/src/shell.rs`, never from here.
 //
 // So what is asserted here is the command name and the argument object
 // that reaches the host. The stub is seeded at `@tauri-apps/api/core`,
@@ -131,7 +34,7 @@ require.cache[corePath] = {
   exports: coreStub
 }
 
-const tauriShell = require('../../build/renderer/lib/platform/tauri/shell')
+const tauriShell = require('../../build/renderer/lib/platform/shell')
 
 function resetTauri () {
   invocations = []
@@ -164,13 +67,14 @@ for (const [name, command, key, value] of COMMANDS) {
   })
 }
 
-test('the two shell trees answer the same questions', function (t) {
-  const electron = Object.keys(platformShell).filter(k => k !== '__esModule')
-  const tauri = Object.keys(tauriShell).filter(k => k !== '__esModule')
-
-  t.deepEqual(tauri.sort(), electron.sort(), 'the same four operations')
-  t.end()
-})
+test('the shim exports exactly the shell surface',
+  function (t) {
+    const found = Object.keys(tauriShell)
+      .filter(k => k !== '__esModule')
+    t.deepEqual(found.sort(), ['moveItemToTrash', 'openExternal', 'openPath', 'showItemInFolder'],
+      'no export appeared or vanished')
+    t.end()
+  })
 
 test('every tauri shell export is async and rejects on host failure',
   async function (t) {
