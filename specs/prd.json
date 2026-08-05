@@ -1254,8 +1254,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck)"
       ],
       "priority": 74,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "ADR-015 written: casting moves to the Rust host behind lib/platform/cast.js, Chromecast over the rust_cast crate, DLNA and AirPlay reimplemented, no protocol dropped, subtitles served by the host, Chromecast first. ADR-008 amended to point at it. Documentation only, no code changed."
     },
     {
       "id": "US-075",

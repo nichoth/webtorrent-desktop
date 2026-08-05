@@ -6116,3 +6116,64 @@ Files changed: `src/renderer/main.js`, `src/renderer/lib/migrations.js`,
     **Spent as of** -- that says which story moved it and what is still
     live in the record, leaving the body intact as history.
 ---
+
+## 2026-08-04 - US-074 - Record the casting architecture decision
+
+Wrote `docs/adr/ADR-015-casting-without-node.md`, listed it in
+`docs/adr/INDEX.md`, and put a dated **Amended by US-074** banner on
+ADR-008 pointing at it. Documentation only, so no test was written:
+the acceptance criteria are all "this document says X", and a test
+asserting on the text of a document is one this repo's standing
+instructions forbid. No code changed.
+
+What the ADR decides, in short: casting moves to the Rust host behind
+`lib/platform/cast.js`; Chromecast over the `rust_cast` crate, DLNA
+and AirPlay reimplemented; no protocol dropped; subtitles served by
+the host from a one-route `std::net` listener; Chromecast first, then
+DLNA, then AirPlay; an unimplemented protocol reports no devices and
+the existing button rule hides it.
+
+Files changed: `docs/adr/ADR-015-casting-without-node.md` (new),
+`docs/adr/INDEX.md`, `docs/adr/ADR-008-deferred-casualties-exempt-from-the-shim.md`,
+`progress.log`, `specs/prd.json`.
+
+- **Learnings for future iterations:**
+  - **The cheap answer to "where does casting run" is the sidecar,
+    and it is wrong for a recorded reason.** The engine sidecar is a
+    real Node process, so `chromecasts`/`dlnacasts`/`airplayer` would
+    keep working there with no protocol code written at all. Two
+    earlier decisions rule it out: ADR-012 schedules the sidecar for
+    replacement by librqbit, so device control put there is written
+    onto code being deleted (ADR-008's own argument), and ADR-006
+    keeps OS IPC off the `wt-*` engine channel. Expect this
+    temptation to recur for anything else that wants Node.
+  - **Check a candidate crate's build tree, not just its runtime
+    tree.** The `cargo new /tmp/x && cargo add <crate> && cargo
+    metadata` procedure prints both, and `rust_cast` 0.21 is the case
+    that separates them: its runtime tree tops out at rustc 1.85
+    (under the 1.86 Tauri already forces), but its build script runs
+    `protobuf-codegen`, which pulls `which` -> `home` at MSRV 1.88.
+    `cargo tree -i <crate>` says which side a package is on -- the
+    `[build-dependencies]` marker appears in the inverted tree.
+  - **Two rustls crypto providers in one process is a real hazard
+    here.** The tree already compiles `rustls` 0.23.43 with `ring`
+    underneath `ureq` (the updater). `rust_cast` resolves the same
+    `rustls` with `aws-lc-rs`, whose `aws-lc-sys` is a C build.
+    Linking both leaves rustls without an unambiguous process default,
+    so US-076 has to install one explicitly and re-prove the *update
+    check*, not just the cast path -- the failure would appear
+    nowhere near the code that caused it.
+  - **`cargo search` is available and settles "does a crate for this
+    exist".** It is how the AirPlay decision got made honestly: every
+    AirPlay crate on crates.io (`shairplay`, `rairplay`,
+    `openairplay1/2`) is a *receiver*, so there is no sender to adopt
+    and the reimplementation is forced rather than preferred.
+  - **A UI can be kept unchanged across an async port by mirroring
+    state.** `player-page.js` reads `state.devices[type].getDevices()`
+    synchronously and `playback-controller.js` uses `Cast.setRate()`
+    for its boolean return. The shim is all-async (ADR-005), so the
+    bridge is a mirror in `main.js` rebuilt from host events, with the
+    synchronous answers coming from a `capabilities` array on each
+    mirrored device. Same trick should work for any other sync UI read
+    the shim would otherwise break.
+---

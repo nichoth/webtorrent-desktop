@@ -2,6 +2,17 @@
 
 **Date:** 2026-07-27
 
+**Amended by US-074 (2026-08-04).** Both exemptions are being spent.
+`src/renderer/webtorrent.js` left the renderer at US-040 and is now
+the Node sidecar `src/engine/index.js` (ADR-012). `cast.js` is still
+here and still exempt, but the "full reimplementation on the host
+side" this ADR deferred is now specified:
+[ADR-015](ADR-015-casting-without-node.md) chooses the replacement per
+protocol, defines the shim surface, and lands it over US-075 to
+US-078. **US-079 deletes `cast.js` and closes this record** -- at
+which point no renderer file is outside the shim and the two per-file
+overrides described below go with it. The rest stands as written.
+
 ## Context
 
 Two renderer files cannot be migrated behind the platform shim in any

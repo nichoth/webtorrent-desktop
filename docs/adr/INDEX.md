@@ -28,6 +28,7 @@ decisions were taken and what they cost.
 | [ADR-012](ADR-012-engine-runs-as-a-node-sidecar.md) | Run the engine as a Node sidecar the renderer connects to | 2026-07-29 |
 | [ADR-013](ADR-013-poster-generation-without-a-dom.md) | Generate posters in the UI renderer, not in the engine | 2026-07-29 |
 | [ADR-014](ADR-014-dual-host-during-the-tauri-port.md) | Run two hosts side by side, and select the shim at build time | 2026-07-29 |
+| [ADR-015](ADR-015-casting-without-node.md) | Move casting into the host, one protocol at a time | 2026-08-04 |
 
 ## Related documents
 
