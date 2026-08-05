@@ -136,3 +136,19 @@ packaged app needs no second runtime. In that mode
 neither `'renderer'` nor `'browser'` as a plain Node process. A check
 for "is Electron present" there breaks the sidecar at load, and only
 outside `NODE_ENV=test` (portable config skips the branch).
+
+## `announce.js`
+
+`announceNow(torrent, dht)` is the discovery half of "destroy and
+re-add": a tracker `update()` plus a DHT `lookup()`, with no re-verify
+of pieces on disk and no dropped peer connections. It exists because
+the natural cadence is slow -- 30 minutes per tracker, 15 minutes plus
+jitter for the DHT -- so a torrent whose last peer drops can sit at
+zero peers for half an hour.
+
+`wt-force-announce` in `index.js` is the manually triggered form, and
+it is **diagnostic instrumentation, not a feature**: it logs peer
+counts before the call and again at 5, 15 and 30 seconds after, all
+under the `DIAG announce` prefix. It answers one question -- does
+re-announcing on its own revive a stalled torrent -- and it comes out
+once that question has an answer.

@@ -30,6 +30,7 @@ import networkAddress from 'network-address'
 import WebTorrent from 'webtorrent'
 
 import config from '../config'
+import { announceNow } from './announce'
 import { createWebSocketBus } from './bus-websocket'
 
 console.time('init')
@@ -106,6 +107,8 @@ function init () {
     stopServer(infoHash))
   bus.on('wt-select-files', (infoHash, selections) =>
     selectFiles(infoHash, selections))
+  bus.on('wt-force-announce', (infoHash) =>
+    forceAnnounce(infoHash))
 
   // No `window` to hang an `error` listener on, so the process reports
   // for itself. Both handlers stay installed: the sidecar's job is to
@@ -191,6 +194,44 @@ function stopTorrenting (infoHash) {
   console.log('--- STOP TORRENTING: ', infoHash)
   const torrent = client.get(infoHash)
   if (torrent) torrent.destroy()
+}
+
+// How long after a forced announce to report the peer count again. The
+// answer to "did re-announcing help" is a number a few seconds later,
+// not a return value, so the readout is scheduled.
+const ANNOUNCE_DIAG_DELAYS_MS = [5000, 15000, 30000]
+
+// DIAGNOSTIC: a manually triggered re-announce, so we can find out
+// whether peer discovery on its own revives a torrent that has stalled
+// at zero peers -- the question the automatic sweep depends on. The
+// `DIAG announce` prefix is what the operator greps for.
+function forceAnnounce (infoHash) {
+  const torrent = client.get(infoHash)
+  if (!torrent) {
+    console.log('DIAG announce: no torrent %s', infoHash)
+    return
+  }
+
+  console.log(
+    'DIAG announce %s: before peers=%d down=%dB/s progress=%s',
+    infoHash, torrent.numPeers, Math.round(torrent.downloadSpeed),
+    torrent.progress.toFixed(4))
+
+  const fired = announceNow(torrent, client.dht)
+  console.log('DIAG announce %s: sent tracker=%s dht=%s',
+    infoHash, fired.tracker, fired.dht)
+
+  for (const delay of ANNOUNCE_DIAG_DELAYS_MS) {
+    const timer = setTimeout(() => {
+      const later = client.get(infoHash)
+      if (!later) return
+      console.log('DIAG announce %s: +%ds peers=%d down=%dB/s',
+        infoHash, delay / 1000, later.numPeers,
+        Math.round(later.downloadSpeed))
+    }, delay)
+    // A pending readout must not hold the process open on shutdown.
+    if (timer.unref) timer.unref()
+  }
 }
 
 // Create a new torrent, start seeding
