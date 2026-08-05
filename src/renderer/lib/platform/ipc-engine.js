@@ -336,6 +336,22 @@ export async function stopServer (infoHash) {
 }
 
 /**
+ * Ask the engine to re-announce one torrent to its trackers and the
+ * DHT, without tearing the torrent down. Fire-and-forget: the engine
+ * logs the result rather than replying, because the answer is a peer
+ * count some seconds later.
+ *
+ * DIAGNOSTIC. Paired with the `DIAG announce` logging in
+ * `src/engine/index.js`, and comes out with it.
+ *
+ * @param {string} infoHash
+ * @returns {Promise<void>}
+ */
+export async function forceAnnounce (infoHash) {
+  send('wt-force-announce', [infoHash])
+}
+
+/**
  * Change which files in a torrent are downloaded.
  *
  * @param {string} infoHash
