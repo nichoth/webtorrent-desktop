@@ -64,7 +64,7 @@ because they were spelled `ipcRenderer.send`, not `electron.shell`.
 | `dialog.js` | Native file dialogs | US-024 |
 | `window.js` | Reading current-window state | US-024 |
 | `menu.js` | Data-driven context menus | US-025 |
-| `cast.js` | Casting to Chromecast, DLNA and AirPlay | US-075 |
+| `cast.js` | Casting to Chromecast, DLNA and AirPlay | US-075 (call sites US-079) |
 
 Line references below are against the tree at US-018 and will drift
 as call sites move. They are a starting point, not a contract.
@@ -593,17 +593,17 @@ not listeners.
 ## `cast.js`
 
 New in US-075, and unlike every other module here it replaces nothing
-in `src/main/`: casting ran in the *renderer* until now
-(`src/renderer/lib/cast.js`, three npm packages and an `http` server),
-and ADR-015 moves all of it into the host. The module is the interface
-that work lands behind, so US-076 (Chromecast), US-077 (DLNA) and
-US-078 (AirPlay) each fill in a protocol without the renderer changing
-again.
+in `src/main/`: casting ran in the *renderer*
+(`src/renderer/lib/cast.js`, three npm packages and an `http` server)
+until ADR-015 moved all of it into the host. The module is the
+interface that work lands behind, so US-076 (Chromecast), US-077
+(DLNA) and US-078 (AirPlay) each fill in a protocol without the
+renderer changing again.
 
 The host holds a **single session**, because the UI already forbids
-two ("Never cast to two devices at the same time",
-`cast.js:toggleMenu`). That is why nothing but `connect` names a
-device.
+two ("Never cast to two devices at the same time", now
+`cast-controller.js:toggleMenu`). That is why nothing but `connect`
+names a device.
 
 ### Commands
 
@@ -638,9 +638,9 @@ is what keeps `playback-controller.js`'s synchronous
 answer comes from the mirrored device rather than from the promise.
 
 `onDevices` carries the **whole list** rather than a delta, so a
-receiver that goes away can finally disappear -- the bug
-`lib/cast.js` documents and does not fix. `onStatus` replaces that
-module's one-second `setInterval`: the host polls and pushes, so a
+receiver that goes away can finally disappear -- the bug `lib/cast.js`
+documented and did not fix. `onStatus` replaces that module's
+one-second `setInterval`: the host polls and pushes, so a
 poll that hangs cannot stall the UI thread. `onError` exists because
 discovery finding nothing and discovery *failing* are the same empty
 list, and only the second should raise anything.
@@ -665,9 +665,34 @@ existing rule -- no devices and not casting means no button -- then
 hides it with no UI change and no dead control. A command reached
 anyway means the UI got somewhere it should not have, so it says so.
 
-Nothing calls this module yet: `src/renderer/lib/cast.js` is still
-what the UI uses, and US-079 deletes it, the three npm packages and
-the last renderer `require()` and `http` import together.
+### Who calls it (US-079)
+
+`src/renderer/lib/cast.js` is gone, and with it the three npm
+packages, the last renderer `require()` and the last renderer `http`
+import. Two callers replace it, and no third one is intended:
+
+- **`controllers/cast-controller.js`** owns the session. It is a
+  controller like any other -- `toggleCastMenu`, `selectCastDevice`
+  and `stopCasting` are its dispatcher actions -- and it holds the
+  three subscriptions, `startDiscovery`, `connect` and the writes to
+  `state.devices`, `state.playing.location` and `state.errors`.
+- **`controllers/playback-controller.js`** calls the five commands
+  that only forward a value: `play`, `pause`, `seek`, `setVolume`,
+  `setRate`. Ending a session goes through the cast controller
+  (`dispatch('stopCasting')`) instead, because dropping the mirrored
+  device is state playback does not own.
+
+Between them sits `lib/cast-mirror.js`, which is plain functions and
+talks to nothing: it folds the host's flat device list back into the
+`state.devices[protocol]` shape `player-page.js` reads, folds a status
+into `state.playing`, and builds the media description `connect()`
+takes. That is where `capabilities` becomes `setRate`'s synchronous
+answer.
+
+Discovery itself is still deferred to `delayedInit()`, as
+`lazyLoadCast()` was -- not for load time any more, which is now the
+host's, but because it is network traffic nobody has asked for during
+startup.
 
 ## `ipc-engine.js`
 
@@ -1076,19 +1101,15 @@ lint rule.
 
 ## Files exempt from the shim
 
-Per FR-4 and FR-11, exactly one renderer file keeps direct Electron and
-Node imports: `src/renderer/lib/cast.js`, which runs an `http` server in
-the renderer and needs a full reimplementation in Phase 5.
+**None, since US-079.** Every renderer file is behind the shim, which
+is what ADR-008 set out to reach.
 
-US-075 added the shim module that reimplementation lands behind
-(`platform/cast.js`, above), but did not touch the exempt file: the UI
-still calls `lib/cast.js`, and it is US-079 that deletes it and empties
-this list.
-
-The other two exemptions are gone. US-002 deleted `lib/telemetry.js`,
-and US-045 deleted `src/renderer/webtorrent.js` -- the engine
-counterparty is a separate process now, so it is not a renderer file to
-exempt.
+All three exemptions are spent. US-002 deleted `lib/telemetry.js`.
+US-045 deleted `src/renderer/webtorrent.js` -- the engine counterparty
+is a separate process now, so it is not a renderer file to exempt.
+US-079 deleted `src/renderer/lib/cast.js`, whose in-renderer `http`
+server was the reason the list existed at all; casting is
+`platform/cast.js` and a host implementation now (ADR-015).
 
 ## Enforcing the boundary
 
@@ -1119,9 +1140,7 @@ Overrides, in order:
    exemption would let that quietly regress. The Node half stays off: it
    is still a shim module and the next thing it needs may legitimately
    be a builtin.
-3. `src/renderer/lib/cast.js` -- the rule is **off**. Deferred casualty
-   (US-013), and now the only one.
-4. `src/engine/**/*.js` -- the other side of the same seam (US-046). The
+3. `src/engine/**/*.js` -- the other side of the same seam (US-046). The
    sidecar is a plain Node process, so it does not match the renderer
    rules and its Node builtins are unrestricted. It is policed for the
    mirror-image mistake instead: `electron`, `@electron/remote` and
@@ -1132,8 +1151,9 @@ Overrides, in order:
    `require('electron')` has no `app`, and a packaged sidecar has no
    `node_modules/electron` at all.
 
-`lib/cast.js` is the only override that switches the rule off for a
-single file, and `test/unit/lint-boundary.js` asserts that stays true.
+No override switches the rule off for a single file any more -- the
+last one went with `lib/cast.js` at US-079 -- and
+`test/unit/lint-boundary.js` asserts that stays true.
 
 US-056 adds `@tauri-apps/api` and its subpaths to the same `patterns`
 list: it is the second host's `electron`, so only the shim may name it,

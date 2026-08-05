@@ -41,14 +41,15 @@
  *   `Writable`, `Duplex` and `Transform` implementations. It imports
  *   `stream` solely to inherit from it, so subtitle conversion works
  *   on top of this with nothing further.
- * - `stream-buffers` and `sax` name `stream.Readable` and
- *   `stream.Stream`. Both are in the casting stack (`airplayer` via
+ * - `stream-buffers` and `sax` named `stream.Readable` and
+ *   `stream.Stream`. Both were in the casting stack (`airplayer` via
  *   `bplist-creator`, and `chromecasts`/`dlnacasts` via `xml2js` and
- *   `elementtree`), which is `lib/cast.js` -- the PRD's deferred
- *   casualty, exempt from the shim under ADR-008 and rewritten
- *   host-side in US-076 through US-079. They need to not throw while
- *   the bundle loads; they do not need to work, and they cannot, since
- *   the sockets underneath them are empty objects too.
+ *   `elementtree`), and US-079 removed all three packages with
+ *   `lib/cast.js` -- so as of that story nothing in the tree reads
+ *   the subclasses below at all. They are kept because they are the
+ *   shape `require('stream')` has in Node, and because an absent one
+ *   is `undefined` at the reader rather than an error here; do not
+ *   read their presence as evidence of a live caller.
  *
  * A full `Readable`/`Writable` implementation would be several hundred
  * lines of backpressure and state machine for no live caller, so
@@ -147,8 +148,9 @@ class Stream extends EventEmitter {
   }
 }
 
-// Named so a stack trace from the casting stack says which one it was
-// rather than reporting `Stream` three times.
+// Named so a stack trace says which one it was rather than reporting
+// `Stream` five times. No dependency in the tree reads them since
+// US-079 -- see the note at the top of this file.
 class Readable extends Stream {}
 class Writable extends Stream {}
 class Duplex extends Stream {}

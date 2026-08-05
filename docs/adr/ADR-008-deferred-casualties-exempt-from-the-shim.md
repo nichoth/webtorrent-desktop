@@ -2,16 +2,27 @@
 
 **Date:** 2026-07-27
 
-**Amended by US-074 (2026-08-04).** Both exemptions are being spent.
-`src/renderer/webtorrent.js` left the renderer at US-040 and is now
-the Node sidecar `src/engine/index.js` (ADR-012). `cast.js` is still
-here and still exempt, but the "full reimplementation on the host
-side" this ADR deferred is now specified:
-[ADR-015](ADR-015-casting-without-node.md) chooses the replacement per
-protocol, defines the shim surface, and lands it over US-075 to
-US-078. **US-079 deletes `cast.js` and closes this record** -- at
-which point no renderer file is outside the shim and the two per-file
-overrides described below go with it. The rest stands as written.
+**Closed by US-079 (2026-08-04).** Both exemptions are spent and this
+record is history.
+
+`src/renderer/webtorrent.js` left the renderer at US-040 and is the
+Node sidecar `src/engine/index.js` (ADR-012); US-045 deleted the file.
+`cast.js` went at US-079: casting is a host implementation behind
+`src/renderer/lib/platform/cast.js` now, per
+[ADR-015](ADR-015-casting-without-node.md), which chose the
+replacement per protocol and defined the shim surface over US-075 to
+US-078. What is left in the renderer is `lib/cast-mirror.js`, which
+folds the host's device list back into the shape the UI reads, and
+`controllers/cast-controller.js`, which owns the session -- neither
+imports a host module.
+
+**No deferred casualty remains.** No renderer file is outside the
+shim, and the per-file overrides described below are gone from
+`eslint-boundary.config.js` and from `test/unit/platform-boundary.js`.
+`test/unit/lint-boundary.js` asserts the exemption list is empty, so
+adding one is a deliberate act that fails a test first -- which is the
+decision below, still standing, with the count now at zero. The rest
+of the record stands as written.
 
 ## Context
 

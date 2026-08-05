@@ -148,7 +148,9 @@ const RESTRICTED = ['error', {
     banned('crypto', NODE),
     banned('node:crypto', NODE),
 
-    // `http` is only used by `lib/cast.js`, exempted below.
+    // `http` had one caller, `lib/cast.js`, which served subtitles to
+    // cast devices from inside the renderer. US-079 moved that server
+    // to the host (ADR-015), so the ban is now absolute.
     banned('http', NODE),
     banned('node:http', NODE)
   ]
@@ -205,13 +207,6 @@ module.exports = {
       // may legitimately be a builtin.
       files: [SHIM + 'ipc-engine.js'],
       rules: { 'no-restricted-imports': HOST_ONLY }
-    },
-    {
-      // Deferred casualty: `lib/cast.js` runs an http server inside
-      // the renderer for Chromecast/DLNA/AirPlay. It is exempt from
-      // the shim by the same decision that exempted it in US-013.
-      files: ['src/renderer/lib/cast.js'],
-      rules: { 'no-restricted-imports': 'off' }
     },
     {
       // The sidecar (US-046). Exempt from the renderer rules by not

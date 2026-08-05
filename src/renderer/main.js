@@ -14,7 +14,6 @@ import ReactDOM from 'react-dom'
 // one of the two surfaces this call writes to, so it cannot be reached
 // through it. See the "Keep in sync" comment in `src/config.js`.
 import config, { useHostPaths } from '../config'
-import * as Cast from './lib/cast'
 import State from './lib/state'
 import * as sound from './lib/sound'
 import * as TorrentPlayer from './lib/torrent-player'
@@ -34,6 +33,7 @@ import TorrentListController from './controllers/torrent-list-controller'
 // synchronous controllers map -- so they are static imports now. The thunks
 // still defer *construction*; only module loading moved to startup.
 import AudioTracksController from './controllers/audio-tracks-controller'
+import CastController from './controllers/cast-controller'
 import FolderWatcherController from './controllers/folder-watcher-controller'
 import MediaController from './controllers/media-controller'
 import PlaybackController from './controllers/playback-controller'
@@ -77,12 +77,6 @@ setDispatch(dispatch)
 // From dispatch(...), events are sent to one of the controllers
 let controllers = null
 
-// Cast is the slowest-loading dependency, so it used to be require()d inside
-// lazyLoadCast() below. ESM has no synchronous conditional import, so the
-// module is loaded at startup now; only Cast.init() -- the local network scan
-// -- is still deferred to delayedInit().
-let castInitialized = false
-
 // All state lives in state.js. `state.saved` is read from and written to a file.
 // All other state is ephemeral. First we load state.saved then initialize the app.
 let state
@@ -110,6 +104,7 @@ function onState (err, _state) {
     prefs: createGetter(() => new PrefsController(state, config)),
     subtitles: createGetter(() => new SubtitlesController(state)),
     audioTracks: createGetter(() => new AudioTracksController(state)),
+    cast: createGetter(() => new CastController(state, update)),
     torrent: createGetter(() => new TorrentController(state)),
     torrentList: createGetter(() => new TorrentListController(state)),
     update: createGetter(() => new UpdateController(state)),
@@ -197,16 +192,10 @@ function delayedInit () {
   document.addEventListener('webkitvisibilitychange', onVisibilityChange)
   onVisibilityChange()
 
-  lazyLoadCast()
-}
-
-// Lazily loads Chromecast and Airplay support
-function lazyLoadCast () {
-  if (!castInitialized) {
-    castInitialized = true
-    Cast.init(state, update) // Search the local network for Chromecast and Airplays
-  }
-  return Cast
+  // Search the local network for Chromecast, DLNA and AirPlay receivers.
+  // The scan runs on the host since US-079, so this costs the renderer
+  // nothing -- but it is still traffic that can wait for startup.
+  controllers.cast().start()
 }
 
 // React loop:
@@ -312,9 +301,9 @@ const dispatchHandlers = {
   externalPlayerNotFound: () => controllers.media().externalPlayerNotFound(),
 
   // Remote casting: Chromecast, Airplay, etc
-  toggleCastMenu: (deviceType) => lazyLoadCast().toggleMenu(deviceType),
-  selectCastDevice: (index) => lazyLoadCast().selectDevice(index),
-  stopCasting: () => lazyLoadCast().stop(),
+  toggleCastMenu: (deviceType) => controllers.cast().toggleMenu(deviceType),
+  selectCastDevice: (index) => controllers.cast().selectDevice(index),
+  stopCasting: () => controllers.cast().stop(),
 
   // Preferences screen
   preferences: () => controllers.prefs().show(),

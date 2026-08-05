@@ -24,8 +24,12 @@
  * answer rather than a broken one.
  *
  * `docs/platform-shim.md` is the contract each export is written
- * against. `src/renderer/lib/cast.js` is still the module the UI
- * calls; US-079 deletes it and the three npm packages with it.
+ * against. US-079 deleted `src/renderer/lib/cast.js` and the three
+ * npm packages under it, so this is the only route to a receiver:
+ * `controllers/cast-controller.js` owns the session and
+ * `controllers/playback-controller.js` sends the five commands that
+ * only forward a value, with `lib/cast-mirror.js` folding the host's
+ * device list back into the shape `player-page.js` reads.
  */
 
 import { invoke } from '@tauri-apps/api/core'

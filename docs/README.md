@@ -238,13 +238,15 @@ most of the rules in this document exist to protect them:
   renderer in US-043 for exactly that reason. The boundary lint rule
   polices `src/engine/` for those mistakes the way it polices
   `src/renderer/` for direct host imports.
-- **One module is a deferred casualty**, exempt from the shim:
-  `src/renderer/lib/cast.js`, which runs an `http` server in the
-  renderer and is reimplemented outright in Phase 5. It is exempt
-  because it is being thrown away, not because the rules are optional.
-  The other two exemptions are gone: US-002 deleted `lib/telemetry.js`,
-  and US-045 deleted `src/renderer/webtorrent.js` when the engine became
-  a process of its own.
+- **No module is a deferred casualty any more.** All three exemptions
+  are spent: US-002 deleted `lib/telemetry.js`, US-045 deleted
+  `src/renderer/webtorrent.js` when the engine became a process of its
+  own, and US-079 deleted `src/renderer/lib/cast.js` -- the one that
+  ran an `http` server in the renderer -- when casting was
+  reimplemented on the host behind `lib/platform/cast.js` (ADR-015).
+  They were exempt because they were being thrown away, not because
+  the rules are optional, which is why the exemption list is now empty
+  and `test/unit/lint-boundary.js` asserts it stays that way.
 
 Some Electron capabilities did not survive the move. The main window
 ran with `nodeIntegration: true`, `contextIsolation: false`, and

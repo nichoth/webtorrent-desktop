@@ -2,14 +2,17 @@ const test = require('tape')
 
 // US-075: the cast surface, behind the shim (ADR-015).
 //
-// `src/renderer/lib/cast.js` still exists and still drives the three
-// protocols through three npm packages; this module is the interface
-// the host implementations land behind, and the host it talks to
-// today answers an empty device list and a not-implemented error for
-// every device command. What is asserted here is the shim's side of
-// that contract -- the command names, the argument keys the host
-// reads, and the unsubscribe function every listener export resolves
-// to -- against a fake invoke.
+// This module is the interface the host implementations land behind,
+// and the host it talks to today answers an empty device list and a
+// not-implemented error for every device command. What is asserted
+// here is the shim's side of that contract -- the command names, the
+// argument keys the host reads, and the unsubscribe function every
+// listener export resolves to -- against a fake invoke.
+//
+// US-079 deleted `src/renderer/lib/cast.js`, which drove the three
+// protocols in the renderer through three npm packages, so this is now
+// the only route to a receiver. Its callers are covered by
+// `test/unit/cast-call-sites.js` and `test/unit/cast-mirror.js`.
 //
 // Same `require.cache` stub route as the other shim tests; see
 // `test/AGENTS.md`. The stub's exports object is bound once, at the

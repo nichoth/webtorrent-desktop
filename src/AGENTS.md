@@ -166,8 +166,12 @@ measurement, not a preference:
   deliberate exception, so it needs a comment saying what it cost to
   load and confirming a static import was actually measured.
 
-`lib/cast.js:47-49` is the only such exception today: the casting stack
-blocks the renderer for ~3.8 seconds.
+**There is no such exception today.** `lib/cast.js:47-49` was the only
+one -- the casting stack blocked the renderer for ~3.8 seconds -- and
+US-079 deleted the file with the three packages (ADR-015), which took
+the last `require()` out of `src/renderer/` altogether. A new one is
+therefore also a new *kind* of thing, and
+`test/unit/platform-boundary.js` will not let it reach a host module.
 
 Measure with `git stash && npm start` for the before, and
 `performance.now()` either side of the `require` in

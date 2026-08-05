@@ -115,7 +115,12 @@ It is the one module here that replaces nothing in `src/main/`:
 casting ran in the renderer, and ADR-015 moves it to the host. The
 shim is complete -- fourteen exports, eleven commands and three events
 -- and the host behind it owns no protocol at all, which makes it the
-pattern to copy for any other "define the seam first" story:
+pattern to copy for any other "define the seam first" story.
+
+Since US-079 it has callers: `controllers/cast-controller.js` (the
+session) and `controllers/playback-controller.js` (the five commands
+that forward a value), with `lib/cast-mirror.js` between them and the
+UI as plain functions. `src/renderer/lib/cast.js` is gone.
 
 - **It is not in the unimplemented register**, because the *shim* is
   implemented. The not-implemented answer comes from the host
@@ -229,8 +234,10 @@ engine seam be reimplemented without touching `ipc-os.js`.
   `npm run lint:boundary` inside `npm run lint`) exempts this
   directory. It is the only place a direct `electron`,
   `@electron/remote`, `fs`, `os`, `crypto` or `http` import is
-  allowed, alongside the one remaining deferred casualty
-  `lib/cast.js`. The exemption is a directory glob, so a new module
+  allowed -- the only one, since US-079 deleted `lib/cast.js` and with
+  it the last per-file exemption (ADR-008 is closed and
+  `test/unit/lint-boundary.js` asserts the list stays empty). The
+  exemption is a directory glob, so a new module
   here needs no config change -- but adding a **new** host module to
   the shim means adding its specifier to the ban list, or the next
   file to reach for it directly will pass lint. Since US-046 that same

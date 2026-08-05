@@ -151,7 +151,14 @@ stub(path.join(BUILT, 'lib', 'platform', 'ipc-os'), ipcOsStub)
 // and a real built shim module loaded here would bind *this* file's
 // `electron` stub for the whole run, breaking `platform-clipboard.js`
 // and friends further down the glob (test/AGENTS.md).
-for (const name of ['clipboard', 'dialog', 'fs', 'menu', 'shell']) {
+//
+// `cast` is on this list for the mirror-image reason: it is the one
+// shim module `playback-controller` imports that has no Electron under
+// it. Letting it load would bind the *real* `@tauri-apps/api` into
+// `require.cache` here, and `platform-cast.js` -- which runs later in
+// the glob and stubs that package -- would then be handed this file's
+// already-bound copy and fail on `window is not defined` (US-079).
+for (const name of ['cast', 'clipboard', 'dialog', 'fs', 'menu', 'shell']) {
   stub(path.join(BUILT, 'lib', 'platform', name), new Proxy(
     { __esModule: true },
     {

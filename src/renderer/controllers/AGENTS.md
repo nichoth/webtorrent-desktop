@@ -24,6 +24,27 @@ Consequences when editing a controller:
   `require`, so if that ever matters the fix is a bundler-level split,
   not an inner `require`.
 
+**A controller under unit test is compiled by the test itself.**
+`build:node` ignores `controllers/`, so there is no Babel output for
+`test/unit/*.js` to require (ADR-010); the three call-site files
+(`os-ipc-call-sites.js`, `engine-ipc-call-sites.js`,
+`cast-call-sites.js`) run Babel over the source and emit into
+`build/renderer/controllers/`, where the `../lib/...` imports resolve
+against the real built tree. They share that directory and
+`require.cache` is keyed by path, so **emit under a per-file
+suffix** (`.cast-test.js`) or one file's stubs become another's.
+
+Split the work so as little as possible needs that machinery: the
+controller keeps the wiring -- the shim calls, the state writes, the
+`update()` -- and anything with a decision in it goes in `lib/`, which
+*is* built and needs no compile step to test. `cast-controller.js` and
+`lib/cast-mirror.js` are the worked example: the device fold, the
+status fold and the media description are plain functions over plain
+data in `lib/` (`test/unit/cast-mirror.js`), and what is left in the
+controller is checked against a stubbed shim
+(`test/unit/cast-call-sites.js`). Neither needs a receiver on the
+network.
+
 Every file in this directory is ESM (`import` / `export default`) as of
 US-010. Keep it that way -- `module.exports` or a top-level `require(`
 here breaks the Vite renderer bundle.

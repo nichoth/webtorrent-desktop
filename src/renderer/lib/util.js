@@ -18,13 +18,11 @@
  *
  * **Only `inherits` and `inspect` are implemented.** That is not an
  * oversight, it is the measured surface: everything else the bundle
- * asks `util` for is *read* at load and *called* only from the casting
- * stack (`lib/cast.js`), which cannot work in a webview regardless --
- * the sockets under it are empty objects too. It is exempt from the
- * shim under ADR-008 and is being rewritten host-side in US-076
- * through US-079. Reading an absent key yields `undefined` exactly as
- * it did before this file existed, so nothing that worked stops
- * working; what changes is that the one live caller now works.
+ * asked `util` for was *read* at load and *called* only from the
+ * casting stack, which US-079 removed from the renderer altogether
+ * (ADR-015). Reading an absent key yields `undefined` exactly as it
+ * did before this file existed, so nothing that worked stops working;
+ * what changes is that the one live caller now works.
  *
  * Adding to this file is therefore a deliberate act: it means a real
  * caller was found. Say which one in the comment, the way these two

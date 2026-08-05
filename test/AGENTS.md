@@ -196,9 +196,10 @@ repoint it at `build/`.
 covered by `test/unit/lint-boundary.js`) bans the import
 **specifiers** -- `electron`, `@electron/remote`, `fs`, `os`,
 `crypto`, `http` -- under `src/renderer/`, with
-`src/renderer/lib/platform/` exempt by directory glob and one per-file
-override for the deferred casualty `lib/cast.js`. (US-046 dropped the
-`webtorrent.js` override with the file, and added two per-file rules
+`src/renderer/lib/platform/` exempt by directory glob and no per-file
+exemption at all. (US-046 dropped the `webtorrent.js` override with
+the file and US-079 dropped `lib/cast.js`'s the same way, closing
+ADR-008; US-046 also added two per-file rules
 that *tighten* rather than exempt: `lib/platform/ipc-engine.js` is
 banned from Electron again, and `src/engine/**` -- the sidecar -- is
 banned from Electron and from every DOM global while keeping Node

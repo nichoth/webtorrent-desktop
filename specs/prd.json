@@ -1331,8 +1331,8 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 79,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "AC-5 (\"Casting to one real device still works end to end\") is NOT verified and could not be: it needs a real receiver on the network and US-076/077/078, which implement the three protocols in the host and are all manual and excluded from this loop. The host answers every session command with its US-075 not-implemented stub today. Carried to US-086. Everything else is done: lib/cast.js deleted (526 lines), its logic split into lib/cast-mirror.js (plain folds, testable) and controllers/cast-controller.js (the session), with playback-controller.js sending the five forward-a-value commands and dispatching stopCasting rather than calling the shim. chromecasts/dlnacasts/airplayer removed; depcheck clean. The cast exemption is gone from eslint-boundary.config.js and test/unit/platform-boundary.js, and lint-boundary.js now asserts the exemption list is EMPTY, closing ADR-008. New tests: cast-mirror.js and cast-call-sites.js, the latter verified against five deliberate mutations. Gotcha found: playback-controller gaining a platform/cast import made engine-ipc-call-sites.js load the real @tauri-apps/api, which broke platform-cast.js's require.cache stub four files later in the glob -- cast is now in that file's inert-stub list."
     },
     {
       "id": "US-080",

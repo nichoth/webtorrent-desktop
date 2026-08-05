@@ -147,11 +147,15 @@ const applicationConfigStub = fileURLToPath(
 // - `fs`, `os`: the `application-config` stack under `src/config.js`.
 //   Its module body never runs now, because `getConfigPath()` stops
 //   before constructing it.
-// - `http`, `https`, `net`, `tls`, `dgram`, `url`, `querystring`,
-//   `timers`: the casting stack under `lib/cast.js`, whose three
-//   `require()` calls are inside `init()` and so never evaluate at
-//   load. Casting is the PRD's deferred casualty; US-076 through
-//   US-079 move it to the host, and it stays broken until they do.
+// - `http`, `https`, `url`, `querystring`: `simple-get`, reached from
+//   `parse-torrent`. Its module body only reads keys off them, and
+//   the renderer never asks it to fetch anything -- the engine
+//   sidecar does the fetching (ADR-012).
+//
+// `net`, `tls`, `dgram` and `timers` were on this list too, for the
+// casting stack under `lib/cast.js`. US-079 moved casting to the host
+// (ADR-015) and deleted the file and its three npm packages, so those
+// four are not named by the bundle at all any more.
 //
 // `test/unit/renderer-boots.js` runs the emitted bundle in a
 // webview-shaped sandbox with no `require` and no `process`, which is

@@ -211,10 +211,28 @@ it tight.
 - **Test scripts.** Since US-034 `npm run lint` is
   `standard && npm run lint:boundary`, and `npm test` is
   `npm run lint && depcheck && npm run test-unit`. Since US-019
-  `npm run test-unit` = `npm run build:main && tape test/unit/*.js`:
-  unit tests are CommonJS and require the Babel output under `build/`,
-  never the ESM sources under `src/`. New files in `test/unit/` are
-  globbed, no registration needed. Details in `test/AGENTS.md`.
+  `npm run test-unit` = `npm run build && tape test/unit/*.js` (the
+  script was `build:main` when US-019 wrote this note; it is
+  `build:node` + `build:renderer` now): unit tests are CommonJS and
+  require the Babel output under `build/`, never the ESM sources under
+  `src/`. New files in `test/unit/` are globbed, no registration
+  needed. Details in `test/AGENTS.md`.
+- **`tape test/unit/*.js` is ONE process, so adding an import to a
+  renderer module can break a test file that does not mention it
+  (US-079).** The shim tests stub `@tauri-apps/api` through
+  `require.cache` and then require the module under test -- which only
+  works if nothing earlier in the *alphabetical* glob has already
+  required it for real. `playback-controller.js` gaining an
+  `import * as cast from '../lib/platform/cast'` did exactly that:
+  `engine-ipc-call-sites.js` compiles that controller, so the real
+  `platform/cast.js` bound the real `invoke`, and `platform-cast.js`
+  -- four files later -- failed twelve assertions on `window is not
+  defined` while passing in isolation. **After adding a shim import to
+  any controller, run the whole `test-unit` glob, not just the file
+  you wrote**, and add the module to the inert-stub list in every
+  `*-call-sites.js` file that compiles that controller. A failure in a
+  file you did not touch, that passes under `npx tape <file>`, is
+  always this.
 - **`standard` cannot take custom rules.** Its `standard` key in
   `package.json` accepts only `ignore`, `globals`, `env`, `parser`,
   `plugins` and `settings` -- there is no `rules` escape hatch. Any
@@ -6250,4 +6268,114 @@ Files changed: `src/renderer/lib/platform/cast.js` (new),
     a comment naming the story that emits it -- the right call for
     `STATUS_EVENT` and `ERROR_EVENT`, which are contract with the
     renderer today and only unemitted.
+---
+
+## 2026-08-05 - US-079
+
+Retired `src/renderer/lib/cast.js`. The 526-line module that drove
+Chromecast, DLNA and AirPlay from inside the renderer -- through
+`chromecasts`, `dlnacasts` and `airplayer`, plus an `http` server it
+ran itself to serve subtitles -- is gone, and with it the last
+deferred casualty of ADR-008. Casting is `lib/platform/cast.js` and a
+host implementation now (ADR-015).
+
+What replaced it, in three pieces rather than one:
+
+- `lib/cast-mirror.js` -- plain functions over plain data, talking to
+  nothing. Folds the host's flat device list back into the
+  `state.devices[protocol]` shape `player-page.js` already reads
+  (`{ device, getDevices() }`), folds a pushed status into
+  `state.playing`, decodes the selected subtitle track out of its
+  `data:` URL into cue text, and builds the media description
+  `connect()` takes. This is where the UI keeps its old shape: no page
+  or component changed.
+- `controllers/cast-controller.js` -- the session. Holds the three
+  subscriptions, `startDiscovery`, `connect`, and the writes to
+  `state.devices`, `state.playing.location` and `state.errors`. The
+  three dispatcher actions (`toggleCastMenu`, `selectCastDevice`,
+  `stopCasting`) point here instead of at `lazyLoadCast()`.
+- `controllers/playback-controller.js` -- the five commands that only
+  forward a value (`play`, `pause`, `seek`, `setVolume`, `setRate`).
+  `closePlayer()` now dispatches `stopCasting` rather than calling the
+  shim, because ending a session also drops the mirrored device, which
+  is state playback does not own.
+
+Two behaviours moved rather than disappeared. `Cast.setRate()` used to
+return a boolean synchronously; the shim call is a promise, so the
+answer comes off the connected device's `capabilities` array
+(`canSetRate`). And `cast.js` only asked DLNA to resume, only past ten
+seconds; the host takes one `startTime` for all three protocols, so
+the ten-second rule lives in `mediaFor()`.
+
+Tests: `test/unit/cast-mirror.js` (the folds) and
+`test/unit/cast-call-sites.js` (the wiring: subscribe-then-discover
+ordering, the menu's two refusals, connect and its failure path, stop,
+and each of the five playback commands sending only while a session is
+up). Both run against a stubbed shim -- no receiver on the network.
+Checked against five deliberate mutations of the two controllers; all
+five were caught. `test/unit/platform-boundary.js` gained the two
+negative checks the story is really about: no renderer file names a
+casting package, and `lib/cast.js` does not come back.
+
+Files changed: deleted `src/renderer/lib/cast.js`; new
+`src/renderer/lib/cast-mirror.js`,
+`src/renderer/controllers/cast-controller.js`,
+`test/unit/cast-mirror.js`, `test/unit/cast-call-sites.js`; edited
+`src/renderer/main.js`, `src/renderer/controllers/playback-controller.js`,
+`src/renderer/lib/platform/cast.js`, `src/renderer/lib/events.js`,
+`src/renderer/lib/stream.js`, `src/renderer/lib/util.js`,
+`eslint-boundary.config.js`, `vite.config.js`, `package.json`,
+`package-lock.json`, `test/unit/platform-boundary.js`,
+`test/unit/lint-boundary.js`, `test/unit/platform-cast.js`,
+`test/unit/engine-ipc-call-sites.js`, `docs/README.md`,
+`docs/platform-shim.md`,
+`docs/adr/ADR-008-deferred-casualties-exempt-from-the-shim.md`,
+`src/AGENTS.md`, `src/renderer/controllers/AGENTS.md`,
+`src/renderer/lib/platform/AGENTS.md`, `test/AGENTS.md`,
+`progress.log`, `specs/prd.json`.
+
+**AC-5 is not satisfied and cannot be, this session.** "Casting to one
+real device still works end to end" needs a real receiver on the
+network *and* US-076/077/078, which implement the protocols in the
+host and are all marked manual and excluded from this loop. The host
+answers every session command with its not-implemented stub today, so
+end-to-end casting does not work -- and did not work before this story
+either, since US-072 cut the app over to Tauri and the webview has no
+Node to run the old module. This story removes the dead code and
+closes ADR-008; the end-to-end check belongs to US-086. Everything
+else in the story is done and gated: `npm test` (lint + depcheck +
+3452 unit assertions) and `cargo fmt --check`, `cargo clippy -- -D
+warnings`, `cargo test` (178) all pass.
+
+- **Learnings for future iterations:**
+  - **The three casting packages were the *only* reason four Node
+    builtins were in the Vite external list.** `net`, `tls`, `dgram`
+    and `timers` are not named by the bundle at all now. What is left
+    on that list (`http`, `https`, `url`, `querystring`) is
+    `simple-get` under `parse-torrent`, whose module body only reads
+    keys off them -- the fetching is the sidecar's (ADR-012). Same for
+    `lib/stream.js`'s `Readable`/`Writable`/`Duplex`/`Transform`
+    subclasses and most of `lib/util.js`: no dependency in the tree
+    reads them any more. They are kept as the shape
+    `require('stream')` has in Node, not as evidence of a live caller,
+    and both files now say so -- a future story should not read their
+    presence as a dependency.
+  - **Split a "move it to the host" story into a `lib/` fold and a
+    `controllers/` shell, and almost all of it becomes testable.**
+    `build:node` ignores `controllers/`, so a controller under unit
+    test has to be Babel-compiled by the test file itself; `lib/` is
+    built and needs none of that. Putting every decision
+    (which device is connected, can it change rate, what does the host
+    play, where does the status go) in `lib/cast-mirror.js` left the
+    controller as wiring, which is the cheap half to check. Worth
+    copying for US-080, which moves external players the same way.
+  - **A `.bak`-and-mutate pass is the fastest way to know whether a
+    test written after the code actually bites.** This story's
+    implementation arrived before its controller tests, so the tests
+    could have been written to fit. Five one-line mutations (drop the
+    `-pending` suffix, seek locally while casting, always forward the
+    rate, call `cast.stop()` instead of dispatching, append instead of
+    rebuild) produced eight failures across six assertions groups. A
+    mutation that produces no failure is the honest signal that an
+    assertion is decorative.
 ---

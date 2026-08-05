@@ -38,14 +38,14 @@ const BANNED = [
   'node:http'
 ]
 
-// Paths whose banned imports are legitimate. `lib/platform/` is the
-// shim itself; `lib/cast.js` is the one remaining deferred casualty
-// named in the US-013 notes. `src/renderer/webtorrent.js` was the
-// other, and US-045 deleted the file, so US-046 deleted its override.
+// Paths whose banned imports are legitimate: `lib/platform/`, the
+// shim itself, and nothing else. Both deferred casualties are spent --
+// US-045 deleted `src/renderer/webtorrent.js` and US-079 deleted
+// `src/renderer/lib/cast.js` -- so the exemption is a directory glob
+// with no per-file override beside it (ADR-008).
 const EXEMPT = [
   'src/renderer/lib/platform/ipc-os.js',
-  'src/renderer/lib/platform/a-new-shim-module.js',
-  'src/renderer/lib/cast.js'
+  'src/renderer/lib/platform/a-new-shim-module.js'
 ]
 
 // A file outside the renderer must not be touched by this config at
@@ -234,13 +234,15 @@ test('the boundary config leaves code outside src/renderer/ alone',
     t.end()
   })
 
-// One deferred casualty is left (US-046): `webtorrent.js` is gone, so
-// only `lib/cast.js` may still switch the rule off. `ipc-engine.js` is
-// a per-file override too, but it re-enables the rule rather than
-// switching it off, so it is not an exemption and is asserted
-// separately below. The shim exemption is a directory glob, not a
-// per-file override, so it is excluded from the count either way.
-test('the config declares exactly one deferred-casualty exemption',
+// US-079: no deferred casualty is left. `webtorrent.js` went at
+// US-045 and `lib/cast.js` at US-079, which closes ADR-008 -- every
+// renderer file is behind the shim, so nothing may switch the rule
+// off. `ipc-engine.js` is a per-file override too, but it re-enables
+// the rule rather than switching it off, so it is not an exemption and
+// is asserted separately below. The shim exemption is a directory
+// glob, not a per-file override, so it is excluded from the count
+// either way.
+test('the config declares no deferred-casualty exemption',
   function (t) {
     const config = require(CONFIG)
     const exemptions = config.overrides
@@ -248,8 +250,7 @@ test('the config declares exactly one deferred-casualty exemption',
       .filter((o) => o.rules['no-restricted-imports'] === 'off')
       .flatMap((o) => o.files)
       .sort()
-    t.deepEqual(exemptions, ['src/renderer/lib/cast.js'],
-      'cast.js is the only per-file exemption')
+    t.deepEqual(exemptions, [], 'no file is exempt from the import ban')
     t.end()
   })
 

@@ -4,8 +4,11 @@
  * `vite.config.js` aliases both `events` and `node:events` to this
  * file, so it serves every `events` import in the renderer bundle:
  * `lib/state.js`, which is the only first-party one, and the bundled
- * dependencies that inherit from it (`castv2-client`, `bonjour`,
- * `multicast-dns`, `xml2js`, `airplay-protocol`, `upnp-device-client`).
+ * dependencies that inherit from it. That was mostly the casting
+ * stack (`castv2-client`, `bonjour`, `multicast-dns`, `xml2js`,
+ * `airplay-protocol`, `upnp-device-client`) until US-079 moved
+ * casting to the host and deleted all three packages; the
+ * first-party caller alone is reason enough for this file.
  *
  * It exists for the reason `lib/path.js` does (ADR-011): the alternative
  * is externalizing the builtin, and after US-072 there is no host

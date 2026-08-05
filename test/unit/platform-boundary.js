@@ -33,9 +33,10 @@ const SHIM = path.join(RENDERER, 'lib', 'platform')
 // exemption sets below are empty of it.
 const EXEMPT = new Set()
 
-// The one remaining deferred casualty, matching the per-file override
-// in `eslint-boundary.config.js`.
-const DEFERRED = new Set([path.join(RENDERER, 'lib', 'cast.js')])
+// US-079: the last deferred casualty, `lib/cast.js`, is gone --
+// casting moved to the host behind `lib/platform/cast.js` (ADR-015) --
+// so there is no per-file override left in
+// `eslint-boundary.config.js` and no exempt set to keep here.
 
 function rendererSources () {
   const out = []
@@ -197,12 +198,13 @@ test('no renderer file outside the shim builds a wt-* channel string',
 // US-034: `no-restricted-imports` only sees `import` declarations, so
 // the lint rule cannot stop a renderer file from reaching a host
 // module through a call-scoped `require()` -- which is exactly the
-// escape hatch `lib/cast.js` uses for the casting libraries, and the
-// only deferral mechanism that works in this renderer at all. This
-// covers the same specifier list for the `require()` spelling.
+// escape hatch `lib/cast.js` used for the casting libraries, and the
+// only deferral mechanism that works in this renderer at all. US-079
+// deleted that file and with it the last `require()` in the renderer;
+// this covers the same specifier list for the `require()` spelling.
 test('no renderer file outside the shim requires a banned host module',
   function (t) {
-    const files = rendererSources().filter((f) => !DEFERRED.has(f))
+    const files = rendererSources()
     t.ok(files.length > 20, 'walked the renderer sources')
     const banned = [
       'electron', '@electron/remote',
@@ -250,9 +252,9 @@ test('no renderer file outside the shim names the Tauri tree',
 // US-032 AC-4: with both IPC concerns migrated, the only renderer
 // modules left importing Electron were the shim itself (skipped by the
 // walk) and the hidden WebTorrent window (FR-4). AC-4 also exempts
-// `lib/cast.js`, but it reaches Chromecast through `chromecasts` /
-// `airplay-js`, not Electron, so the assertion below is exact rather
-// than allowing it.
+// `lib/cast.js`, but it reached Chromecast through `chromecasts` /
+// `airplay-js`, not Electron, so the assertion below was exact rather
+// than allowing it -- and US-079 deleted the file anyway.
 //
 // Since US-039 the list is empty: the engine's `electron` import moved
 // into `src/engine/bus-electron.js`, which is not under this walk.
@@ -406,5 +408,34 @@ test('the engine uses Node builtins freely', function (t) {
   const source = fs.readFileSync(path.join(ENGINE, 'index.js'), 'utf8')
   t.ok(/from\s*['"]fs['"]/.test(source),
     'src/engine/index.js imports fs directly, as a Node process may')
+  t.end()
+})
+
+// US-079: the three casting packages went to the host with the code
+// that loaded them (ADR-015), and they are gone from `package.json`.
+// `depcheck` catches an unused dependency; this catches the opposite
+// mistake -- a renderer file naming one that is no longer installed --
+// which would otherwise surface as a bundler resolution failure in
+// whatever story reintroduced it.
+test('no renderer file names a casting package', function (t) {
+  const files = rendererSources()
+  t.ok(files.length > 20, 'walked the renderer sources')
+  const packages = ['chromecasts', 'dlnacasts', 'airplayer']
+  const patterns = packages.map((name) => new RegExp(
+    '(from|require\\s*\\()\\s*[\'"]' + name + '[\'"]'))
+  for (const file of files) {
+    t.deepEqual(hitsIn(file, patterns), [],
+      path.relative(RENDERER, file) + ' drives no cast device itself')
+  }
+  t.end()
+})
+
+// The counterpart: casting is behind the shim like everything else,
+// so `lib/cast.js` must not come back under any name.
+test('the renderer has no cast module outside the shim', function (t) {
+  t.equal(fs.existsSync(path.join(RENDERER, 'lib', 'cast.js')), false,
+    'src/renderer/lib/cast.js is gone')
+  t.equal(fs.existsSync(path.join(SHIM, 'cast.js')), true,
+    'and lib/platform/cast.js is where casting lives')
   t.end()
 })
