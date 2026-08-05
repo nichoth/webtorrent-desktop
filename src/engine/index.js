@@ -343,6 +343,14 @@ function getTorrentProgress () {
 
 function startServer (infoHash) {
   const torrent = client.get(infoHash)
+  // DIAGNOSTIC (temporary): which caller asks for a server on a torrent
+  // the engine no longer has, and what does the client still hold?
+  if (!torrent) {
+    console.log(
+      'DIAG start-server: no torrent %s -- client holds [%s]',
+      infoHash, client.torrents.map((t) => t.infoHash).join(' '))
+    return
+  }
   if (torrent.ready) startServerFromReadyTorrent(torrent)
   else torrent.once('ready', () => startServerFromReadyTorrent(torrent))
 }
