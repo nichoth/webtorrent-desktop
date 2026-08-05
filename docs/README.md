@@ -252,10 +252,13 @@ Some Electron capabilities did not survive the move. The main window
 ran with `nodeIntegration: true`, `contextIsolation: false`, and
 `enableBlinkFeatures: 'AudioVideoTracks'`. The first two are gone by
 construction -- a webview has no Node -- and were wanted gone. The
-third was Chromium-only, and `audio-tracks-controller.js` depends on
-it, so multi-audio-track switching does not work on WKWebView. US-081
-owns the codec check built on the same API, which is the larger half of
-the problem, and US-082 owns the track menu.
+third turned on `videoTracks` and `audioTracks`, which
+`audio-tracks-controller.js` depends on and which Tauri cannot enable.
+US-081 measured both present on WKWebView and rewrote the codec check
+built on them -- the larger half of the problem -- so that an absent
+list means "no opinion" rather than a throw. US-082 owns the track menu
+itself. What each webview can decode is
+[docs/codec-support.md](codec-support.md).
 
 ### Further reading
 
@@ -266,6 +269,8 @@ the problem, and US-082 owns the track menu.
   behind it.
 - `docs/platform-shim.md` -- the shim's API surface and the full
   `wt-*` protocol contract.
+- `docs/codec-support.md` -- what each webview was measured as able to
+  decode, and what the player does with a file it cannot.
 - `docs/vite-baseline.md` -- what Vite could not handle at the start of
   Phase 1, resolved item by item.
 - `tasks/prd-renderer-decoupling.md` -- the numbered requirements

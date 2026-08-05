@@ -7,6 +7,7 @@ import prettyBytes from 'prettier-bytes'
 import * as TorrentSummary from '../lib/torrent-summary'
 import * as Playlist from '../lib/playlist'
 import { dispatch, dispatcher } from '../lib/dispatcher'
+import { mediaElementError } from '../lib/media-playability'
 import config from '../../config'
 import { calculateEta } from '../lib/time'
 
@@ -181,16 +182,15 @@ function renderMedia (state) {
   function onLoadedMetadata (e) {
     const mediaElement = e.target
 
-    // check if we can decode video and audio track
+    // Check whether the tracks were decodable. The lists this used to
+    // read inline are non-standard and missing in some webviews, which
+    // turned the check into a throw that swallowed the whole handler
+    // (US-081) -- `mediaElementError` returns null where the webview
+    // has no opinion.
+    const trackError = mediaElementError(state.playing.type, mediaElement)
+    if (trackError) return dispatch('mediaError', trackError)
+
     if (state.playing.type === 'video') {
-      if (mediaElement.videoTracks.length === 0) {
-        dispatch('mediaError', 'Video codec unsupported')
-      }
-
-      if (mediaElement.audioTracks.length === 0) {
-        dispatch('mediaError', 'Audio codec unsupported')
-      }
-
       dispatch('mediaSuccess')
 
       const dimensions = {
@@ -201,12 +201,15 @@ function renderMedia (state) {
       // As soon as we know the video dimensions, resize the window
       dispatch('setDimensions', dimensions)
 
-      // set audioTracks
+      // set audioTracks. The list is absent in a webview that does not
+      // implement it, which leaves the menu empty rather than throwing
+      // -- restoring the feature there is US-082.
+      const audioTracks = mediaElement.audioTracks || []
       const tracks = []
-      for (let i = 0; i < mediaElement.audioTracks.length; i++) {
+      for (let i = 0; i < audioTracks.length; i++) {
         tracks.push({
-          label: mediaElement.audioTracks[i].label || `Track ${i + 1}`,
-          language: mediaElement.audioTracks[i].language
+          label: audioTracks[i].label || `Track ${i + 1}`,
+          language: audioTracks[i].language
         })
       }
 
@@ -214,14 +217,7 @@ function renderMedia (state) {
       state.playing.audioTracks.selectedIndex = 0
     }
 
-    // check if we can decode audio track
-    if (state.playing.type === 'audio') {
-      if (mediaElement.audioTracks.length === 0) {
-        dispatch('mediaError', 'Audio codec unsupported')
-      }
-
-      dispatch('mediaSuccess')
-    }
+    if (state.playing.type === 'audio') dispatch('mediaSuccess')
   }
 
   function onEnded () {

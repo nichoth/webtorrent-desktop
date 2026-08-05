@@ -278,8 +278,13 @@ before running any test:
   copy is keyed in `require.cache` by its emitted path, so whichever
   file loads first hands its stubs to the other.
   `engine-ipc-call-sites.js` emits under a `.engine-test.js` suffix
-  into the same directory (the directory is what resolves
-  `../lib/...`, not the file name).
+  into the same directory, and `media-controller-playability.js` under
+  `.playability-test.js` (the directory is what resolves `../lib/...`,
+  not the file name). Both collide with `os-ipc-call-sites.js`, which
+  emits `media-controller.js` itself. The failure is silent and lands
+  in the *other* file: the loser's recorders stay empty while its own
+  assertions about the modal still pass, so run a new controller test
+  alongside the existing ones, both orders, before believing it.
   The same collision used to bite two files that both required the
   main process's `ipc` module; both those files went with the host in
   US-072. The recipe they used is still the one to reach for when two

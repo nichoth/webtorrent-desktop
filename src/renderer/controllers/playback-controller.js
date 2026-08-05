@@ -32,8 +32,9 @@ export default class PlaybackController {
     const state = this.state
     if (state.location.url() === 'player') {
       this.updatePlayer(infoHash, index, false, (err) => {
-        if (err) dispatch('error', err)
-        else this.play()
+        if (err) return dispatch('error', err)
+        this.play()
+        dispatch('checkMediaPlayability')
       })
     } else {
       let initialized = false
@@ -55,7 +56,12 @@ export default class PlaybackController {
         },
         destroy: () => this.closePlayer()
       }, (err) => {
-        if (err) dispatch('error', err)
+        if (err) return dispatch('error', err)
+        // Not from inside `setup`: `location-history` sets the current
+        // page only once setup has called back, and the modal is
+        // opened by `mediaError`, which ignores anything dispatched
+        // while the location is still the torrent list.
+        dispatch('checkMediaPlayability')
       })
     }
   }

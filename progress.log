@@ -207,6 +207,29 @@ it tight.
   controlled comparison), never on what the attribute says. Recipe in
   `src-tauri/AGENTS.md`. Suspect this any time an AX read contradicts
   a `println!` from inside the host.
+- **What the window can decode is a measurement, and the code must be
+  able to survive not having it (US-081).** The webview is WKWebView,
+  WebKitGTK or WebView2 depending on the platform, and only one of the
+  three can be measured on this machine. So
+  `lib/media-playability.js` refuses a file only when the recorded
+  table **and** a live `canPlayType` agree: the table can stop a
+  refusal, never cause one, and an engine with no row refuses nothing
+  at all. That is what lets one platform's measurements ship without
+  guessing at the other two, and it also absorbs the case
+  `canPlayType` gets wrong on its own -- Chromium answers `''` for
+  `video/x-matroska` and then plays the file. Measurements and the
+  recipe to add a platform: `docs/codec-support.md`. The same shape
+  fits any browser-capability question this port meets: measure one,
+  gate on agreement, degrade to the old behaviour where unmeasured.
+- **A non-standard DOM property may be absent, and absent is not
+  empty.** Electron ran with `enableBlinkFeatures: 'AudioVideoTracks'`;
+  Tauri has no equivalent, so `videoTracks`/`audioTracks` are present
+  on WebKit and expected `undefined` on WebView2. The old inline
+  `.length` read therefore threw from inside `loadedmetadata` and took
+  the rest of the handler with it -- no error, no success, no resize,
+  and a black window with no modal, which looks like a codec problem
+  rather than a `TypeError`. Any DOM read the Electron code took for
+  granted is worth one probe launch before it is ported.
 - **An inline env var in an npm script is POSIX-only.**
   `FOO=bar vite build` fails on Windows, which Phase 4 targets. Set it
   from a small Node wrapper that then calls the tool's JS API
@@ -6521,4 +6544,94 @@ those is in the evidence above.
     The tests written with the implementation used
     `/Users/someone`, which has no space in it. A ported list is worth
     one test per element the *machine* supplies.
+---
+
+## 2026-08-05 - US-081 - Codec fallback on the new webview
+
+The player no longer assumes it is running in Chromium. Three parts.
+
+**The measurement.** `canPlayType` has no answer outside a real
+window, so this was a launch: a throwaway `probe` command plus an
+`append_invoke_initialization_script` in `src-tauri/src/main.rs` that
+called `canPlayType` for all 33 extensions the app treats as media,
+with the most favourable MIME type for each, and reported the user
+agent and whether the track lists exist. One launch printed the lot;
+`main.rs` was reverted afterwards and re-grepped. Twelve extensions
+came back `''` on WKWebView -- `.asf .dff .dsf .mka .mkv .mpc .ogv
+.spx .wma .wmv .wv .wvp` -- and both track lists are **present**
+there, which corrects what `docs/README.md` said. The table, the
+method and the reproduction recipe are `docs/codec-support.md`, linked
+from `docs/README.md` (AC-1).
+
+**The gate.** `src/renderer/lib/media-playability.js` is new.
+`detectEngine` reads the user agent (Chromium says `AppleWebKit` too,
+so the Chrome token is checked first); `MEASURED_UNPLAYABLE` holds
+one row per measured engine; `unsupportedMediaMessage` refuses only
+when the row and a live `canPlayType` agree. `media-extensions.js` now
+derives its audio and video lists from the MIME map, so an extension
+cannot be playable and unprobeable at once (AC-4). The controller asks
+once per file, from a new `checkMediaPlayability` dispatched by
+`playback-controller` after the player is open, and answers through
+`dispatch('mediaError')` -- the existing unsupported-media modal,
+which already offers the external player or a VLC link (AC-2, AC-3).
+
+**The throw.** `player-page.js` read `mediaElement.videoTracks.length`
+inline. `mediaElementError` replaces it and treats an absent list as
+"no opinion"; the audio-track menu loop got the same treatment, which
+leaves it empty rather than throwing on a webview without the lists
+(US-082 owns restoring it).
+
+Files changed: new `src/renderer/lib/media-playability.js`,
+`docs/codec-support.md`, `test/unit/media-playability.js`,
+`test/unit/media-controller-playability.js`; edited
+`src/renderer/lib/media-extensions.js`,
+`src/renderer/controllers/media-controller.js`,
+`src/renderer/controllers/playback-controller.js`,
+`src/renderer/main.js`, `src/renderer/pages/player-page.js`,
+`docs/README.md`, `src/renderer/pages/AGENTS.md`, `test/AGENTS.md`,
+`progress.log`, `specs/prd.json`.
+
+Gates: `npm test` (standard + lint:boundary + depcheck + 3566 unit
+assertions) passes. **What is not done and cannot be here:** the
+WebKitGTK and WebView2 columns of the table are `?`, because there is
+no Linux or Windows machine on this port. They are rows nobody has
+run, not guesses -- and the gate above is built so that an unmeasured
+engine behaves exactly as it did before, which is why this ships
+rather than blocking. Filling either one in is the recipe in
+`docs/codec-support.md` plus an entry in `MEASURED_UNPLAYABLE`;
+US-086, the port verification pass, is where that should land.
+
+- **Learnings for future iterations:**
+  - **The webview probe is the right tool when the question is about
+    the webview, and it worked first try here.** US-080 concluded the
+    `setup()` hatch is strictly better, and for a host command it is
+    -- but `canPlayType` has no host side. `on_page_load` printed
+    `Started`/`Finished` and the probe reported 1.5s later on the
+    first launch. Two things that were already written down and paid
+    off: `rm /tmp/io_webtorrent_webtorrent_si.sock` before launching,
+    and the leading `;` plus the `setTimeout` wrapper.
+  - **Kill the sidecar with the host, and check by PID rather than by
+    pattern.** `pkill -f "$PWD/..."` did not match the host, because
+    it had been launched with a *relative* path -- so the host was
+    still alive, and every `kill` of the engine child it supervises
+    was answered with a fresh one under a new PID. It reads exactly
+    like an unkillable process. `ps -o ppid` on the child named the
+    parent in one step.
+  - **A test that compiles a controller collides with the other test
+    that compiles it, and the failure lands in the other file.** The
+    new controller test emitted `media-controller.js` into
+    `build/renderer/controllers/`, the same path `os-ipc-call-sites.js`
+    uses; glob order gave the module to whichever loaded first and the
+    loser's recorders stayed empty, so five assertions failed in a
+    file this story never touched while the new file passed in
+    isolation. `test/AGENTS.md` already documented the collision and
+    the `.engine-test.js` suffix that dodges it; the new file now
+    emits `.playability-test.js`. Run a new controller test *with* the
+    existing ones, in both orders, before believing it.
+  - **A measured `''` is not the same claim as "cannot play".**
+    `canPlayType` answers about the type string, not the bytes: `.mp4`
+    answers `maybe` and an H.265 one still fails. That is why the
+    during-playback check survives rather than being replaced -- the
+    pre-flight gate only skips the wait where the answer is already
+    known.
 ---

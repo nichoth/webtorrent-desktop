@@ -290,6 +290,7 @@ const dispatchHandlers = {
   toggleAudioTracksMenu: () => controllers.audioTracks().toggleAudioTracksMenu(),
 
   // Local media: <video>, <audio>, external players
+  checkMediaPlayability: () => controllers.media().checkMediaPlayability(),
   mediaStalled: () => controllers.media().mediaStalled(),
   mediaError: (err) => controllers.media().mediaError(err),
   mediaSuccess: () => controllers.media().mediaSuccess(),

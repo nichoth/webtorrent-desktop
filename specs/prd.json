@@ -1362,8 +1362,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 81,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "WKWebView measured 2026-08-05 on macOS 26.5.1 and recorded in docs/codec-support.md. The WebKitGTK and WebView2 rows are unmeasured -- there is no Linux or Windows machine on this port -- and the gate refuses nothing on an engine with no row, so those platforms keep the pre-US-081 behaviour. Filling them in is the recipe in docs/codec-support.md; US-086 is where it should land."
     },
     {
       "id": "US-082",
