@@ -84,6 +84,35 @@ behind a flag, which is what Electron's
 `enableBlinkFeatures: 'AudioVideoTracks'` was turning on, and Tauri has
 no equivalent -- so on WebView2 they are expected to be `undefined`.
 
+**Present is not the same as populated.** US-082 played a two-audio-
+track MP4 in the same window and watched both lists across the load
+events:
+
+| Event | `videoTracks.length` | `audioTracks.length` |
+| --- | --- | --- |
+| `loadedmetadata` | 0 | 0 |
+| `addtrack` x2 | -- | fills |
+| `loadeddata` | 1 | 2 |
+| `canplay`, `playing` | 1 | 2 |
+
+So on WKWebView the lists are present and empty for the whole of
+`loadedmetadata`, and anything that reads them there sees a file with
+no decodable track -- which is exactly what `mediaElementError`
+reports as an error. Every read of either list waits for `loadeddata`.
+
+Three more things that run came out with:
+
+- `label` is `''` on WKWebView even where the file names the track, so
+  the menu's `Track N` fallback is the normal case, not the edge one.
+  `language` is set (`eng`, `deu`), and so is `id`.
+- The webview picks the starting track itself and does not follow the
+  container's default-track disposition: a file authored with its
+  second audio stream marked default still started on the first. The
+  player reads back whichever one is `enabled` rather than deciding,
+  so it agrees with the engine whatever the engine does.
+- Assigning `enabled` switches tracks and fires `change` on the list,
+  which is the whole of what the menu needs.
+
 ## What the app does with it
 
 Two independent checks, and neither one trusts this table on its own.
@@ -104,10 +133,13 @@ than the media element's own error arriving a second later, so the
 engine gate is what keeps the false positive out.
 
 **During playback.** `mediaElementError` reads `videoTracks` and
-`audioTracks` after `loadedmetadata`, and an **absent** list means "no
-opinion", not "no tracks" -- reading `.length` off `undefined` threw,
-and the throw took the rest of the handler with it: no error, no
-`mediaSuccess`, no window resize, and a black window with no modal.
+`audioTracks` on `loadeddata` -- not `loadedmetadata`, per the table
+above -- and an **absent** list means "no opinion", not "no tracks":
+reading `.length` off `undefined` threw, and the throw took the rest
+of the handler with it: no error, no `mediaSuccess`, no window resize,
+and a black window with no modal. The audio-track menu
+(`lib/audio-tracks.js`) reads the same list on the same event, and
+keeps whichever track the webview enabled.
 
 Either check dispatches `mediaError`, which is the modal the app
 already had, and which offers the external player when one is
@@ -139,3 +171,22 @@ HOME=/tmp/wt-probe-home src-tauri/target/debug/webtorrent-desktop
 Kill the host afterwards -- and kill the engine sidecar with it, which
 is a second process and does not go on its own. Revert `main.rs`; it is
 source-controlled, unlike `build/`.
+
+The track-list rows need a real multi-track file rather than a type
+string. `ffmpeg` makes one small enough to inline in the probe as a
+`data:` URL (~45 KB for two seconds), which keeps the whole check
+inside the injected script with no torrent, no server and no asset
+protocol:
+
+```sh
+ffmpeg -f lavfi -i testsrc=size=160x120:rate=10:duration=2 \
+  -f lavfi -i "sine=frequency=440:duration=2" \
+  -f lavfi -i "sine=frequency=880:duration=2" \
+  -map 0:v -map 1:a -map 2:a -c:v libx264 -pix_fmt yuv420p -c:a aac \
+  -metadata:s:a:0 language=eng -metadata:s:a:1 language=deu two-track.mp4
+```
+
+Drive that probe off media events (`loadedmetadata`, `loadeddata`),
+never off a chain of `setTimeout`s: the window loses focus immediately
+in a background launch and webview timers are throttled from then on,
+so the second step of a timer chain never runs.

@@ -130,7 +130,10 @@ function getDefaultPlayState () {
     },
     audioTracks: {
       tracks: [],
-      selectedIndex: 0, /* current audio track */
+      /* current audio track; -1 until `loadedmetadata` reads the
+         file's own default track, so nothing is forced on before then
+         and a webview with no track list forces nothing at all */
+      selectedIndex: -1,
       showMenu: false /* popover menu, above the video */
     },
     aspectRatio: 0 /* aspect ratio of the video */

@@ -251,14 +251,32 @@ most of the rules in this document exist to protect them:
 Some Electron capabilities did not survive the move. The main window
 ran with `nodeIntegration: true`, `contextIsolation: false`, and
 `enableBlinkFeatures: 'AudioVideoTracks'`. The first two are gone by
-construction -- a webview has no Node -- and were wanted gone. The
-third turned on `videoTracks` and `audioTracks`, which
-`audio-tracks-controller.js` depends on and which Tauri cannot enable.
-US-081 measured both present on WKWebView and rewrote the codec check
-built on them -- the larger half of the problem -- so that an absent
-list means "no opinion" rather than a throw. US-082 owns the track menu
-itself. What each webview can decode is
-[docs/codec-support.md](codec-support.md).
+construction -- a webview has no Node -- and were wanted gone.
+
+The third was expected to cost the multi-audio-track menu, and did
+not. That flag turned on `videoTracks` and `audioTracks`, which
+`audio-tracks-controller.js` is built on and which Tauri has no way to
+set -- but it was gating a *WebKit* API that Chromium had copied and
+left off by default. WKWebView and WebKitGTK implement it outright, so
+the menu works there; on WebView2 the lists are absent, the menu has
+nothing to list and its control renders disabled. Nothing was removed.
+Two things did change, both measured in the app's own window
+(US-081, US-082):
+
+- **The lists arrive late.** On WKWebView both are present and *empty*
+  at `loadedmetadata` and fill from `addtrack` before `loadeddata`, so
+  everything that reads them waits for `loadeddata`. Read a beat
+  earlier and the codec check finds no tracks on every file and opens
+  the unsupported-media modal over a video that plays perfectly.
+- **The element decides which track starts, not the app.** The player
+  reads back whichever track the webview enabled instead of forcing
+  the first one on, so a file whose default is not track 1 keeps it.
+
+An absent list means "this webview has no opinion", never "no tracks":
+reading `.length` off the missing one threw from inside the load
+handler and took the whole of playback startup with it. The rules and
+the measurements are [docs/codec-support.md](codec-support.md); the
+code is `lib/audio-tracks.js` and `lib/media-playability.js`.
 
 ### Further reading
 

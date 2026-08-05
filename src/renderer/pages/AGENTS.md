@@ -30,6 +30,19 @@ rules, both learned in US-081 and both enforced by
   rest of the handler with it -- no `mediaError`, no `mediaSuccess`, no
   window resize, and a black window with no modal to explain it. Treat
   absent as "no opinion".
+- **Present is not populated, and `loadedmetadata` is too early.**
+  WKWebView reports both lists with `length === 0` at
+  `loadedmetadata` and fills them from `addtrack` before `loadeddata`
+  (US-082, measured). Every read of either list belongs in
+  `onLoadedData`; read them a beat earlier and the codec check sees no
+  decodable track in a file that plays perfectly, and the
+  unsupported-media modal covers every video. `test/unit/audio-
+  tracks.js` asserts this against this file's source, because a page
+  with a media element in it cannot be loaded in a unit test.
+- **The element chooses the starting audio track, not this file.**
+  Read back whichever track is `enabled` and apply the user's later
+  choice on top (`lib/audio-tracks.js`). Assuming track 0 and forcing
+  it on overrides the default track of any file that has another one.
 - **Ask `lib/media-playability.js`, do not re-derive.** What this
   window can decode is measured, per engine, and written down in
   `docs/codec-support.md`; an extension list in this file would be the

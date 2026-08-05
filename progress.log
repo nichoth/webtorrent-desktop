@@ -6635,3 +6635,69 @@ US-086, the port verification pass, is where that should land.
     pre-flight gate only skips the wait where the answer is already
     known.
 ---
+
+## 2026-08-05 - US-082
+- Resolved the multi-audio-track casualty as **kept, not removed**.
+  `enableBlinkFeatures: 'AudioVideoTracks'` was gating a WebKit API
+  that Chromium copied and left off; WKWebView implements it outright,
+  so `controllers/audio-tracks-controller.js` works against the new
+  webview's real capability (AC-1) and no UI was removed (AC-2 moot).
+- New `src/renderer/lib/audio-tracks.js`: `readAudioTracks` (one entry
+  per track, `Track N` where the label is empty, `selectedIndex` from
+  whichever track the element reports `enabled`, `-1` where the list is
+  absent or empty) and `applyAudioTrackSelection` (a no-op unless there
+  is a list and an in-range selection). `pages/player-page.js` calls
+  both instead of iterating inline, and `lib/state.js`'s default
+  `audioTracks.selectedIndex` is now `-1` so nothing is forced on
+  before the file's own default has been read.
+- **Fixed a shipped US-081 bug found while verifying AC-4.** Measured
+  in the app's own window: on WKWebView `videoTracks` and `audioTracks`
+  are present and **empty** at `loadedmetadata` and fill from
+  `addtrack` before `loadeddata`. `mediaElementError` reads an empty
+  list as "nothing decodable", so as shipped the unsupported-media
+  modal would have covered *every* video under Tauri. The codec check
+  and the track read both moved to a new `onLoadedData` handler;
+  `onLoadedMetadata` keeps `mediaSuccess` and `setDimensions` only.
+- Verified against a real two-audio-track MP4 (ffmpeg, inlined as a
+  `data:` URL) in a throwaway `append_invoke_initialization_script`
+  probe, three launches: lists fill by `loadeddata` (alen=2, vlen=1),
+  `enabled` marks the track the engine started, assigning `enabled`
+  switches and fires `change`, `play()` resolves, no window error and
+  no `console.error`. Probe and its `main.rs` hook reverted.
+- Files: `src/renderer/lib/audio-tracks.js` (new),
+  `test/unit/audio-tracks.js` (new, 21 assertions),
+  `src/renderer/pages/player-page.js`, `src/renderer/lib/state.js`,
+  `src/renderer/controllers/audio-tracks-controller.js`,
+  `docs/README.md`, `docs/codec-support.md`,
+  `src/renderer/pages/AGENTS.md`, `src-tauri/AGENTS.md`.
+- `npm test` 3617/3617, lint and depcheck clean; both the Electron and
+  the Tauri renderer bundles build.
+- **Learnings for future iterations:**
+  - **"The API is present" is not "the API answers yet."** US-081
+    measured `audioTracks`/`videoTracks` as present on WKWebView and
+    that was true, but at `loadedmetadata` both are present and length
+    0 -- a distinction a presence check cannot see, and one that
+    inverted the meaning of the codec check built on it. When a
+    measurement decides a branch, measure it at the moment the branch
+    actually runs.
+  - **Drive a webview probe off the events of the thing being
+    measured.** A `setTimeout` chain stalls on its second step once the
+    background window loses focus, but `loadedmetadata` ->
+    `loadeddata` -> `playing` all fired, so one launch walked two files
+    through the whole load sequence. And a media file inlines as a
+    `data:` URL: 2s of ffmpeg video with two audio tracks is 45 KB, and
+    a 120 KB init script gave no trouble -- no torrent, no server, no
+    asset protocol.
+  - **A rule about *when* code runs is still testable.**
+    `player-page.js` is JSX with a media element and will not load in a
+    unit test, so `test/unit/audio-tracks.js` brace-matches the two
+    handler bodies out of the source and asserts which one reads the
+    track lists -- the same source-cross-check shape as the
+    `*-call-sites.js` tests. Both regressions (dropping the
+    `onLoadedData` prop, moving a track read back up) were confirmed to
+    fail it before committing.
+  - WKWebView reports `label: ''` even where the container names the
+    track, and picks the starting track itself rather than following
+    the container's default-track disposition. Read back what is
+    `enabled`; never assume index 0.
+---

@@ -1377,8 +1377,8 @@
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 82,
-      "passes": false,
-      "notes": ""
+      "passes": true,
+      "notes": "Kept, not removed: enableBlinkFeatures: 'AudioVideoTracks' was gating a WebKit API Chromium copied and left off, and WKWebView implements it outright, so the controller works against the real capability (AC-1) and no UI was removed (AC-2 moot). New lib/audio-tracks.js holds readAudioTracks/applyAudioTrackSelection; the player keeps whichever track the element reports enabled instead of forcing index 0, and state.js defaults selectedIndex to -1. Verifying AC-4 against a real two-audio-track MP4 in the app's own window found a shipped US-081 bug: on WKWebView both track lists are present and EMPTY at loadedmetadata and fill from addtrack before loadeddata, so mediaElementError would have opened the unsupported-media modal over every video under Tauri. The codec check and the track read both moved to onLoadedData. Probe (ffmpeg file inlined as a data: URL, three launches) confirmed alen=2/vlen=1 at loadeddata, enabled marking the engine's starting track, switching firing change, play() resolving, and no console error; probe reverted. docs/README.md and docs/codec-support.md record the outcome and the timing table (AC-3). npm test 3617/3617, lint and depcheck clean, both renderer bundles build (AC-5)."
     },
     {
       "id": "US-083",

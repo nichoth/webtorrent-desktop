@@ -8,6 +8,9 @@ import * as TorrentSummary from '../lib/torrent-summary'
 import * as Playlist from '../lib/playlist'
 import { dispatch, dispatcher } from '../lib/dispatcher'
 import { mediaElementError } from '../lib/media-playability'
+import {
+  readAudioTracks, applyAudioTrackSelection
+} from '../lib/audio-tracks'
 import config from '../../config'
 import { calculateEta } from '../lib/time'
 
@@ -122,12 +125,11 @@ function renderMedia (state) {
       delete file.selectedSubtitle
     }
 
-    // Switch to selected audio track
-    const audioTracks = mediaElement.audioTracks || []
-    for (let j = 0; j < audioTracks.length; j++) {
-      const isSelectedTrack = j === state.playing.audioTracks.selectedIndex
-      audioTracks[j].enabled = isSelectedTrack
-    }
+    // Switch to selected audio track. A webview without the track list
+    // has nothing to switch, and nothing is selected until
+    // `loadedmetadata` has read the file's own default (US-082).
+    applyAudioTrackSelection(
+      mediaElement, state.playing.audioTracks.selectedIndex)
 
     state.playing.volume = mediaElement.volume
   }
@@ -157,6 +159,7 @@ function renderMedia (state) {
       onDoubleClick={dispatcher('toggleFullScreen')}
       onClick={dispatcher('playPause')}
       onLoadedMetadata={onLoadedMetadata}
+      onLoadedData={onLoadedData}
       onEnded={onEnded}
       onStalled={dispatcher('mediaStalled')}
       onError={dispatcher('mediaError')}
@@ -182,6 +185,29 @@ function renderMedia (state) {
   function onLoadedMetadata (e) {
     const mediaElement = e.target
 
+    dispatch('mediaSuccess')
+
+    if (state.playing.type === 'video') {
+      const dimensions = {
+        width: mediaElement.videoWidth,
+        height: mediaElement.videoHeight
+      }
+
+      // As soon as we know the video dimensions, resize the window
+      dispatch('setDimensions', dimensions)
+    }
+  }
+
+  // Everything that reads `videoTracks` / `audioTracks` waits for
+  // `loadeddata`, not `loadedmetadata` (US-082). WKWebView fills both
+  // lists from `addtrack` events after metadata: at `loadedmetadata`
+  // they are present and *empty*, which the codec check below reads as
+  // "nothing decodable" and which would open the unsupported-media
+  // modal over every playable video. Measured -- see
+  // docs/codec-support.md.
+  function onLoadedData (e) {
+    const mediaElement = e.target
+
     // Check whether the tracks were decodable. The lists this used to
     // read inline are non-standard and missing in some webviews, which
     // turned the check into a throw that swallowed the whole handler
@@ -190,34 +216,15 @@ function renderMedia (state) {
     const trackError = mediaElementError(state.playing.type, mediaElement)
     if (trackError) return dispatch('mediaError', trackError)
 
-    if (state.playing.type === 'video') {
-      dispatch('mediaSuccess')
+    if (state.playing.type !== 'video') return
 
-      const dimensions = {
-        width: mediaElement.videoWidth,
-        height: mediaElement.videoHeight
-      }
-
-      // As soon as we know the video dimensions, resize the window
-      dispatch('setDimensions', dimensions)
-
-      // set audioTracks. The list is absent in a webview that does not
-      // implement it, which leaves the menu empty rather than throwing
-      // -- restoring the feature there is US-082.
-      const audioTracks = mediaElement.audioTracks || []
-      const tracks = []
-      for (let i = 0; i < audioTracks.length; i++) {
-        tracks.push({
-          label: audioTracks[i].label || `Track ${i + 1}`,
-          language: audioTracks[i].language
-        })
-      }
-
-      state.playing.audioTracks.tracks = tracks
-      state.playing.audioTracks.selectedIndex = 0
-    }
-
-    if (state.playing.type === 'audio') dispatch('mediaSuccess')
+    // Set the audio tracks from what this webview reports, keeping
+    // whichever track it started the file with. The list is absent on
+    // a webview that does not implement it, which leaves the menu
+    // disabled rather than throwing (US-082).
+    const audioTracks = readAudioTracks(mediaElement)
+    state.playing.audioTracks.tracks = audioTracks.tracks
+    state.playing.audioTracks.selectedIndex = audioTracks.selectedIndex
   }
 
   function onEnded () {

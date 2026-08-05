@@ -331,7 +331,18 @@ does immediately in a headless run. A probe that schedules a *second*
 step -- "set it, then clear it six seconds later" -- will hang on that
 second step indefinitely while the first has plainly worked. Do not
 chase it: make each launch do one thing, and get the before/after
-comparison from two launches instead.
+comparison from two launches instead. Where the thing being measured
+emits events of its own, hang the probe off those instead of a timer
+and one launch answers the whole question: US-082 walked a `<video>`
+through `loadedmetadata` -> `loadeddata` -> `playing` in a single run,
+after a `setTimeout` chain asking the same thing had stalled on its
+second step.
+
+**A media file fits in the probe as a `data:` URL.** Two seconds of
+`ffmpeg`-generated video with two audio tracks is ~45 KB, which
+inlines into the injected script as base64 with no torrent, no server
+and no asset protocol -- a 120 KB init script gave no trouble. The
+recipe is in `docs/codec-support.md`.
 
 ## The dock badge is readable with `osascript`
 
