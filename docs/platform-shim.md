@@ -64,6 +64,7 @@ because they were spelled `ipcRenderer.send`, not `electron.shell`.
 | `dialog.js` | Native file dialogs | US-024 |
 | `window.js` | Reading current-window state | US-024 |
 | `menu.js` | Data-driven context menus | US-025 |
+| `cast.js` | Casting to Chromecast, DLNA and AirPlay | US-075 |
 
 Line references below are against the tree at US-018 and will drift
 as call sites move. They are a starting point, not a contract.
@@ -107,6 +108,7 @@ Ported so far:
 | `menu.showContextMenu` | US-061 | descriptors to a host command, the choice back on an event; built in `src-tauri/src/menu.rs` |
 | `ipcOs.setAllowNav`, `notifyPlayerOpen`, `notifyPlayerUpdate`, `notifyPlayerClose` | US-061 | one host command each; they enable and disable items of the host's own application menu |
 | `ipcOs.onDispatch` | US-061 | a Tauri event, emitted by every application-menu item that is not a role |
+| all fourteen `cast.js` exports | US-075 | eleven host commands and three events, in `src-tauri/src/cast.rs`; the protocols behind them are US-076 to US-078 |
 
 The window operations are **commands rather than core window calls
 from the webview**, although `@tauri-apps/api/window` could do several
@@ -588,6 +590,85 @@ not listeners.
 | `onFullscreenChanged(listener, opts)` | `fullscreenChanged` | `main.js:345` |
 | `onWindowBoundsChanged(listener, opts)` | `windowBoundsChanged` | `main.js:346` |
 
+## `cast.js`
+
+New in US-075, and unlike every other module here it replaces nothing
+in `src/main/`: casting ran in the *renderer* until now
+(`src/renderer/lib/cast.js`, three npm packages and an `http` server),
+and ADR-015 moves all of it into the host. The module is the interface
+that work lands behind, so US-076 (Chromecast), US-077 (DLNA) and
+US-078 (AirPlay) each fill in a protocol without the renderer changing
+again.
+
+The host holds a **single session**, because the UI already forbids
+two ("Never cast to two devices at the same time",
+`cast.js:toggleMenu`). That is why nothing but `connect` names a
+device.
+
+### Commands
+
+| Function | Command | Resolves to |
+| --- | --- | --- |
+| `startDiscovery()` | `cast_start_discovery` | -- |
+| `stopDiscovery()` | `cast_stop_discovery` | -- |
+| `getDevices()` | `cast_get_devices` | `[{ id, protocol, name, capabilities }]` |
+| `connect(deviceId, media)` | `cast_connect` | -- |
+| `play()` | `cast_play` | -- |
+| `pause()` | `cast_pause` | -- |
+| `stop()` | `cast_stop` | -- |
+| `seek(seconds)` | `cast_seek` | -- |
+| `setVolume(volume)` | `cast_set_volume` | -- |
+| `setRate(rate)` | `cast_set_rate` | -- |
+| `getStatus()` | `cast_get_status` | `{ deviceId, isPaused, currentTime, volume, ended }` |
+
+### Events
+
+| Function | Event | Payload |
+| --- | --- | --- |
+| `onDevices(listener, opts)` | `castDevices` | the whole device list, on every change |
+| `onStatus(listener, opts)` | `castStatus` | the same shape `getStatus()` resolves to |
+| `onError(listener, opts)` | `castError` | a message for `state.errors` |
+
+`protocol` is `chromecast`, `dlna` or `airplay` -- the strings
+`player-page.js` already keys `state.devices` by and compares
+`state.playing.location` against. `capabilities` is the subset of
+`play`, `pause`, `seek`, `volume` and `rate` a device answers, and it
+is what keeps `playback-controller.js`'s synchronous
+`if (!Cast.setRate(rate))` working across an all-async shim: the
+answer comes from the mirrored device rather than from the promise.
+
+`onDevices` carries the **whole list** rather than a delta, so a
+receiver that goes away can finally disappear -- the bug
+`lib/cast.js` documents and does not fix. `onStatus` replaces that
+module's one-second `setInterval`: the host polls and pushes, so a
+poll that hangs cannot stall the UI thread. `onError` exists because
+discovery finding nothing and discovery *failing* are the same empty
+list, and only the second should raise anything.
+
+`connect`'s media description is `{ url, title, contentType,
+subtitlesVtt, startTime }`. The URL is the engine's own `networkURL`,
+untouched by any of this. Subtitles cross as **cue text**, not as a
+URL, because the host publishes them itself -- which is what lets the
+renderer stop running an HTTP server. The two optional halves cross as
+`null` rather than being omitted, for the reason `ipc-os.js`'s
+`optional()` gives: a dropped key and a track the user did not select
+are not the same thing.
+
+### What answers today
+
+A stub (`src-tauri/src/cast.rs`). Discovery reports an **empty device
+list** and raises nothing; every session command rejects with a
+message naming the operation, ADR-015 and the story that owes the
+protocol. Both halves are deliberate. ADR-015 has an unimplemented
+protocol report no devices and no error, and `player-page.js`'s
+existing rule -- no devices and not casting means no button -- then
+hides it with no UI change and no dead control. A command reached
+anyway means the UI got somewhere it should not have, so it says so.
+
+Nothing calls this module yet: `src/renderer/lib/cast.js` is still
+what the UI uses, and US-079 deletes it, the three npm packages and
+the last renderer `require()` and `http` import together.
+
 ## `ipc-engine.js`
 
 This is the seam the torrent engine is swapped at. A librqbit
@@ -998,6 +1079,11 @@ lint rule.
 Per FR-4 and FR-11, exactly one renderer file keeps direct Electron and
 Node imports: `src/renderer/lib/cast.js`, which runs an `http` server in
 the renderer and needs a full reimplementation in Phase 5.
+
+US-075 added the shim module that reimplementation lands behind
+(`platform/cast.js`, above), but did not touch the exempt file: the UI
+still calls `lib/cast.js`, and it is US-079 that deletes it and empties
+this list.
 
 The other two exemptions are gone. US-002 deleted `lib/telemetry.js`,
 and US-045 deleted `src/renderer/webtorrent.js` -- the engine

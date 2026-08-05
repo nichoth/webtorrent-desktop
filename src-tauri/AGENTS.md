@@ -464,3 +464,20 @@ window.__TAURI_INTERNALS__.invoke('plugin:event|listen', {
 
 Without `target` it rejects with `command listen missing required key
 target`, which is at least a message rather than silence.
+
+**The probe only works when the window actually loads, and on this
+machine that is not every launch (US-075).** Six background launches
+of the same binary produced a page load once: `on_page_load` printed
+`Started`/`Finished` on one run and nothing at all on the other five,
+while `setup()` printed on every one and the sidecar came up on every
+one. So a silent probe is not evidence of anything until a
+`println!`-backed `on_page_load` on the *same* launch says the page
+loaded -- add one before spending a second launch on the script. Two
+things worth knowing before that: the single-instance lock is
+`/tmp/io_webtorrent_webtorrent_si.sock` and a killed host leaves it
+behind, after which every launch signals the ghost and exits silently
+with status 0 (`rm` it between runs); and where a check can be written
+as a source cross-check instead, write that -- US-075's "every
+`invoke('...')` in the shim is a command `main.rs` defines and
+registers" is a `cargo test` that answers the same question the probe
+was asked, every run, on every machine.

@@ -15,6 +15,7 @@
  * sites it replaces.
  */
 
+import * as cast from './cast'
 import * as clipboard from './clipboard'
 import * as dialog from './dialog'
 import * as fs from './fs'
@@ -26,6 +27,7 @@ import * as shell from './shell'
 import * as window from './window'
 
 export {
+  cast,
   clipboard,
   dialog,
   fs,

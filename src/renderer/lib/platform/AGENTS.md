@@ -5,7 +5,17 @@ The platform shim: the sole source of Electron and Node access for
 read it before changing anything here, and update it in the same
 commit when the surface changes.
 
-## There are two trees here now (US-052)
+## There was a second tree here until US-072
+
+**Read this section as history.** US-072 promoted `tauri/` to this
+directory and deleted the Electron tree, the `WT_HOST` variable and
+the resolver that chose between them, so there is one implementation
+and everything below about *parity between two trees* no longer
+applies. What survives is the register of unported exports, now in
+`test/unit/platform-stubs.js`. The original text follows because the
+reasoning about stubs and capabilities is still current.
+
+## There were two trees here (US-052)
 
 `*.js` is the Electron implementation and `tauri/*.js` is the Tauri
 one (ADR-014). Exactly one is in a given bundle: `WT_HOST=tauri`
@@ -98,6 +108,32 @@ Consequences for anything done in this directory:
   `*Sync` variants stay out of this directory; every operation is
   already a promise there. `fs/promises` is externalized as a
   first-party builtin in `vite.config.js` for this module's sake.
+
+## `cast.js` is the surface for work that has not happened (US-075)
+
+It is the one module here that replaces nothing in `src/main/`:
+casting ran in the renderer, and ADR-015 moves it to the host. The
+shim is complete -- fourteen exports, eleven commands and three events
+-- and the host behind it owns no protocol at all, which makes it the
+pattern to copy for any other "define the seam first" story:
+
+- **It is not in the unimplemented register**, because the *shim* is
+  implemented. The not-implemented answer comes from the host
+  (`src-tauri/src/cast.rs`), so it is a rejected promise carrying the
+  host's message rather than a `NotImplementedError`. Use
+  `notImplemented()` for an export with no host command behind it, and
+  a host that refuses for an export whose command exists.
+- **An empty answer can be the correct one.** Discovery reports no
+  devices and raises nothing, and `player-page.js` hides a protocol
+  with no devices -- so an unimplemented protocol has no control on
+  screen without the UI knowing anything about it. Look for that shape
+  before adding a feature flag.
+- **The event names are checked against the host by `cargo test`**,
+  not by this suite: the renderer's tests stub `invoke` and so cannot
+  see the host at all. `cast::tests` reads this file for the three
+  event names and for every `invoke('...')` string, and fails if
+  `main.rs` does not define and register the matching command. Adding
+  a command here means adding both, or that test says so.
 
 ## `ipc-engine.js` is not an IPC module any more (US-044)
 

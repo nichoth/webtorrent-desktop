@@ -20,6 +20,7 @@
 //! so it is made below and the window is shown afterwards, rather than
 //! flashing at the default size first.
 
+mod cast;
 mod clipboard;
 mod dialog;
 mod dock;
@@ -1224,6 +1225,107 @@ async fn fs_exists(allow: tauri::State<'_, Allowlist>, path: String) -> Result<b
     })
 }
 
+// -- casting, as far as it goes today (US-075) ------------------------
+//
+// `platform/cast.js`, against a host that owns no protocol yet.
+// ADR-015 lands Chromecast in US-076, DLNA in US-077 and AirPlay in
+// US-078; what is here is the surface all three arrive behind, so the
+// renderer is written once.
+//
+// Discovery answers an empty list and raises nothing, which is a
+// complete answer: `player-page.js` hides a protocol's button when it
+// has no devices, so an unimplemented protocol has no control on
+// screen. Every session command answers [`cast::not_implemented`]
+// instead, because reaching one at all means the UI got somewhere it
+// should not have.
+//
+// The arguments are deserialized rather than ignored: their shape is
+// what US-075 is proving, so a payload the shim spells wrongly fails
+// here rather than in the story that implements the protocol.
+
+/// `cast.startDiscovery`.
+///
+/// The list is published as well as looked for, so a renderer that
+/// subscribed after the last change still learns the current answer
+/// without a second read.
+#[tauri::command]
+fn cast_start_discovery(
+    app: AppHandle,
+    session: tauri::State<'_, cast::Session>,
+) -> Result<(), String> {
+    app.emit(cast::DEVICES_EVENT, session.devices())
+        .map_err(failed)
+}
+
+/// `cast.stopDiscovery`.
+#[tauri::command]
+fn cast_stop_discovery(
+    app: AppHandle,
+    session: tauri::State<'_, cast::Session>,
+) -> Result<(), String> {
+    session.forget_devices();
+    app.emit(cast::DEVICES_EVENT, session.devices())
+        .map_err(failed)
+}
+
+/// `cast.getDevices`.
+#[tauri::command]
+fn cast_get_devices(session: tauri::State<'_, cast::Session>) -> Vec<cast::Device> {
+    session.devices()
+}
+
+/// `cast.connect`.
+#[tauri::command]
+fn cast_connect(device_id: String, media: cast::Media) -> Result<(), String> {
+    let _ = (device_id, media);
+    Err(cast::not_implemented("connect"))
+}
+
+/// `cast.play`.
+#[tauri::command]
+fn cast_play() -> Result<(), String> {
+    Err(cast::not_implemented("play"))
+}
+
+/// `cast.pause`.
+#[tauri::command]
+fn cast_pause() -> Result<(), String> {
+    Err(cast::not_implemented("pause"))
+}
+
+/// `cast.stop`.
+#[tauri::command]
+fn cast_stop() -> Result<(), String> {
+    Err(cast::not_implemented("stop"))
+}
+
+/// `cast.seek`.
+#[tauri::command]
+fn cast_seek(seconds: f64) -> Result<(), String> {
+    let _ = seconds;
+    Err(cast::not_implemented("seek"))
+}
+
+/// `cast.setVolume`.
+#[tauri::command]
+fn cast_set_volume(volume: f64) -> Result<(), String> {
+    let _ = volume;
+    Err(cast::not_implemented("setVolume"))
+}
+
+/// `cast.setRate`.
+#[tauri::command]
+fn cast_set_rate(rate: f64) -> Result<(), String> {
+    let _ = rate;
+    Err(cast::not_implemented("setRate"))
+}
+
+/// `cast.getStatus`.
+#[tauri::command]
+fn cast_get_status() -> Result<cast::Status, String> {
+    Err(cast::not_implemented("getStatus"))
+}
+
 /// Open the window where the last session left it.
 ///
 /// The order matters: the minimum size is set before the size, so a
@@ -1465,6 +1567,9 @@ fn main() {
             app.manage(app_menu);
             app.manage(ContextMenus::<Wry>::default());
             app.manage(FolderWatcher::default());
+            // Nothing is discovered and nothing is connected until the
+            // renderer asks (US-075).
+            app.manage(cast::Session::default());
 
             // The engine sidecar (US-070), which is
             // `engineProcess.init()` in `src/main/index.js`: it comes
@@ -1549,7 +1654,18 @@ fn main() {
             fs_unlink,
             fs_readdir,
             fs_stat,
-            fs_exists
+            fs_exists,
+            cast_start_discovery,
+            cast_stop_discovery,
+            cast_get_devices,
+            cast_connect,
+            cast_play,
+            cast_pause,
+            cast_stop,
+            cast_seek,
+            cast_set_volume,
+            cast_set_rate,
+            cast_get_status
         ])
         .build(tauri::generate_context!())
         .expect("failed to start the WebTorrent Desktop window")

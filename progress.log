@@ -6177,3 +6177,77 @@ Files changed: `docs/adr/ADR-015-casting-without-node.md` (new),
     mirrored device. Same trick should work for any other sync UI read
     the shim would otherwise break.
 ---
+## 2026-08-04 - US-075 - The cast shim surface, with a stub host
+
+Added `src/renderer/lib/platform/cast.js` (the fourteen exports
+ADR-015 names: `startDiscovery`, `stopDiscovery`, `getDevices`,
+`onDevices`, `onStatus`, `onError`, `connect`, `play`, `pause`,
+`stop`, `seek`, `setVolume`, `setRate`, `getStatus`) and the host
+behind it, `src-tauri/src/cast.rs` plus eleven commands in `main.rs`.
+Every export is `async` and passes plain JSON. The host answers an
+empty device list for discovery and rejects every session command with
+a message naming the operation, ADR-015 and the story that owes the
+protocol (US-076 Chromecast, US-077 DLNA, US-078 AirPlay). Nothing in
+the UI changed and `src/renderer/lib/cast.js` is untouched -- US-079
+deletes it.
+
+Tests first: `test/unit/platform-cast.js` drives the whole surface
+against a fake `invoke` and a fake event API (command names, argument
+keys, the array `getDevices` must always be, the `null` an omitted
+subtitle track crosses as, the payload each listener sees, the
+unsubscribe function, `{ once: true }`), and `cast::tests` covers the
+Rust side (the wire shapes, the protocol strings the UI matches on,
+the not-implemented message) plus two cross-checks that read the shim
+source.
+
+Files changed: `src/renderer/lib/platform/cast.js` (new),
+`src/renderer/lib/platform/index.js`,
+`src/renderer/lib/platform/AGENTS.md`, `test/unit/platform-cast.js`
+(new), `src-tauri/src/cast.rs` (new), `src-tauri/src/main.rs`,
+`src-tauri/AGENTS.md`, `docs/platform-shim.md`, `progress.log`,
+`specs/prd.json`.
+
+- **Learnings for future iterations:**
+  - **A shim module whose *host* is the stub does not go in the
+    unimplemented register.** `test/unit/platform-stubs.js` reads the
+    shim source for `notImplemented(` calls, so `cast.js` -- fully
+    implemented, talking to a host that refuses -- is correctly
+    absent, and the sweep's "cast.js is fully implemented" is the
+    right answer. The two failure modes are different on purpose: a
+    `NotImplementedError` means there is no host command, a rejected
+    promise carrying the host's message means there is one and it
+    declines. Pick the second whenever the seam is what a story is
+    landing.
+  - **Nothing checked the shim's command *strings* against the host
+    until now.** `generate_handler!` catches a registered-but-
+    undefined command; nothing catches a command the renderer invokes
+    and the host never defined, because that failure is a rejected
+    promise inside a webview. The renderer's suite cannot see it
+    either -- it stubs `invoke`. So `cast::tests` reads
+    `platform/cast.js`, pulls every `invoke('...')` literal and every
+    event name out of it, and asserts `main.rs` defines and registers
+    each one. Cheap, deterministic, and worth copying for the other
+    shim modules.
+  - **The webview probe did not work on this machine today, and the
+    diagnosis matters more than the failure.** Six background launches
+    of the same binary: `setup()` printed every time, the sidecar came
+    up every time, and `on_page_load` printed `Started`/`Finished`
+    exactly *once*. So an injected script that prints nothing is not
+    evidence about the script -- add a `println!`-backed
+    `on_page_load` to the same launch before drawing any conclusion.
+    Two traps found on the way: a killed host leaves
+    `/tmp/io_webtorrent_webtorrent_si.sock` behind and every launch
+    after that signals the ghost and exits silently with status 0, so
+    `rm` it between runs; and `(cd x && cargo build) && app > log &`
+    backgrounds the *whole* list, so the app's launch is racing the
+    `sleep` that was meant to follow it.
+  - **`cargo clippy -- -D warnings` denies `dead_code`, which bites a
+    story that lands a surface ahead of its implementation.** An event
+    name constant nothing emits yet is a hard error, not a warning.
+    Two honest answers: delete the state that is not carried yet (the
+    discovery flag went, because a protocol's discoverer owns its own
+    idempotence), or keep the constant with `#[allow(dead_code)]` and
+    a comment naming the story that emits it -- the right call for
+    `STATUS_EVENT` and `ERROR_EVENT`, which are contract with the
+    renderer today and only unemitted.
+---
