@@ -104,6 +104,10 @@ often does it succeed? Time out? Show a missing codec error?
 The app never sends any personally identifying information, nor does it
 track which torrents you add.
 
-## License
+```
+docs/superpowers/plans/2026-08-05-force-announce-diagnostic.md
+```
 
-MIT. Copyright (c) [WebTorrent, LLC](https://webtorrent.io).
+```
+docs/superpowers/plans/2026-08-05-stalled-torrent-announce-sweep.md
+```
