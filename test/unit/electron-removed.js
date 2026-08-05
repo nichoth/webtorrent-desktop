@@ -90,6 +90,45 @@ test('no Electron package is still declared', function (t) {
   t.end()
 })
 
+// AC 7 of this story is "depcheck passes with no orphaned Electron
+// dependency", and there are two ways to get there: remove the
+// dependency, or add it to depcheck's `--ignores`. This is the check
+// that it was the first one.
+//
+// The list is not empty and cannot be. depcheck misses a dependency
+// two ways here. A tool named only in a config file it does not read
+// (`standard`, `eslint`, `@babel/eslint-parser`, `madr`) looks unused,
+// and so does a package whose name collides with a Node builtin:
+// `buffer` is imported by `src/renderer/lib/buffer-global.js` and the
+// feross implementation is inlined in the renderer bundle, but
+// depcheck classifies the specifier as core and never credits the
+// package. Both are real uses depcheck cannot see -- which is exactly
+// what an Electron leftover would not be.
+const IGNORED = ((pkg.scripts.test.match(/--ignores=(\S+)/) || [])[1] || '')
+  .split(',').filter(Boolean)
+
+test('depcheck is not silenced with an Electron package', function (t) {
+  t.ok(IGNORED.length > 0, `read the ignore list: ${IGNORED.join(', ')}`)
+  for (const name of IGNORED) {
+    t.notOk(ELECTRON_PACKAGES.includes(name),
+      `depcheck does not ignore ${name}`)
+  }
+  t.end()
+})
+
+// The other half: you may only ignore something you declare. An entry
+// for a package that is not in the manifest at all is a stale one, and
+// a stale entry is how the list stops meaning anything.
+test('every ignored package is a declared one', function (t) {
+  const declared = new Set(
+    SECTIONS.flatMap((s) => Object.keys(pkg[s] || {}))
+  )
+  for (const name of IGNORED) {
+    t.ok(declared.has(name), `${name} is declared, so ignoring it is real`)
+  }
+  t.end()
+})
+
 test('package.json has no Electron entry point', function (t) {
   t.notOk(pkg.main, 'no "main" field -- Tauri loads static/main.html')
   t.end()
@@ -269,8 +308,15 @@ test('the Babel build no longer builds a main process', function (t) {
   t.notOk(pkg.scripts['build:main'], 'nothing is called build:main')
   t.ok(pkg.scripts.build.includes('build:node'),
     'npm run build runs it')
-  t.ok(pkg.scripts['test-unit'].includes('build:node'),
-    'the unit suite builds it first')
+
+  // The full build, not `build:node` alone. `renderer-boots.js` loads
+  // the emitted Vite bundle, and against a stale `build-vite/` it
+  // reports on whatever the last build happened to leave there --
+  // which is how a bundle that did not load at all passed for two
+  // commits. The negative lookahead is what stops `npm run build:node`
+  // from satisfying this.
+  t.ok(/npm run build(?![:\w])/.test(pkg.scripts['test-unit']),
+    'the unit suite runs the whole build first, Vite included')
   t.end()
 })
 

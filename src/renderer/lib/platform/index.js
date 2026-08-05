@@ -21,6 +21,7 @@ import * as fs from './fs'
 import * as ipcEngine from './ipc-engine'
 import * as ipcOs from './ipc-os'
 import * as menu from './menu'
+import * as paths from './paths'
 import * as shell from './shell'
 import * as window from './window'
 
@@ -31,6 +32,7 @@ export {
   ipcEngine,
   ipcOs,
   menu,
+  paths,
   shell,
   window
 }

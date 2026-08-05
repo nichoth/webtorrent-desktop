@@ -2,6 +2,21 @@
 
 **Date:** 2026-07-29
 
+**Spent as of US-072 (2026-08-04).** This ADR was written with an
+expiry in it -- "US-072 is the single cutover" -- and that story ran.
+Both mechanisms it decided are now removed rather than superseded:
+there is one host, so `src/main/`, `index.js` and the Electron shim
+tree are deleted and `src/renderer/lib/platform/tauri/` is promoted to
+`src/renderer/lib/platform/`; and there is one shim tree, so the
+`WT_HOST` variable, `bin/shim-resolver.js` and the `resolveId` plugin
+that read it are gone with nothing to select between.
+`test/unit/electron-removed.js` asserts both, so this record is now
+history rather than a rule. **Two sections outlive it and are still
+live:** "Target versions" is the current toolchain baseline, and
+"Capabilities known not to survive" is the open work US-081 and US-082
+own. Everything else below describes an arrangement that no longer
+exists.
+
 ## Context
 
 Phases 1 through 3 emptied the renderer of host knowledge. Every

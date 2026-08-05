@@ -2,6 +2,7 @@ import path from 'path'
 
 import { dispatch, reportErrors } from '../lib/dispatcher'
 import { TorrentKeyNotFoundError } from '../lib/errors'
+import * as os from '../lib/os'
 import * as sound from '../lib/sound'
 import * as TorrentSummary from '../lib/torrent-summary'
 import * as clipboard from '../lib/platform/clipboard'
@@ -273,7 +274,7 @@ export default class TorrentListController {
       ...(torrentSummary.files
         ? [
             {
-              label: process.platform === 'darwin' ? 'Show in Finder' : 'Show in Folder',
+              label: os.isDarwin() ? 'Show in Finder' : 'Show in Folder',
               click: () => showItemInFolder(torrentSummary)
             },
             { type: 'separator' }

@@ -7,6 +7,7 @@ import createTorrent from 'create-torrent'
 
 import config from '../../config'
 import * as fs from './platform/fs'
+import * as staticAsset from './static-asset'
 import * as migrations from './migrations'
 
 const defaultAnnounceList = createTorrent.announceList.map((arr) => arr[0])
@@ -15,10 +16,21 @@ const SAVE_DEBOUNCE_INTERVAL = 1000
 
 // The renderer owns this file. It used to be read and written through
 // `application-config`, which reaches for Node's `fs` directly; since
-// US-055 both halves go through the platform shim, so a host without
-// a Node filesystem can back them. The main process reads the same
-// path, read-only, in `src/main/saved-state.js`.
-const STATE_FILE = path.join(config.CONFIG_PATH, 'config.json')
+// US-055 both halves go through the platform shim, so a host without a
+// Node filesystem can back them. Since US-072 the renderer is the only
+// thing that reads it at all -- the Rust host keeps its own window
+// bounds in `src-tauri/src/window.rs`.
+//
+// A function, not a constant, and that is load-bearing. `config
+// .CONFIG_PATH` is empty until the host answers `app_paths`, and
+// `src/renderer/main.js` cannot call `config.useHostPaths` until after
+// this module's body has run -- importing it is what runs it. A path
+// joined at module load would therefore be `./config.json`, relative
+// to whatever the webview considers its working directory, for the
+// life of the process.
+function stateFile () {
+  return path.join(config.CONFIG_PATH, 'config.json')
+}
 
 const State = Object.assign(new EventEmitter(), {
   getDefaultPlayState,
@@ -79,7 +91,7 @@ function getDefaultState () {
      * Windows (> Vista)    %LOCALAPPDATA%/WebTorrent/config.json
      * Windows (XP, 2000)   %USERPROFILE%/Local Settings/Application Data/WebTorrent/config.json
      *
-     * The directory is `config.CONFIG_PATH`; see `STATE_FILE` above.
+     * The directory is `config.CONFIG_PATH`; see `stateFile()` above.
      */
     saved: {},
 
@@ -148,17 +160,25 @@ async function setupStateSaved () {
   await fs.mkdir(config.POSTER_PATH)
   await fs.mkdir(config.TORRENT_PATH)
 
-  // The directories have to exist before anything is copied into them,
-  // so the copies start only once both mkdirs have resolved.
+  // The directories have to exist before anything is written into
+  // them, so the copies start only once both mkdirs have resolved.
+  //
+  // A read-then-write rather than the `fs.copyFile` this used to be:
+  // the source is a bundled file and the destination is in the user's
+  // profile, and after US-072 those are two different worlds. The
+  // profile is on the filesystem, behind the shim's allowlist; the
+  // defaults are inside the document root, embedded in the binary in a
+  // packaged build, where no filesystem path names them at all. Only
+  // the destination half is a path, so only it goes through the shim.
   await Promise.all(config.DEFAULT_TORRENTS.map((t, i) => {
     const infoHash = saved.torrents[i].infoHash
     return Promise.all([
-      fs.copyFile(
-        path.join(config.STATIC_PATH, t.posterFileName),
+      copyBundled(
+        t.posterFileName,
         path.join(config.POSTER_PATH, infoHash + path.extname(t.posterFileName))
       ),
-      fs.copyFile(
-        path.join(config.STATIC_PATH, t.torrentFileName),
+      copyBundled(
+        t.torrentFileName,
         path.join(config.TORRENT_PATH, infoHash + '.torrent')
       )
     ])
@@ -166,8 +186,12 @@ async function setupStateSaved () {
 
   return saved
 
+  async function copyBundled (name, dest) {
+    await fs.writeFile(dest, await staticAsset.read(name))
+  }
+
   async function createTorrentObject (t) {
-    const bytes = await fs.readFile(path.join(config.STATIC_PATH, t.torrentFileName))
+    const bytes = await staticAsset.read(t.torrentFileName)
     // The shim resolves a plain `Uint8Array`; parse-torrent only accepts
     // a `Buffer`. `Buffer.from(view)` copies, so wrap the same memory.
     const torrent = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)
@@ -260,7 +284,7 @@ async function load (cb) {
  */
 async function readSavedState () {
   try {
-    const bytes = await fs.readFile(STATE_FILE)
+    const bytes = await fs.readFile(stateFile())
     return JSON.parse(new TextDecoder().decode(bytes))
   } catch (err) {
     return null
@@ -280,12 +304,12 @@ async function readSavedState () {
  */
 async function writeSavedState (saved) {
   await fs.mkdir(config.CONFIG_PATH)
-  await fs.writeFile(STATE_FILE, JSON.stringify(saved, null, '\t') + '\n')
+  await fs.writeFile(stateFile(), JSON.stringify(saved, null, '\t') + '\n')
 }
 
 // Write state.saved to the JSON state file
 async function saveImmediate (state, cb) {
-  console.log('Saving state to ' + STATE_FILE)
+  console.log('Saving state to ' + stateFile())
 
   // Clean up, so that we're not saving any pending state
   const copy = Object.assign({}, state.saved)

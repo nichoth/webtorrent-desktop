@@ -84,6 +84,28 @@ const rendererEvents = fileURLToPath(
   new URL('./src/renderer/lib/events.js', import.meta.url)
 )
 
+// `stream` and `util` are aliased on the same terms again, and they
+// are the two that are not dead code. `through2`'s bundled
+// `readable-stream@1.x` inherits from `stream` in its module body and
+// `through2` itself calls `util.inherits` in its own, and `srt-to-vtt`
+// -- a static import of `controllers/subtitles-controller.js` --
+// brings both in. Left un-aliased they are the empty object again, so
+// the bundle died at load twice over. Each file's doc comment says why
+// its deliberately small surface is the whole requirement.
+//
+// `lib/stream.js` is CommonJS while its three siblings are ESM,
+// because a CJS `require()` of an ESM module yields a namespace
+// object: fine for `path`/`events`/`util`, whose consumers only read a
+// property off it, and useless for `stream`, which is called as
+// `Stream.call(this)`.
+const rendererStream = fileURLToPath(
+  new URL('./src/renderer/lib/stream.js', import.meta.url)
+)
+
+const rendererUtil = fileURLToPath(
+  new URL('./src/renderer/lib/util.js', import.meta.url)
+)
+
 // `application-config` is dead code in this bundle -- `getConfigPath()`
 // never reaches it in a webview -- but dead code still runs: a static
 // ESM import of a CommonJS module evaluates it at the importer's
@@ -108,17 +130,23 @@ const applicationConfigStub = fileURLToPath(
 // rewrites an un-externalized builtin to an **empty object** rather
 // than to an error, so the failure moves rather than disappearing: the
 // next thing to run is `os.platform()` inside `application-config`,
-// which is `undefined()`. Two builtins therefore have real
+// which is `undefined()`. Four builtins therefore have real
 // first-party implementations aliased in above -- `path`
-// (`lib/path.js`, ADR-011) and `events` (`lib/events.js`) -- and
-// `src/config.js` no longer reads a Node global at load.
+// (`lib/path.js`, ADR-011), `events` (`lib/events.js`), `stream`
+// (`lib/stream.js`) and `util` (`lib/util.js`) -- and `src/config.js`
+// no longer reads a Node global at load.
 //
-// What is left resolves to that empty object, and every one of them is
-// reached only from code that cannot work in a webview anyway:
+// Those four are exactly the ones a module body *calls* into. Finding
+// them was iterative rather than analytical, and has to be: each fix
+// only reveals the next `undefined()` one frame further in, so the
+// procedure is to run `test/unit/renderer-boots.js` and read the
+// stack, not to reason about the list. What is left resolves to that
+// empty object, and every one of them is reached only from code that
+// cannot work in a webview anyway:
 //
-// - `fs`, `util`, `os`, `stream`: the `application-config` stack
-//   under `src/config.js`. Its module body never runs now, because
-//   `getConfigPath()` stops before constructing it.
+// - `fs`, `os`: the `application-config` stack under `src/config.js`.
+//   Its module body never runs now, because `getConfigPath()` stops
+//   before constructing it.
 // - `http`, `https`, `net`, `tls`, `dgram`, `url`, `querystring`,
 //   `timers`: the casting stack under `lib/cast.js`, whose three
 //   `require()` calls are inside `init()` and so never evaluate at
@@ -128,19 +156,64 @@ const applicationConfigStub = fileURLToPath(
 // `test/unit/renderer-boots.js` runs the emitted bundle in a
 // webview-shaped sandbox with no `require` and no `process`, which is
 // what holds all of this in place.
-// No `define` for `process`.
+
+// `process` is the same problem as the builtins, one level down, and
+// it gets a different answer because it is a *global* rather than a
+// module: there is nothing to alias.
 //
-// This used to map `process.env` to `globalThis.process.env`, which
-// under Electron's `nodeIntegration: true` handed back the real
-// environment. The Tauri webview has no `globalThis.process` either,
-// so the mapping turned one failure into another. Vite's own default
-// applies instead: bare `process.env` becomes `{}` and
-// `process.env.NODE_ENV` becomes the mode, which is what React and
-// friends want. `src/config.js` reads its own guarded reference
-// rather than relying on either substitution.
+// Nothing first-party needs the substitutions below. The renderer's
+// own four reads of `process.platform` moved to `lib/os.js` in
+// US-072, and the two that remain -- in `lib/path.js` and
+// `src/config.js` -- are behind `typeof process !== 'undefined'`
+// guards and correctly take the "no Node here" branch on their own.
+// `test/unit/os.js` is what keeps it that way.
+//
+// What is left is bundled dependencies written for Node, reading these
+// keys in their module bodies, where `undefined` is a load-time throw
+// rather than a dormant one. Each value below is the honest webview
+// answer rather than a plausible-looking Node one, and the list is
+// short because it is exactly what the boot test demanded -- do not
+// add to it speculatively.
+const PROCESS_SHIM = {
+  // The browser equivalent, with the arguments forwarded: Node's
+  // `nextTick` takes them (`process.nextTick(upgrade, 42)` is in the
+  // bundle) and `queueMicrotask` does not. This one has to *work*, not
+  // merely not throw -- `readable-stream` schedules every callback
+  // through it, and that is the live subtitle path.
+  'process.nextTick': '((fn, ...args) => queueMicrotask(() => fn(...args)))',
+
+  // What `process.browser` is for. Several dependencies branch on it
+  // to pick their non-Node path, which is the one we want.
+  'process.browser': 'true',
+
+  // There is no Node version here, and the empty string is what the
+  // three readers do the right thing with: they all test it for the
+  // 0.x series (`/^v?\.0/`, `.indexOf('v0.')`, `.slice(0, 5)`) to
+  // decide whether to work around an ancient runtime, and no match is
+  // the modern branch.
+  'process.version': '""',
+
+  // Compared by identity, never called: `readable-stream`'s `pipe()`
+  // exempts the two standard streams from its automatic `end()`.
+  // Neither exists in a webview, so no destination can be one.
+  'process.stdout': 'undefined',
+  'process.stderr': 'undefined'
+}
+
+// No `define` for `process.env`, deliberately.
+//
+// This used to map it to `globalThis.process.env`, which under
+// Electron's `nodeIntegration: true` handed back the real environment.
+// The Tauri webview has no `globalThis.process` either, so the mapping
+// turned one failure into another. Vite's own default applies instead:
+// bare `process.env` becomes `{}` and `process.env.NODE_ENV` becomes
+// the mode, which is what React and friends want. `src/config.js`
+// reads its own guarded reference rather than relying on either
+// substitution.
 
 export default defineConfig({
   plugins: [jsxInJs],
+  define: PROCESS_SHIM,
   resolve: {
     alias: [
       {
@@ -151,6 +224,10 @@ export default defineConfig({
       { find: /^node:path$/, replacement: rendererPath },
       { find: /^events$/, replacement: rendererEvents },
       { find: /^node:events$/, replacement: rendererEvents },
+      { find: /^stream$/, replacement: rendererStream },
+      { find: /^node:stream$/, replacement: rendererStream },
+      { find: /^util$/, replacement: rendererUtil },
+      { find: /^node:util$/, replacement: rendererUtil },
       {
         find: /^application-config$/,
         replacement: applicationConfigStub

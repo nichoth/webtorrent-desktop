@@ -94,6 +94,37 @@ const NO_DOM = ['error',
   { name: 'XMLHttpRequest', message: 'The engine is a Node process.' }
 ]
 
+// The mirror-image rule for the renderer, and the one US-072 needed.
+// `process` was readable from the UI only because the Electron window
+// ran with `nodeIntegration: true`; a webview has no such global, so a
+// bare read is a `ReferenceError` at whatever moment it happens to
+// run. Two of the four in the tree ran at module scope, which meant a
+// blank window rather than a broken feature -- the worst possible
+// failure mode for the one thing there is no test-shaped signal for.
+//
+// `lib/os.js` answers the only question the UI actually asked (which
+// OS) from `navigator` instead; anything else belongs to the host and
+// goes through the shim. `test/unit/os.js` scans the source for the
+// spellings a rule about identifiers cannot see.
+const NO_NODE_GLOBALS = ['error',
+  {
+    name: 'process',
+    message: 'The webview has no `process` -- see src/renderer/lib/os.js.'
+  },
+  {
+    name: 'global',
+    message: 'The webview has no `global` -- use `globalThis`.'
+  },
+  {
+    name: '__dirname',
+    message: 'The webview has no module paths -- ask the host.'
+  },
+  {
+    name: '__filename',
+    message: 'The webview has no module paths -- ask the host.'
+  }
+]
+
 const RESTRICTED = ['error', {
   patterns: [...TAURI_API],
   paths: [
@@ -140,7 +171,22 @@ module.exports = {
   overrides: [
     {
       files: ['src/renderer/**/*.js'],
-      rules: { 'no-restricted-imports': RESTRICTED }
+      rules: {
+        'no-restricted-imports': RESTRICTED,
+        'no-restricted-globals': NO_NODE_GLOBALS
+      }
+    },
+    {
+      // `lib/path.js` is Node's `path` algorithms, and `resolve()` has
+      // to resolve a relative segment against *something*. It reads
+      // `process.cwd()` behind a `typeof process !== 'undefined'`
+      // guard -- the real one under the unit suite, `/` in the webview
+      // -- which is the same shape `src/config.js` uses, and the only
+      // spelling that is safe where the global is absent.
+      // `test/unit/os.js` asserts the guard is still there, so this
+      // exemption cannot decay into an unguarded read.
+      files: ['src/renderer/lib/path.js'],
+      rules: { 'no-restricted-globals': 'off' }
     },
     {
       // The shim is the boundary; it is the one place that is meant to

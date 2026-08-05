@@ -338,6 +338,52 @@ test('the renderer is not policed by the engine rules', async function (t) {
   t.end()
 })
 
+// US-072: the mirror image of the engine's DOM ban. The renderer runs
+// in a webview now, and a webview has no Node globals -- so the ban
+// runs in both directions and each tree is policed for the other's
+// surface.
+test('the renderer may not touch a Node global', async function (t) {
+  for (const name of ['process', 'global', '__dirname', '__filename']) {
+    const messages = await lintAs(
+      'export default ' + name + '.x\n', 'src/renderer/probe.js')
+    const restricted = messages
+      .filter((m) => m.ruleId === 'no-restricted-globals')
+    t.equal(restricted.length, 1, name + ' is rejected in the renderer')
+  }
+  t.end()
+})
+
+test('the engine is not policed by the renderer rules', async function (t) {
+  // The sidecar is a plain Node process (ADR-012) and these are its
+  // native surface. Asserted because the two `no-restricted-globals`
+  // lists live in one file and the wrong `files` glob would swap them
+  // without either tree noticing.
+  const messages = await lintAs(
+    'export default process.pid + __dirname\n', ENGINE)
+  t.deepEqual(
+    messages.filter((m) => m.ruleId === 'no-restricted-globals'), [],
+    'the engine is Node and may say process')
+  t.end()
+})
+
+test('lib/path.js keeps its guarded process read', async function (t) {
+  // The one exemption. It is a file-scoped override rather than a
+  // blanket one, so the check is that the *neighbouring* file does not
+  // inherit it -- an override with a sloppy glob is indistinguishable
+  // from no rule at all.
+  const source = "export default typeof process !== 'undefined' ? 1 : 2\n"
+  const exempt = await lintAs(source, 'src/renderer/lib/path.js')
+  t.deepEqual(
+    exempt.filter((m) => m.ruleId === 'no-restricted-globals'), [],
+    'lib/path.js may read process behind its guard')
+
+  const neighbour = await lintAs(source, 'src/renderer/lib/os.js')
+  t.equal(
+    neighbour.filter((m) => m.ruleId === 'no-restricted-globals').length, 1,
+    'the exemption does not leak to the rest of lib/')
+  t.end()
+})
+
 // The real tree has to be clean, or the rule is decorative.
 test('every real renderer source passes the boundary rule',
   async function (t) {

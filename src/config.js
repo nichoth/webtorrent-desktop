@@ -2,13 +2,13 @@
 //
 // Dual consumption
 // ----------------
-// `src/renderer/` is being converted to ESM, while `src/main/` stays
-// CommonJS. Babel compiles this file to CommonJS for both, so the two
-// consumption styles have to keep working side by side:
+// `src/renderer/` is ESM and the engine sidecar (ADR-012) is the Babel
+// CommonJS output, so the two consumption styles have to keep working
+// side by side:
 //
 //   import config, { APP_NAME } from '../config'   // ESM renderer
-//   const config = require('../config')            // CommonJS main
-//   const { APP_NAME } = require('../config')      // CommonJS main
+//   const config = require('../config')            // CommonJS sidecar
+//   const { APP_NAME } = require('../config')      // CommonJS sidecar
 //
 // That is why every value is exported twice: once as a named export
 // (which Babel emits as `exports.APP_NAME`, so `config.APP_NAME` and
@@ -16,7 +16,8 @@
 // export object (so ESM `import config from '../config'` gets the same
 // flat object it used to get from `require`). The two must be kept in
 // sync -- a value added to one but not the other silently disappears
-// for half the codebase.
+// for half the codebase, and `useHostPaths` at the bottom of the file
+// writes to both for that reason.
 //
 // A third consumer exists: the dev scripts in `bin/` require this file
 // straight from source, so Node loads it as real ESM rather than
@@ -86,7 +87,9 @@ const PORTABLE_PATH = !NODE_PROCESS
     ? path.join(NODE_PROCESS.platform === 'win32' ? 'C:\\Windows\\Temp' : '/tmp', 'WebTorrentTest')
     : path.join(path.dirname(NODE_PROCESS.execPath), 'Portable Settings')
 export const IS_PRODUCTION = isProduction()
-export const IS_PORTABLE = isPortable()
+// `let`, not `const`, for the same reason as `CONFIG_PATH` below: the
+// webview cannot decide this and `useHostPaths` fills it in.
+export let IS_PORTABLE = isPortable()
 
 export const UI_HEADER_HEIGHT = 38
 export const UI_TORRENT_HEIGHT = 100
@@ -98,7 +101,12 @@ export const APP_FILE_ICON = path.join(DIRNAME, '..', 'static', 'WebTorrentFile'
 export const APP_ICON = path.join(DIRNAME, '..', 'static', 'WebTorrent')
 export const APP_WINDOW_TITLE = APP_NAME
 
-export const CONFIG_PATH = getConfigPath()
+// The four values below, plus `IS_PORTABLE` above, are the ones a
+// webview cannot work out for itself. They are `let` because
+// `useHostPaths` replaces them at startup with the layout the host
+// resolved; everything else in this file is the same in every runtime.
+// See `useHostPaths` at the bottom of the file.
+export let CONFIG_PATH = getConfigPath()
 
 export const DEFAULT_TORRENTS = [
   {
@@ -135,7 +143,7 @@ export const DEFAULT_TORRENTS = [
 
 export const DELAYED_INIT = 3000 /* 3 seconds */
 
-export const DEFAULT_DOWNLOAD_PATH = getDefaultDownloadPath()
+export let DEFAULT_DOWNLOAD_PATH = getDefaultDownloadPath()
 
 export const GITHUB_URL = 'https://github.com/webtorrent/webtorrent-desktop'
 export const GITHUB_URL_ISSUES = 'https://github.com/webtorrent/webtorrent-desktop/issues'
@@ -147,10 +155,9 @@ export const TWITTER_PAGE_URL = 'https://twitter.com/WebTorrentApp'
 
 export const OS_SYSARCH = arch() === 'x64' ? 'x64' : 'ia32'
 
-export const POSTER_PATH = path.join(getConfigPath(), 'Posters')
+export let POSTER_PATH = path.join(getConfigPath(), 'Posters')
 export const ROOT_PATH = path.join(DIRNAME, '..')
-export const STATIC_PATH = path.join(DIRNAME, '..', 'static')
-export const TORRENT_PATH = path.join(getConfigPath(), 'Torrents')
+export let TORRENT_PATH = path.join(getConfigPath(), 'Torrents')
 
 export const WINDOW_ABOUT = 'file://' + path.join(DIRNAME, '..', 'static', 'about.html')
 export const WINDOW_MAIN = 'file://' + path.join(DIRNAME, '..', 'static', 'main.html')
@@ -163,7 +170,13 @@ export const WINDOW_MIN_HEIGHT = UI_HEADER_HEIGHT + (UI_TORRENT_HEIGHT * 2) // h
 export const WINDOW_MIN_WIDTH = 425
 
 // Keep in sync with the named exports above.
-export default {
+//
+// Named rather than an anonymous object literal so `useHostPaths` has
+// something to write to: the default export and the named exports are
+// two separate surfaces onto the same values, and a bootstrap that
+// moved only one would hand the two halves of the codebase different
+// answers with nothing failing.
+const defaults = {
   AUTO_UPDATE_URL,
 
   APP_COPYRIGHT,
@@ -198,7 +211,6 @@ export default {
 
   POSTER_PATH,
   ROOT_PATH,
-  STATIC_PATH,
   TORRENT_PATH,
 
   WINDOW_ABOUT,
@@ -212,6 +224,47 @@ export default {
   UI_TORRENT_HEIGHT
 }
 
+export default defaults
+
+/**
+ * Take the user-data layout from the host.
+ *
+ * These five values are the only ones in this file a webview cannot
+ * work out for itself: where the profile lives depends on the
+ * platform's convention for application support directories, on
+ * `$HOME`, on the XDG user-dirs config on Linux, and on whether the
+ * install is a portable Windows one -- and a document knows none of
+ * that. Everything else here is a constant, a version string, or
+ * derived from those, and is the same in every runtime.
+ *
+ * The host has resolved the same layout since US-054, in
+ * `src-tauri/src/paths.rs`. `src/renderer/main.js` fetches it through
+ * `lib/platform/paths.js` and calls this once, before `State.load`, so
+ * that every later reader of `config.CONFIG_PATH` and its siblings
+ * sees the host's answer rather than the empty strings the getters
+ * below return off-host.
+ *
+ * Deliberately not an `Object.assign` of the payload: `AppPaths` also
+ * carries `tempPath`, and a future field of it would silently become a
+ * config key nobody declared. Each move is written out, and both
+ * spellings of each value are written together.
+ *
+ * @param {object} paths The host's `AppPaths`, camelCased by serde.
+ */
+export function useHostPaths (paths) {
+  CONFIG_PATH = paths.configPath
+  TORRENT_PATH = paths.torrentPath
+  POSTER_PATH = paths.posterPath
+  DEFAULT_DOWNLOAD_PATH = paths.defaultDownloadPath
+  IS_PORTABLE = paths.isPortable
+
+  defaults.CONFIG_PATH = CONFIG_PATH
+  defaults.TORRENT_PATH = TORRENT_PATH
+  defaults.POSTER_PATH = POSTER_PATH
+  defaults.DEFAULT_DOWNLOAD_PATH = DEFAULT_DOWNLOAD_PATH
+  defaults.IS_PORTABLE = IS_PORTABLE
+}
+
 function getConfigPath () {
   if (IS_PORTABLE) {
     return PORTABLE_PATH
@@ -220,12 +273,11 @@ function getConfigPath () {
   // The webview cannot resolve this: the directory depends on the
   // platform and on `$HOME`, and it has neither. The host already
   // knows it -- `src-tauri/src/paths.rs` resolves the whole layout and
-  // `app_paths` hands it over -- but nothing in the renderer consumes
-  // that command yet, so `CONFIG_PATH` is empty in the webview and
-  // `lib/state.js` falls back to a default state rather than reading a
-  // saved one. That gap is recorded for US-072 in progress.log; it is
-  // the renderer half of US-054 and it needs a bootstrap that can
-  // await the host, which is a decision rather than an oversight.
+  // `app_paths` hands it over -- so what is returned here is only ever
+  // the value `useHostPaths` above replaces, a few milliseconds into
+  // startup and before anything reads it. The empty string is the
+  // honest placeholder: a plausible-looking guess would be a profile
+  // created in the wrong place rather than a visible failure.
   if (!NODE_PROCESS) {
     return ''
   }
@@ -245,16 +297,19 @@ function getDefaultDownloadPath () {
 // belonged to Electron and left with it in US-072. The host owns it
 // now: `src-tauri/src/paths.rs` resolves the whole layout, downloads
 // directory included, and hands it to the renderer through the
-// `app_paths` command.
+// `app_paths` command, which `useHostPaths` above takes delivery of.
 //
-// Nothing in the renderer consumes that command yet, so this returns
-// `''` -- which is exactly what it already returned in the two
-// processes that are left. The engine sidecar (ADR-012) is a plain
+// So this returns `''` -- exactly what it already returned in the two
+// runtimes that are left. The engine sidecar (ADR-012) is a plain
 // Node process and never had a `process.type`, and the Tauri webview
-// has no `process` at all. The remaining caller is
-// `DEFAULT_DOWNLOAD_PATH`, so a profile created before the renderer
-// reads `app_paths` gets an empty default download directory. That is
-// recorded as an open gap in progress.log for US-072, not a decision.
+// has no `process` at all. Its one caller is `DEFAULT_DOWNLOAD_PATH`,
+// whose module-load value the bootstrap replaces before `State.load`
+// reads it.
+//
+// Kept as a named function rather than folded into its caller because
+// the empty string is a claim about this runtime, and the next person
+// to wonder where the downloads directory went should land on this
+// comment rather than on a bare `''`.
 function getPath (key) {
   return ''
 }

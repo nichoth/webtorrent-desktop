@@ -62,11 +62,31 @@ const RENDERER_CONFIG = {
     torrentFileName: 'bigBuckBunny.torrent'
   }],
   POSTER_PATH: path.join(TMP, 'Posters'),
-  STATIC_PATH: path.join(ROOT, 'static'),
   TORRENT_PATH: path.join(TMP, 'Torrents')
 }
 
 const STATE_FILE = path.join(RENDERER_CONFIG.CONFIG_PATH, 'config.json')
+
+// The bundled files a fresh profile is seeded from. There used to be a
+// `STATIC_PATH` in the config above and `lib/state.js` joined paths
+// onto it; since US-072 they are fetched relative to the document
+// through `lib/static-asset.js`, because in a packaged build they are
+// embedded in the binary and no filesystem path names them.
+//
+// `fetch` and `document` are both absent here, so the module is
+// stubbed with the same contract over the repo's real `static/`: a
+// name in, the bytes out, as a `Uint8Array`. That keeps the seeding
+// assertions below about real files.
+const assetPath = require.resolve('../../build/renderer/lib/static-asset')
+const assetReads = []
+const staticAssetStub = {
+  __esModule: true,
+  url: (name) => 'tauri://localhost/static/' + name,
+  read: async (name) => {
+    assetReads.push(name)
+    return new Uint8Array(fs.readFileSync(path.join(ROOT, 'static', name)))
+  }
+}
 
 // A recording wrapper around a filesystem-backed stand-in for the
 // shim, so the assertions are about real filesystem behaviour and
@@ -89,23 +109,33 @@ for (const name of Object.keys(backing)) {
   }
 }
 
-const previousShim = require.cache[shimPath]
-require.cache[shimPath] = {
-  id: shimPath,
-  filename: shimPath,
-  loaded: true,
-  exports: recordingShim
+function seed (modulePath, exports) {
+  const previous = require.cache[modulePath]
+  require.cache[modulePath] = {
+    id: modulePath,
+    filename: modulePath,
+    loaded: true,
+    exports
+  }
+  return function withdraw () {
+    if (previous) require.cache[modulePath] = previous
+    else delete require.cache[modulePath]
+  }
 }
+
+const withdrawShim = seed(shimPath, recordingShim)
+const withdrawAsset = seed(assetPath, staticAssetStub)
 
 const State = withConfig(
   RENDERER_CONFIG,
   () => require('../../build/renderer/lib/state').default
 )
 
-// Withdrawn now that `state` has bound it: `platform-fs.js` later in
-// the same run tests the real module at this path.
-if (previousShim) require.cache[shimPath] = previousShim
-else delete require.cache[shimPath]
+// Withdrawn now that `state` has bound them: `platform-fs.js` and
+// `static-asset.js` later in the same run test the real modules at
+// these paths.
+withdrawShim()
+withdrawAsset()
 
 function load () {
   return new Promise((resolve, reject) => {
@@ -126,6 +156,7 @@ test('load() creates a fresh profile through the fs shim', async (t) => {
   fs.rmSync(RENDERER_CONFIG.POSTER_PATH, { recursive: true, force: true })
   fs.rmSync(RENDERER_CONFIG.TORRENT_PATH, { recursive: true, force: true })
   shimCalls.length = 0
+  assetReads.length = 0
 
   const state = await load()
 
@@ -156,6 +187,54 @@ test('load() creates a fresh profile through the fs shim', async (t) => {
     state.saved.version, RENDERER_CONFIG.APP_VERSION,
     'migrations ran and left the config on the current version'
   )
+
+  // The seeding half of US-072. The bundled poster and .torrent are
+  // read as bundled files and written into the profile through the
+  // shim, rather than copied from one filesystem path to another --
+  // there is no filesystem path to copy from in a packaged build.
+  // Distinct names: the .torrent is read twice, once to parse its
+  // infoHash and once to write it into the profile, exactly as it was
+  // read twice before this changed.
+  t.deepEqual(
+    Array.from(new Set(assetReads)).sort(),
+    ['bigBuckBunny.jpg', 'bigBuckBunny.torrent'],
+    'the defaults were read as bundled files, by name'
+  )
+  t.deepEqual(
+    calls('copyFile'), [],
+    'and nothing was copied from a static path'
+  )
+  t.end()
+})
+
+test('the state file follows the path the host supplies', async (t) => {
+  // Ordering, and it is the whole reason `STATE_FILE` is resolved on
+  // each call rather than once at module load. `src/renderer/main.js`
+  // imports this module -- which runs its module body -- and only then
+  // awaits the host and calls `config.useHostPaths`. A path captured
+  // at import time would be the empty one every time, so every read
+  // and write would land on a relative `config.json` beside whatever
+  // the webview considers its working directory.
+  //
+  // Mutating the config stub is exactly what `useHostPaths` does to
+  // the real module: it reassigns the same keys on the same object.
+  const original = RENDERER_CONFIG.CONFIG_PATH
+  const moved = path.join(TMP, 'MovedByTheHost')
+  fs.rmSync(moved, { recursive: true, force: true })
+  RENDERER_CONFIG.CONFIG_PATH = moved
+  shimCalls.length = 0
+
+  try {
+    await State.saveImmediate({ saved: { version: '9.9.9', torrents: [] } })
+    const movedFile = path.join(moved, 'config.json')
+    t.ok(
+      calls('writeFile').some(([, p]) => p === movedFile),
+      'the write went to the host path, not the one bound at import'
+    )
+    t.ok(fs.existsSync(movedFile), 'and the file is really there')
+  } finally {
+    RENDERER_CONFIG.CONFIG_PATH = original
+  }
   t.end()
 })
 

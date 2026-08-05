@@ -25,6 +25,12 @@ const REPO = path.join(__dirname, '..', '..')
 const BUNDLE = path.join(REPO, 'build-vite', 'renderer', 'main.js')
 
 // `npm run test-unit` runs `npm run build` first, which builds this.
+// That is why it runs the full build and not just `build:node`: this
+// file is the only test that asserts on the Vite output, and against a
+// stale `build-vite/` it reports on whatever the last build happened
+// to leave there -- which passed for two commits while the bundle in
+// the tree did not load at all.
+//
 // Said out loud because the alternative failure -- every assertion
 // below skipped -- reads as a pass.
 test('the renderer bundle was built', function (t) {
@@ -158,7 +164,27 @@ function webviewSandbox () {
     Event: function Event () {},
     CustomEvent: function CustomEvent () {},
     fetch: () => Promise.reject(new Error('offline in this test')),
-    WebSocket: function WebSocket () {}
+    WebSocket: function WebSocket () {},
+
+    // What Tauri injects into the real webview, and what the platform
+    // shim reaches `invoke` through. Present because a real webview
+    // has it -- leaving it out would make this sandbox *less* faithful
+    // rather than stricter.
+    //
+    // `invoke` never settles, on purpose. Only the synchronous
+    // module-initialization phase is under test here; the host is a
+    // separate process and answering for it would mean stubbing the
+    // whole command surface. A promise that stays pending stops the
+    // bundle's startup chain at the first host call and leaves nothing
+    // scheduled -- whereas rejecting would run `main.js`'s `onError`
+    // before `onState` has assigned `state`, and that throw lands on a
+    // later tick, outside any `try` this file can write, where it
+    // takes the whole `tape` process down with it.
+    __TAURI_INTERNALS__: {
+      invoke: () => new Promise(() => {}),
+      transformCallback: (fn) => fn,
+      convertFileSrc: (src) => src
+    }
   })
 
   sandbox.window = sandbox

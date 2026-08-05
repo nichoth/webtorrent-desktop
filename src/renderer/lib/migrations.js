@@ -6,7 +6,34 @@ import semver from 'semver'
 import config from '../../config'
 import * as fs from './platform/fs'
 import * as ipcOs from './platform/ipc-os'
+import * as staticAsset from './static-asset'
 import * as TorrentSummary from './torrent-summary'
+
+/**
+ * Put a file into the user's profile, wherever it is coming from.
+ *
+ * Old configs name their torrents and posters three ways, and US-072
+ * split those three into two kinds rather than leaving them one. An
+ * absolute path is a file of the user's, on the filesystem, and goes
+ * through the shim as it always did. Anything relative names one of
+ * the app's own bundled defaults -- `'sintel.torrent'` in later
+ * releases, `'../static/sintel.torrent'` in earlier ones, both
+ * resolved against the app directory under Electron -- and a webview
+ * has no directory to resolve either against. In a packaged build
+ * those files are embedded in the binary, so the only thing that names
+ * them is their name.
+ *
+ * `path.basename` is what reduces the older spelling to the newer: the
+ * `../static/` prefix is a fact about the repository layout in 2016,
+ * not about the user's disk.
+ */
+async function copyIntoProfile (src, dest) {
+  if (path.isAbsolute(src)) {
+    await fs.copyFile(src, dest)
+  } else {
+    await fs.writeFile(dest, await staticAsset.read(path.basename(src)))
+  }
+}
 
 // Change `state.saved` (which will be saved back to config.json on exit) as
 // needed, for example to deal with config.json format changes across versions
