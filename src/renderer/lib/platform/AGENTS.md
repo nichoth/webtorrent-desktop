@@ -257,11 +257,14 @@ engine seam be reimplemented without touching `ipc-os.js`.
   shim spread it, so both trees hand the caller the same
   `(first, ...rest)`. The parity test only checks arity, so a shim
   that forgets to spread passes it and hands the caller one array.
-- A **request/response export** (`checkForExternalPlayer`,
-  `getEngineEndpoint`) is a `send` plus an `ipcRenderer.once` on the
-  same channel name, and it never resolves without a main-process
-  answer. Two consequences: the main side must reply on that channel
-  (a `windows.main.send` or `e.sender.send`, not a `return`), and the
-  export has to go in the `skip` list of the "no export sends on a
-  wt-* channel" test in `test/unit/platform-ipc-os.js`, which calls
-  every export with no arguments and would otherwise hang.
+- The two **request/response exports** (`checkForExternalPlayer`,
+  `getEngineEndpoint`) were a `send` plus an `ipcRenderer.once` on the
+  same channel under Electron, which is why they read as the odd ones
+  out. Under Tauri they are ordinary `invoke` calls that resolve with
+  what the command returned -- the pair collapsed into the promise the
+  callers already had. Both still *wait on the host*, though, and
+  their commands are `async` for that reason (US-070, US-080): the
+  engine one waits out a sidecar restart, and the external-player one
+  probes every place VLC might be, a process each. A synchronous
+  command would do either on the main thread with the window frozen
+  behind it.

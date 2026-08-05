@@ -1347,7 +1347,7 @@
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 80,
-      "passes": false,
+      "passes": true,
       "notes": ""
     },
     {

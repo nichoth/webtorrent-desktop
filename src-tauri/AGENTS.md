@@ -217,6 +217,79 @@ the host is gone is the orphan check -- run it for both quits, a
 `pkill` of the host (the force-quit path, where only the pipe can
 work) and a real Cmd-Q through `osascript`.
 
+## The external player is a child nobody reaps
+
+`src/external_player.rs` is `src/main/external-player.js` plus the
+`vlc-command` package, which is not a dependency any more. Three things
+about it are not local to the file:
+
+- **A spawned player outlives the host, on purpose.** Nothing kills it
+  on `RunEvent::Exit` -- Electron leaves it running too, and a check
+  confirmed VLC still playing after the host was killed. The only kill
+  is `quit_external_player`, and it is silent: the renderer asked, so
+  the renderer is not told.
+- **`check_for_external_player` and `open_external_player` are
+  `async`.** The lookup runs a `--version` probe per candidate, each
+  one a process, and `open` also hands the media keys back, which
+  deadlocks from a synchronous command (see the global-shortcut entry
+  below). Both do their blocking on `spawn_blocking`.
+- **`vlc-command`'s Linux list contains a command line, not a path.**
+  `flatpak run org.videolan.VLC` is spawned here as a program plus two
+  arguments; spawning the whole string, as the JS does, is an `ENOENT`
+  upstream that only the shell-backed `--version` probe hid. Only that
+  one entry goes through `Launch::parse`: splitting the rest on
+  whitespace would turn a home directory with a space in it into a
+  program and an argument.
+
+## Driving a real player, or anything that needs a stream
+
+A host feature that hands a URL to another application can be checked
+end to end without a torrent: `say -o probe.aiff "$(python3 -c "print('a
+sentence. '*40)")"` makes a media file a couple of minutes long,
+`python3 -m http.server 8765 --bind 127.0.0.1` serves it out of that
+directory with an access log, and the probe passes that URL instead of
+the engine's. VLC then really launches, and there are three independent
+reads of it: the host's own log line, `ps -axo pid,command` showing the
+full argument list it was given, and a `GET ... 200` in the server's
+log, which is the only one that says the *stream* was reached rather
+than the process started. Worth copying for US-076 to US-078, where a
+cast device needs the same thing.
+
+## Drive the commands from `setup()`, not from the webview
+
+The `append_invoke_initialization_script` probe two sections down is
+the *second* choice, because it only reports when the page loads and
+on this machine that is not every launch. A `std::env::var` escape
+hatch at the end of `setup()` has none of that flakiness and can call
+the `#[tauri::command]` functions themselves:
+
+```rust
+if let Ok(url) = std::env::var("WT_PROBE_PLAYER") {
+    let handle = app.handle().clone();
+    handle.listen(DISPATCH_EVENT, |e| println!("WTPROBE {}", e.payload()));
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(2));
+        let answer = tauri::async_runtime::block_on(
+            open_external_player(handle.clone(), handle.state(),
+                handle.state(), handle.state(), None, url, title));
+        println!("WTPROBE open {answer:?}");
+    });
+}
+```
+
+Four things make it work. `handle.state()` infers each borrowed
+`tauri::State` argument, so an `async` command's real signature can be
+called as written; `tauri::async_runtime::block_on` runs it from an
+ordinary thread; the sleep is there because managed state is only
+complete once `setup()` returns; and `handle.listen(DISPATCH_EVENT,
+..)` receives what `app.emit` sends, so the dispatches a renderer
+would see are readable with no renderer. That last one is what makes
+this strictly better than the script probe for anything whose result
+arrives as a dispatch. Revert the hatch and grep for its name before
+committing, and remember the single-instance socket (below) between
+runs -- a launch that finds a ghost exits silently with status 0, and
+that looks exactly like a probe that did not print.
+
 ## Gates
 
 `cargo fmt --check` and `cargo clippy -- -D warnings` are gates from

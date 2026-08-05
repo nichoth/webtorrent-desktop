@@ -164,6 +164,22 @@ it tight.
   macOS `cargo clippy` checks it in full -- only the *selection* is
   `cfg`'d); and keep the untestable branch down to a couple of
   `extern` declarations, as the Windows one is.
+- **Drive a host command from `setup()` before reaching for the
+  webview probe (US-080).** A `std::env::var` escape hatch at the end
+  of `setup()` can call the `#[tauri::command]` functions themselves:
+  `handle.state()` infers each borrowed `tauri::State` argument, so an
+  `async` command's real signature is callable through
+  `tauri::async_runtime::block_on` from an ordinary thread, and
+  `handle.listen(DISPATCH_EVENT, ..)` receives what `app.emit` sends,
+  so the dispatches a renderer would see are readable with no
+  renderer. That is the whole of what a script probe was for, minus
+  its one real failure mode: the script only reports when the page
+  loads, and on this machine it does not load every launch. Sleep a
+  couple of seconds first (managed state is complete only once
+  `setup()` returns), and `rm /tmp/io_webtorrent_webtorrent_si.sock`
+  between runs -- a launch that finds the ghost of a killed host exits
+  silently with status 0, which is indistinguishable from a probe that
+  ran and printed nothing. Recipe in `src-tauri/AGENTS.md`.
 - **A host command is checkable in the real webview without a UI.**
   `tauri::Builder::append_invoke_initialization_script` injects a
   script that runs with the real allowlist and capabilities, so a few
@@ -6378,4 +6394,131 @@ warnings`, `cargo test` (178) all pass.
     rebuild) produced eight failures across six assertions groups. A
     mutation that produces no failure is the honest signal that an
     assertion is decorative.
+---
+
+## 2026-08-05 - US-080 - Port external player launching to the host
+
+`src/main/external-player.js` and the `vlc-command` package it depended
+on are now `src-tauri/src/external_player.rs`, and the three `ipcMain`
+handlers around them in `src/main/ipc.js` are three commands in
+`main.rs`. The renderer is untouched: `media-controller.js` and
+`playback-controller.js` call `ipcOs.checkForExternalPlayer`,
+`openExternalPlayer` and `quitExternalPlayer` exactly as they did, and
+the shim's three stubs became three `invoke`s.
+
+The split is `cast.rs`'s and `paths.rs`'s: every decision is a pure
+function of plain values -- `configured`, `vlc_candidates`,
+`player_program`, `vlc_args`, `plan`, `parse_install_dir` -- so all
+three platforms' answers are asserted from a `cargo test` run on any
+one of them, and `ExternalPlayer` is the only part that makes a
+process. Its lifecycle tests run a few lines of Node as the player, so
+"stays up", "exits cleanly", "fails at once" and "is killed" are real
+processes rather than a mock.
+
+Three deliberate deviations from the JS, all in the module's doc
+comments. `flatpak run org.videolan.VLC` is spawned as a program plus
+two arguments, because `cp.spawn` of the whole string is an `ENOENT`
+that only the shell-backed `--version` probe hid. A spawn that fails
+dispatches `externalPlayerNotFound` directly rather than waiting for
+the `close` that follows the `error`; same modal, one event instead of
+two. And opening a second player kills the first, which the original
+leaks.
+
+**Verified against the real VLC 3.0.23, in one launch.** The webview
+probe is not reliable here -- the page did not load on the first
+attempt, and the process had no window at all -- so the commands were
+driven from a throwaway `WT_PROBE_PLAYER` hatch at the end of
+`setup()` instead, which can call the `#[tauri::command]` functions
+themselves and read the dispatches off `handle.listen(DISPATCH_EVENT)`.
+`say -o` made a 129-second audio file, `python3 -m http.server 8765`
+served it, and the host log, `ps` and the server's access log agree:
+
+    WTPROBE player-open Ok(()) media-keys-held=3 playback-items-enabled=10
+    WTPROBE installed path=None -> Ok(true)
+    WTPROBE installed path=Some("/x/y.app") -> Ok(true)
+    external player: /Applications/VLC.app/Contents/MacOS/VLC \
+      --play-and-exit --quiet --meta-title="Probe \"Quoted\" Title" \
+      http://127.0.0.1:8765/wt-probe.aiff
+    WTPROBE open Ok(()) media-keys-held=0 playback-items-enabled=0
+    WTPROBE dispatch ["exitModal"]
+    WTPROBE killing / external player: killing pid 8527
+    WTPROBE killed media-keys-held=0 playback-items-enabled=0
+
+    127.0.0.1 - - [05/Aug/2026 02:15:43] "GET /wt-probe.aiff HTTP/1.1" 200 -
+
+So: the lookup finds VLC (AC-1), VLC really launches with the streaming
+URL and really fetches it (AC-5), the ten Playback items and all three
+media keys go from held to released across the one call and stay
+released (AC-3), `exitModal` reaches the renderer's dispatch channel
+after its second, and the kill is silent -- nothing follows it. A
+second launch, killed while the player was up, confirmed VLC keeps
+playing after the host dies, as it does under Electron.
+
+The probe found nothing wrong, but reading the lookup did: on macOS the
+per-user candidate was `home.join(bundle).to_string_lossy()` fed back
+through `Launch::parse`, which splits on whitespace -- so a home
+directory with a space in it became `/Users/ada` plus an argument. The
+failing test came first (`a_home_with_a_space_in_it_stays_one_candidate`,
+left `"/Users/ada"`), then `vlc_candidates` was rewritten to build
+`Launch` values directly and use `Launch::parse` only for the one
+candidate that really is a command line.
+
+AC-4 needed nothing: `vlc-command` left `package.json` in US-053, and
+depcheck passes.
+
+Files changed: new `src-tauri/src/external_player.rs`; edited
+`src-tauri/src/main.rs`, `src/renderer/lib/platform/ipc-os.js`,
+`test/unit/platform-ipc-os.js`, `test/unit/platform-stubs.js`,
+`docs/platform-shim.md`, `src-tauri/AGENTS.md`,
+`src/renderer/lib/platform/AGENTS.md`, `progress.log`,
+`specs/prd.json`.
+
+Gates: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`
+and `cargo test` (205) pass in `src-tauri/`; `npm test` (standard +
+lint:boundary + depcheck + 3455 unit assertions) passes. The six-step
+manual smoke test was not run -- this session is non-interactive. What
+it would still carry is the click path itself: the preferences
+checkbox, the unsupported-media modal's button, and that the modal
+really disappears when `exitModal` arrives. The host half of each of
+those is in the evidence above.
+
+- **Learnings for future iterations:**
+  - **The webview probe has a better alternative, and this story is
+    why.** The first launch printed nothing at all -- no
+    `on_page_load`, no probe output -- and `osascript` showed the
+    process with zero windows, so the script never ran. Rather than
+    spend launches on a coin flip, the same three commands were driven
+    from a `std::env::var` hatch at the end of `setup()`:
+    `handle.state()` infers each borrowed `tauri::State` argument, so
+    `open_external_player(handle.clone(), handle.state(),
+    handle.state(), handle.state(), None, url, title)` compiles as
+    written and `tauri::async_runtime::block_on` runs it. Two things
+    make it strictly better than the script for a feature like this:
+    `handle.listen(DISPATCH_EVENT, ..)` reads the dispatches a
+    renderer would see, and there is no page load to wait on. Consolidated
+    at the top of this file.
+  - **A killed host leaves `/tmp/io_webtorrent_webtorrent_si.sock`
+    behind, and this is the trap that eats sessions.** It was already
+    in `src-tauri/AGENTS.md`, and one was sitting there from an earlier
+    session at the start of this one. Every launch after it signals the
+    ghost and exits with status 0 and no output, which reads exactly
+    like a broken probe -- so the natural response is to rebuild and
+    relaunch, which fails the same way. `rm` it as the first line of
+    any launch command, not as a diagnosis.
+  - **Read state a getter does not expose by adding the getter with
+    the probe and taking it back out.** `AppMenu` has `is_checked` but
+    no `is_enabled`, because nothing ships that needs it. A temporary
+    `is_enabled` alongside the hatch turned "the menu items are
+    disabled" from a claim about two lines of code into
+    `playback-items-enabled=10` before and `0` after -- and AX reads,
+    which are the alternative, are documented above as stale. Delete
+    both together and let `cargo clippy -- -D warnings` catch the one
+    you forget.
+  - **Where a port re-parses a string it did not write, look for the
+    separator.** `vlc-command`'s candidate list is mostly literals, so
+    round-tripping the whole list through a whitespace split looked
+    harmless -- except for the one entry containing `os.homedir()`.
+    The tests written with the implementation used
+    `/Users/someone`, which has no space in it. A ported list is worth
+    one test per element the *machine* supplies.
 ---

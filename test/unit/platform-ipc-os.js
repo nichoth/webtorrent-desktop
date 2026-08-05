@@ -525,3 +525,122 @@ test('no engine to offer is null, not an error', async function (t) {
     'null reaches the caller, which retries')
   t.end()
 })
+
+// -- the external player (US-080) -------------------------------------
+//
+// `src/main/external-player.js` is now `src-tauri/src/external_player.rs`:
+// the VLC lookup, the spawn and the kill. Nothing about the three
+// exports changes on this side -- `media-controller.js` and
+// `playback-controller.js` call them exactly as they did under
+// Electron -- so what is asserted here is that each reaches its
+// command with the arguments the Rust parameters are named for, and
+// that "no player configured" crosses as null rather than being
+// dropped by JSON.
+
+test('checkForExternalPlayer asks the host and answers a boolean',
+  async function (t) {
+    reset()
+    answer = true
+    const installed = await ipcOs.checkForExternalPlayer('/Applications/VLC.app')
+
+    t.deepEqual(invocations, [{
+      command: 'check_for_external_player',
+      args: { path: '/Applications/VLC.app' }
+    }], 'one command, carrying the configured player')
+    t.equal(installed, true,
+      'the answer is the boolean the modal reads, as the Electron ' +
+      'reply channel was')
+    t.end()
+  })
+
+test('no configured player crosses as null, not a missing key',
+  async function (t) {
+    reset()
+    answer = false
+    t.equal(await ipcOs.checkForExternalPlayer(undefined), false,
+      'and "VLC is not installed either" reaches the caller')
+    t.equal(invocations[0].args.path, null,
+      'the host is told to look for VLC rather than left guessing')
+    t.end()
+  })
+
+test('the empty default crosses as the empty string it is',
+  async function (t) {
+    reset()
+    answer = false
+    // `externalPlayerPath` defaults to `''` in `lib/state.js`, so an
+    // empty string is what "no player configured" usually looks like
+    // -- far more often than `undefined`. The shim passes it through
+    // rather than normalising it, because `if (!playerPath)` was the
+    // *host's* test under Electron and still is
+    // (`external_player::configured`); deciding it in both places is
+    // how the two drift apart.
+    await ipcOs.checkForExternalPlayer('')
+
+    t.equal(invocations[0].args.path, '',
+      'the empty preference reaches the host unchanged')
+    t.end()
+  })
+
+test('openExternalPlayer sends the player, the url and the title',
+  async function (t) {
+    reset()
+    await ipcOs.openExternalPlayer(
+      '/Applications/mpv.app', 'http://127.0.0.1:5000/0', 'Big Buck Bunny')
+
+    t.deepEqual(invocations, [{
+      command: 'open_external_player',
+      args: {
+        path: '/Applications/mpv.app',
+        url: 'http://127.0.0.1:5000/0',
+        title: 'Big Buck Bunny'
+      }
+    }], 'the three arguments src/main/external-player.js spawn() took')
+    t.end()
+  })
+
+test('openExternalPlayer with no configured player sends null',
+  async function (t) {
+    reset()
+    // `undefined` rather than `null`: JSON drops the key altogether,
+    // and a dropped key is not a value the host can read. Both shapes
+    // have to arrive as `null`, which is what makes the host look for
+    // VLC rather than guess from an argument that is not there.
+    await ipcOs.openExternalPlayer(undefined, 'http://127.0.0.1:5000/0', 'Sintel')
+
+    t.ok('path' in invocations[0].args, 'the key crosses at all')
+    t.equal(invocations[0].args.path, null,
+      'which is what makes the host go looking for VLC')
+    t.equal(invocations[0].args.title, 'Sintel', 'the title still crosses')
+
+    reset()
+    await ipcOs.openExternalPlayer(null, 'http://127.0.0.1:5000/0', 'Sintel')
+    t.equal(invocations[0].args.path, null, 'and an explicit null is the same')
+    t.end()
+  })
+
+test('quitExternalPlayer asks the host to kill it', async function (t) {
+  reset()
+  await ipcOs.quitExternalPlayer()
+
+  t.deepEqual(invocations, [{ command: 'quit_external_player', args: undefined }],
+    'one command, no arguments')
+  t.end()
+})
+
+test('a failed launch reaches the caller', async function (t) {
+  reset()
+  const real = core.invoke
+  core.invoke = async () => { throw new Error('spawn: no such file') }
+
+  try {
+    await ipcOs.openExternalPlayer('/nope', 'http://x/0', 'x')
+    t.fail('resolved over a host failure')
+  } catch (err) {
+    t.equal(err.message, 'spawn: no such file',
+      'reportErrors() gets something to show')
+  }
+
+  core.invoke = real
+  t.end()
+})

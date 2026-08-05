@@ -212,16 +212,51 @@ export async function stopFolderWatcher () {
   return invoke('stop_folder_watcher')
 }
 
+/**
+ * Is there an external player to hand the stream to (US-080)?
+ *
+ * A configured player is taken on trust, exactly as
+ * `src/main/external-player.js` took it; with none configured the
+ * host goes looking for VLC. The Electron pair -- a send plus a reply
+ * on the same channel -- collapses into this promise, and the boolean
+ * it resolves with is the one the unsupported-media modal reads.
+ *
+ * @param {string} [path] The configured player, if the user set one.
+ * @returns {Promise<boolean>}
+ */
 export async function checkForExternalPlayer (path) {
-  notImplemented('ipc-os', 'checkForExternalPlayer')
+  return invoke('check_for_external_player', { path: optional(path) })
 }
 
+/**
+ * Play `url` in the external player (US-080).
+ *
+ * The host spawns it, disables the Playback menu and the media keys
+ * for as long as it owns playback, and dispatches back at the
+ * renderer as the process reaches each of its ends: `exitModal` once
+ * it has stayed up a second, then `backToList` on a clean exit or
+ * `externalPlayerNotFound` on any other. All three are actions the
+ * renderer already handles.
+ *
+ * @param {string} [path] The configured player; VLC is found when omitted.
+ * @param {string} url
+ * @param {string} title
+ * @returns {Promise<void>}
+ */
 export async function openExternalPlayer (path, url, title) {
-  notImplemented('ipc-os', 'openExternalPlayer')
+  return invoke('open_external_player', { path: optional(path), url, title })
 }
 
+/**
+ * Kill the external player (US-080).
+ *
+ * Killing is silent: the process going away this way dispatches
+ * nothing, because the renderer is the one that asked.
+ *
+ * @returns {Promise<void>}
+ */
 export async function quitExternalPlayer () {
-  notImplemented('ipc-os', 'quitExternalPlayer')
+  return invoke('quit_external_player')
 }
 
 /**

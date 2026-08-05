@@ -109,6 +109,7 @@ Ported so far:
 | `ipcOs.setAllowNav`, `notifyPlayerOpen`, `notifyPlayerUpdate`, `notifyPlayerClose` | US-061 | one host command each; they enable and disable items of the host's own application menu |
 | `ipcOs.onDispatch` | US-061 | a Tauri event, emitted by every application-menu item that is not a role |
 | all fourteen `cast.js` exports | US-075 | eleven host commands and three events, in `src-tauri/src/cast.rs`; the protocols behind them are US-076 to US-078 |
+| `ipcOs.checkForExternalPlayer`, `openExternalPlayer`, `quitExternalPlayer` | US-080 | one host command each; the VLC lookup, the spawn and the kill are `src-tauri/src/external_player.rs` |
 
 The window operations are **commands rather than core window calls
 from the webview**, although `@tauri-apps/api/window` could do several
@@ -579,6 +580,26 @@ engine that is about to come back.
 The `notify*` prefix avoids confusion: the main process named these
 channels `onPlayerPlay` and so on, but they are outbound commands,
 not listeners.
+
+The three external-player exports carry the arguments
+`src/main/external-player.js` took and nothing else. What the host does
+with them is `src-tauri/src/external_player.rs` (US-080), and three
+parts of it are visible from up here:
+
+- **A player the user configured is taken on trust.** With
+  `externalPlayerPath` set, `checkForExternalPlayer` answers `true`
+  without looking; with it empty -- which is its default -- the host
+  goes looking for VLC, a `--version` probe per candidate. The shim
+  passes the empty string through rather than normalising it, so
+  `if (!playerPath)` is decided in one place.
+- **`openExternalPlayer` resolves nothing.** Everything the renderer
+  learns about the player afterwards arrives as an ordinary dispatch:
+  `exitModal` once it has stayed up a second, `backToList` on a clean
+  exit, `externalPlayerNotFound` on any other exit or when there was
+  nothing to run. A player the renderer killed dispatches nothing.
+- **The Playback menu and the media keys go quiet for the duration**,
+  because this application is no longer the one playing anything. The
+  next `notifyPlayerOpen` brings them back; nothing else does.
 
 ### Events
 

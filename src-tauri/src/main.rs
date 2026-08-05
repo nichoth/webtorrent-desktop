@@ -25,6 +25,7 @@ mod clipboard;
 mod dialog;
 mod dock;
 mod engine;
+mod external_player;
 mod fs;
 mod menu;
 mod paths;
@@ -50,6 +51,7 @@ use tauri_plugin_opener::OpenerExt;
 
 use dock::{Badge, DownloadNotice};
 use engine::{Endpoint, Engine};
+use external_player::ExternalPlayer;
 use fs::{Access, Allowlist, FileStats, Root};
 use menu::{Action, AppMenu, ContextMenus, Platform};
 use paths::AppPaths;
@@ -510,6 +512,79 @@ fn notify_player_update(
 ) {
     app_menu.set_enabled(menu::SKIP_NEXT, has_next);
     app_menu.set_enabled(menu::SKIP_PREVIOUS, has_previous);
+}
+
+// -- the external player (US-080) ------------------------------------
+//
+// `src/main/external-player.js` and the `vlc-command` lookup are
+// [`crate::external_player`]; what is here is the three `ipcMain`
+// handlers around them in `src/main/ipc.js`. The two disables in
+// `open_external_player` are theirs rather than the module's, and they
+// are the same two `notify_player_close` does: handing the video to
+// VLC means this app is no longer playing anything, so the Playback
+// menu acts on nothing and the media keys belong to whatever else on
+// the machine wants them. Nothing re-enables them here either -- the
+// next `notify_player_open` does, exactly as under Electron.
+
+/// `ipcOs.checkForExternalPlayer`: is there a player to offer?
+///
+/// `async` because the answer can take seconds: with none configured
+/// the lookup probes every place VLC might be, each one a process, and
+/// a synchronous command would do that on the main thread with the
+/// window frozen behind it. The Electron original is asynchronous for
+/// the same reason -- it replies on a channel rather than returning.
+#[tauri::command]
+async fn check_for_external_player(
+    external_player: tauri::State<'_, ExternalPlayer>,
+    path: Option<String>,
+) -> Result<bool, String> {
+    let player = external_player.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || player.installed(path.as_deref()))
+        .await
+        .map_err(|err| err.to_string())
+}
+
+/// `ipcOs.openExternalPlayer`: hand the stream to VLC.
+///
+/// `async` for two reasons that point the same way: giving the media
+/// keys back hops to the main thread and waits for the answer, which
+/// from a synchronous command would deadlock rather than be slow
+/// (US-067), and the lookup blocks. Borrowed state then forces the
+/// `Result`, and there is nothing to put in it -- a player that will
+/// not start reaches the renderer as `externalPlayerNotFound`, which
+/// is the message the unsupported-media modal already shows.
+#[tauri::command]
+async fn open_external_player(
+    app: AppHandle,
+    app_menu: tauri::State<'_, AppMenu<Wry>>,
+    media_keys: tauri::State<'_, MediaShortcuts>,
+    external_player: tauri::State<'_, ExternalPlayer>,
+    path: Option<String>,
+    url: String,
+    title: String,
+) -> Result<(), String> {
+    app_menu.set_group_enabled(menu::PLAYBACK_ITEMS, false);
+    media_keys.disable();
+
+    let player = external_player.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        player.spawn(path.as_deref(), &url, &title, move |action| {
+            dispatch(&app, action, Vec::new())
+        })
+    })
+    .await
+    .map_err(|err| err.to_string())
+}
+
+/// `ipcOs.quitExternalPlayer`: the renderer is leaving the player.
+///
+/// Killing is silent -- the process going away this way dispatches
+/// nothing, because the renderer is the one that asked. Synchronous
+/// because a `SIGKILL` and its reaping are immediate; there is nothing
+/// here to wait for.
+#[tauri::command]
+fn quit_external_player(external_player: tauri::State<'_, ExternalPlayer>) {
+    external_player.kill();
 }
 
 // -- the dock and the taskbar (US-063) -------------------------------
@@ -1567,6 +1642,9 @@ fn main() {
             app.manage(app_menu);
             app.manage(ContextMenus::<Wry>::default());
             app.manage(FolderWatcher::default());
+            // Nothing is looked for and nothing is spawned until the
+            // renderer asks (US-080).
+            app.manage(ExternalPlayer::system());
             // Nothing is discovered and nothing is connected until the
             // renderer asks (US-075).
             app.manage(cast::Session::default());
@@ -1638,6 +1716,9 @@ fn main() {
             download_finished,
             start_folder_watcher,
             stop_folder_watcher,
+            check_for_external_player,
+            open_external_player,
+            quit_external_player,
             get_engine_endpoint,
             set_startup,
             open_external,
