@@ -1,47 +1,6 @@
-<h1 align="center">
-  <br>
-  <a href="https://webtorrent.io">
-    <img src="https://webtorrent.io/img/WebTorrent.png"
-         alt="WebTorrent" width="200">
-  </a>
-  <br>
-  WebTorrent Desktop
-  <br>
-  <br>
-</h1>
+# Webtorrent Desktop
 
-<h4 align="center">The streaming torrent app. For Mac, Windows, and Linux.</h4>
-
-<p align="center">
-  <a href=
-    "https://discord.gg/cnXkm4Z">
-    <img src="https://img.shields.io/discord/612575111718895616"
-         alt="discord">
-  </a>
-  <a href=
-    "https://github.com/webtorrent/webtorrent-desktop/actions/workflows/ci.yml">
-    <img src=
-      "https://github.com/webtorrent/webtorrent-desktop/actions/workflows/ci.yml/badge.svg"
-      alt="GitHub CI action">
-  </a>
-  <a href=
-    "https://github.com/webtorrent/webtorrent-desktop/releases">
-    <img src=
-      "https://img.shields.io/github/release/webtorrent/webtorrent-desktop.svg"
-         alt="github release version">
-  </a>
-  <a href=
-    "https://github.com/webtorrent/webtorrent-desktop/releases">
-    <img src=
-      "https://img.shields.io/github/downloads/webtorrent/webtorrent-desktop/total.svg"
-         alt="github release downloads">
-  </a>
-  <a href="https://standardjs.com">
-    <img src=
-      "https://img.shields.io/badge/code_style-standard-brightgreen.svg"
-         alt="Standard - JavaScript Style Guide">
-  </a>
-</p>
+Rewriting it in Tauri.
 
 ## Install
 
