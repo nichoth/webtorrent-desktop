@@ -67,18 +67,44 @@ test('tauri window.isMaximized asks the host', async function (t) {
   t.end()
 })
 
+// The window's own rectangle, which the renderer used to take from
+// `window.screenX`/`outerWidth`. Those describe the OS window under
+// Chromium and describe nothing under a webview -- `outerWidth` is 0
+// and `screenX`/`screenY` are the content area's origin, a title bar
+// below the window's -- so the rectangle comes from the host, like
+// every other window read here. The maximize flag rides along because
+// its caller needs the two to describe one instant.
+test('tauri window.getBounds asks the host', async function (t) {
+  const rect = { x: 12, y: 34, width: 500, height: 638, maximized: false }
+  resetTauri(rect)
+  const result = await tauriWindow.getBounds()
+
+  t.deepEqual(result, rect, 'the host rectangle reaches the caller')
+  t.equal(invocations.length, 1, 'one command')
+  t.equal(invocations[0].command, 'window_bounds', 'named the command')
+  t.end()
+})
+
+test('tauri window.getBounds reports a maximized window', async function (t) {
+  resetTauri({ x: 0, y: 0, width: 2560, height: 1440, maximized: true })
+  const result = await tauriWindow.getBounds()
+
+  t.equal(result.maximized, true, 'the flag comes back with the rectangle')
+  t.end()
+})
+
 test('the shim exports exactly the window surface',
   function (t) {
     const found = Object.keys(tauriWindow)
       .filter(k => k !== '__esModule')
-    t.deepEqual(found.sort(), ['isMaximized', 'isVisible'],
+    t.deepEqual(found.sort(), ['getBounds', 'isMaximized', 'isVisible'],
       'no export appeared or vanished')
     t.end()
   })
 
 test('every tauri window export is async and rejects on host failure',
   async function (t) {
-    for (const name of ['isVisible', 'isMaximized']) {
+    for (const name of ['isVisible', 'isMaximized', 'getBounds']) {
       resetTauri(false)
       t.ok(tauriWindow[name]() instanceof Promise, `${name} is async`)
     }

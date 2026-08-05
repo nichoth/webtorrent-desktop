@@ -327,6 +327,7 @@ the window already goes over IPC and lives in `ipc-os.js`.
 | --- | --- |
 | `isVisible()` | `main.js:149` |
 | `isMaximized()` | `main.js:410`, `main.js:422` |
+| `getBounds()` | `main.js:453-458`, the DOM reads (see below) |
 
 There is deliberately **no exported current-window handle**. Both
 reads resolve the window internally, per call, and only a boolean
@@ -396,6 +397,46 @@ non-`async` and terminates the promise with
 `.catch(err => dispatch('error', err))` like every other migrated
 call site. `applyDimensions()` ends with its own `update()`, because
 `dispatch()`'s update already ran while the shim call was in flight.
+
+#### The geometry reads were the wrong reads
+
+Keeping the four DOM reads was right for the risk US-027 was managing
+and wrong about what they measure. They are only the OS window's
+rectangle when the page *is* the OS window, which it was under
+Chromium and is not under a webview. Measured in the Tauri host, on a
+2560x1440 display, with the window at `(0, 1408)` sized `425x238`:
+
+| | `screenX` | `screenY` | `outerWidth` | `outerHeight` |
+| --- | --- | --- | --- | --- |
+| DOM | 0 | 1440 | 0 | 0 |
+| window | 0 | 1408 | 425 | 238 |
+
+`outerWidth`/`outerHeight` are 0 -- WebKit fills them in for browser
+windows and a webview is not one -- and `screenY` is the *content
+area's* origin, one 32px title bar below the window's. So
+`restoreBounds()` in `controllers/playback-controller.js`, which sends
+the saved rectangle back through `ipcOs.setBounds` when the player
+closes, asked for `{x: 0, y: 1440, width: 0, height: 0}`: the host
+clamped the size up to the `MIN_WIDTH`/`MIN_HEIGHT` floor and moved the
+window past the bottom edge of the screen, where AppKit pinned it with
+a sliver showing. The rectangle was then saved to `config.json`, so
+every later launch restored the window off-screen too.
+
+The fix is `getBounds()`, one host command (`window_bounds`) returning
+the window's outer rectangle in logical pixels *and* its maximize
+state. That also retires the risk this section is about: the two
+values now come from one read on the side of the boundary that owns
+the window handle, so there is no interval for the window to move in
+and nothing to order carefully. `setDimensions()` keeps its shape --
+one shim call, spread into `applyDimensions(dimensions, bounds,
+maximized)`, terminated with `.catch(err => dispatch('error', err))`.
+
+`test/unit/platform-boundary.js` bans the four DOM properties across
+`src/renderer/` so the reads cannot come back. `window.screen.width`
+and `window.screen.height` are deliberately *not* banned:
+`applyDimensions()` uses them to keep the player inside the display,
+they describe the screen rather than this window, and they measure
+correctly in the webview.
 
 ## `menu.js`
 

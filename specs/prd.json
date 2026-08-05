@@ -8,6 +8,7 @@
     "babelConfig": "The Babel JSX config lives in the `babel` key of package.json, not in a `.babelrc` file. It is `@babel/plugin-transform-react-jsx` with `useBuiltIns: true`.",
     "esmOrder": "ESM conversion runs TOP-DOWN (entry point first, lib/ last). Babel compiles `export default X` to `exports.default = X`, so a still-CommonJS consumer that does `require('./x')` breaks. The reverse (ESM importing CommonJS) is safe via Babel's `_interopRequireDefault`. Converting consumers before their dependencies is therefore the only order that keeps the app launchable at every commit per FR-2.",
     "invariant": "FR-2: the Electron app must launch and pass the smoke test at every commit. A commit that leaves the app broken is not a valid commit.",
+    "macOnly": "This port targets macOS only. Windows and Linux hosts, bundles, handler registration, codec measurements, and verification runs are out of scope -- 'the current platform' means macOS everywhere in this PRD, and no story may require a Windows or Linux machine.",
     "cssFrozen": "FR-14: no CSS file may be modified. No change to visual design or user-facing behaviour beyond the telemetry removal in US-002. This is otherwise a pure refactor.",
     "webtorrentJsExempt": "FR-4: src/renderer/webtorrent.js is never converted to ESM, never passed through Vite, and never migrated to the shim. It keeps building through Babel and loading via static/webtorrent.html unchanged.",
     "deferredCasualties": "After US-002 deletes telemetry, exactly two deferred-casualty files remain exempt from the shim and the lint rule: `src/renderer/webtorrent.js` and `src/renderer/lib/cast.js`. `controllers/audio-tracks-controller.js` is also a deferred casualty but imports nothing restricted, so it needs no exemption.",
@@ -1075,7 +1076,7 @@
       "acceptanceCriteria": [
         "The Rust host implements the `setBadge`, `setProgress`, and `downloadFinished` behaviour from `src/main/dock.js`",
         "`platform/tauri/ipc-os.js` routes the matching shim exports to those commands",
-        "Platform differences are handled explicitly: badge on macOS, taskbar progress on Windows, and a documented no-op elsewhere",
+        "The dock badge and dock progress are implemented for macOS; no other platform is handled",
         "`test/unit/platform-ipc-os.js` covers the routed exports against the Tauri tree",
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
@@ -1088,15 +1089,14 @@
       "title": "Port magnet and .torrent handler registration to Rust",
       "description": "As a user, I want WebTorrent Desktop to register as the handler for magnet links and .torrent files under Tauri.",
       "acceptanceCriteria": [
-        "Install and uninstall are implemented for the current platform, matching the behaviour in `src/main/handlers.js`",
-        "The preferences toggle drives it through `ipc-os.setDefaultFileHandler`, unchanged on the UI side",
-        "Uninstall removes every registration install created, verified by inspecting the OS registration after each",
-        "Platforms not implemented yet fail loudly at build time or report unsupported, rather than silently doing nothing",
+        "Install and uninstall are implemented for macOS, matching the behaviour in `src/main/handlers.js`",
+        "`ipc-os.setDefaultFileHandler` drives it from the preferences toggle, unchanged on the UI side",
+        "Uninstall removes every registration install created, verified by inspecting the LaunchServices registration after each",
         "`cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` pass in `src-tauri/`; Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 64,
       "passes": false,
-      "notes": "Registration touches the real OS -- registry keys, LaunchServices, or .desktop files -- and has to be verified per platform on a real machine.",
+      "notes": "Registration touches the real OS -- LaunchServices -- and has to be verified on a real macOS machine.",
       "manual": true
     },
     {
@@ -1163,7 +1163,7 @@
       "title": "Port launch-on-login to Rust",
       "description": "As a user, I want the start-on-login preference to work under Tauri.",
       "acceptanceCriteria": [
-        "Install and uninstall are implemented for the current platform, matching `src/main/startup.js`",
+        "Install and uninstall are implemented for macOS, matching `src/main/startup.js`",
         "`ipc-os.setStartup` drives it unchanged from the UI side",
         "Uninstall removes exactly what install created",
         "The `--hidden` launch path still starts the app without showing the window",
@@ -1355,7 +1355,7 @@
       "title": "Establish the codec fallback behaviour on the new webview",
       "description": "As a user, I want a clear message instead of a black window when a file will not play.",
       "acceptanceCriteria": [
-        "The codecs the target webview supports are tested per platform and recorded in a table in `docs/README.md` or a linked doc",
+        "The codecs the target webview supports are tested on macOS and recorded in a table in `docs/README.md` or a linked doc",
         "Files the webview cannot play trigger the existing unsupported-media modal rather than failing silently",
         "The modal offers the external player path where one is available",
         "`lib/media-extensions.js` and the player's playability check reflect the measured support, not the Chromium assumption",
@@ -1363,7 +1363,7 @@
       ],
       "priority": 81,
       "passes": true,
-      "notes": "WKWebView measured 2026-08-05 on macOS 26.5.1 and recorded in docs/codec-support.md. The WebKitGTK and WebView2 rows are unmeasured -- there is no Linux or Windows machine on this port -- and the gate refuses nothing on an engine with no row, so those platforms keep the pre-US-081 behaviour. Filling them in is the recipe in docs/codec-support.md; US-086 is where it should land."
+      "notes": "WKWebView measured 2026-08-05 on macOS 26.5.1 and recorded in docs/codec-support.md. The WebKitGTK and WebView2 rows are unmeasured -- there is no Linux or Windows machine on this port -- and the gate refuses nothing on an engine with no row, so those platforms keep the pre-US-081 behaviour. Filling them in is out of scope: this port is macOS only."
     },
     {
       "id": "US-082",
@@ -1399,29 +1399,12 @@
       "manual": true
     },
     {
-      "id": "US-084",
-      "title": "Package and sign the Windows and Linux builds",
-      "description": "As a user, I want installers on every supported platform.",
-      "acceptanceCriteria": [
-        "The Tauri bundler produces the Windows installer and the Linux packages the project shipped under Electron",
-        "The Windows build is signed and installs without a SmartScreen block",
-        "File and magnet handler registration works from the installed build on each platform",
-        "Uninstall removes the handlers and leaves no orphaned sidecar process",
-        "The per-platform build prerequisites are documented",
-        "Typecheck passes (`npm test` -- standard + depcheck)"
-      ],
-      "priority": 84,
-      "passes": false,
-      "notes": "Needs real Windows and Linux machines or VMs plus a code signing certificate.",
-      "manual": true
-    },
-    {
       "id": "US-085",
       "title": "Ship signed auto-updates",
       "description": "As a user, I want the app to update itself safely.",
       "acceptanceCriteria": [
         "The updater verifies signatures and refuses an unsigned or tampered payload",
-        "A staged release is downloaded, verified, and applied on the current platform",
+        "A staged release is downloaded, verified, and applied on macOS",
         "A user who declines an update is not prompted again until the next version",
         "Update-server configuration and key handling are documented; no private key is committed",
         "A deliberately corrupted payload is rejected with a visible error and no partial install",
@@ -1437,7 +1420,7 @@
       "title": "Port completion verification pass",
       "description": "As a developer, I want proof the port is finished, so the branch can ship.",
       "acceptanceCriteria": [
-        "Full six-step smoke test executed on macOS, Windows, and Linux, with the results recorded",
+        "Full six-step smoke test executed on macOS, with the results recorded",
         "Casting exercised against one real device per implemented protocol",
         "Startup time, idle memory, and installer size recorded against the original Electron baseline",
         "Every ADR from ADR-001 onward reviewed for drift and updated or superseded where the shipped app disagrees",
@@ -1447,7 +1430,7 @@
       ],
       "priority": 86,
       "passes": false,
-      "notes": "Attended, multi-platform session. Excluded from the headless ralph loop.",
+      "notes": "Attended macOS session. Excluded from the headless ralph loop.",
       "manual": true
     }
   ]

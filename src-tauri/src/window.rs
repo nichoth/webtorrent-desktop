@@ -186,6 +186,23 @@ pub fn logical_bounds(position: (i32, i32), size: (u32, u32), scale_factor: f64)
     }
 }
 
+/// What `window_bounds` answers: the window's own rectangle, plus
+/// whether it is maximized.
+///
+/// The two travel together because their caller --
+/// `setDimensions()` in `src/renderer/main.js` -- needs them to
+/// describe one instant: it saves the rectangle only when the window
+/// is not maximized, and a maximized window's rectangle is not the one
+/// it would be restored to. Two commands would be two reads with a
+/// suspension point between them, and the window can move or maximize
+/// in between. See `docs/platform-shim.md`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct WindowRect {
+    #[serde(flatten)]
+    pub bounds: Bounds,
+    pub maximized: bool,
+}
+
 /// The rectangle the renderer asks for, as `ipcOs.setBounds` sends it.
 ///
 /// Every field is optional and `x`/`y` are explicitly nullable,
@@ -564,6 +581,27 @@ mod tests {
         for key in ["x", "y", "width", "height"] {
             assert!(fields[key].is_number(), "{key} is not a number");
         }
+    }
+
+    /// `window_bounds` answers one flat object, because its caller
+    /// spreads the rectangle out of it and hands the rest to
+    /// `applyDimensions`. A nested `bounds` key would put an object
+    /// where `setBounds` expects four numbers, and the window would be
+    /// restored to nothing.
+    #[test]
+    fn the_window_rect_serializes_flat() {
+        let rect = WindowRect {
+            bounds: logical_bounds((10, 20), (500, 638), 1.0),
+            maximized: false,
+        };
+        let json = serde_json::to_value(rect).expect("the rect does not serialize");
+        let fields = json.as_object().expect("not a JSON object");
+
+        assert_eq!(fields.len(), 5, "four numbers and the flag, side by side");
+        for key in ["x", "y", "width", "height"] {
+            assert!(fields[key].is_number(), "{key} is not a number");
+        }
+        assert_eq!(fields["maximized"], serde_json::json!(false));
     }
 
     #[test]

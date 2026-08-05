@@ -105,6 +105,32 @@ fn window_is_maximized(main: WebviewWindow) -> Result<bool, String> {
     main.is_maximized().map_err(failed)
 }
 
+/// `platformWindow.getBounds()`: the window's rectangle in logical
+/// pixels, plus its maximize state, as one read.
+///
+/// This is a host command for a reason that is not the usual one. The
+/// renderer *can* ask a DOM for a window rectangle -- `window.screenX`
+/// and friends -- and under Electron that answer was the OS window's,
+/// because the page was a Chromium browser window. In a webview it is
+/// not: `outerWidth`/`outerHeight` are 0, and `screenX`/`screenY` are
+/// the content area's origin, a title bar below the window's. The
+/// renderer saved that rectangle when a video opened and asked for it
+/// back through `set_bounds` when the player closed, which walked the
+/// window down the screen and collapsed it to the minimum size until
+/// it was off the bottom edge. So the rectangle comes from the window
+/// handle, like every other window read here.
+#[tauri::command]
+fn window_bounds(main: WebviewWindow) -> Result<window::WindowRect, String> {
+    let position = main.outer_position().map_err(failed)?;
+    let size = main.outer_size().map_err(failed)?;
+    let scale = main.scale_factor().map_err(failed)?;
+
+    Ok(window::WindowRect {
+        bounds: window::logical_bounds((position.x, position.y), (size.width, size.height), scale),
+        maximized: main.is_maximized().map_err(failed)?,
+    })
+}
+
 /// `ipcOs.setTitle`.
 #[tauri::command]
 fn set_title(main: WebviewWindow, title: String) -> Result<(), String> {
@@ -1697,6 +1723,7 @@ fn main() {
             app_paths,
             window_is_visible,
             window_is_maximized,
+            window_bounds,
             set_title,
             set_progress,
             set_bounds,

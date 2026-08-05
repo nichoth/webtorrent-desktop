@@ -126,6 +126,31 @@ for (const { concern, patterns } of REMOTE_CHECKS) {
   })
 }
 
+// The window's own rectangle is a host read too, and this one is not
+// an Electron API -- it is four DOM properties that only describe the
+// OS window when the page is a Chromium browser window. In a webview
+// `outerWidth`/`outerHeight` are 0 and `screenX`/`screenY` are the
+// content area's origin, one title bar below the window's, so a
+// renderer that saves them and asks the host to restore them later
+// sends the window to a rectangle no window was ever at. The screen's
+// dimensions (`window.screen.width`) are a different question and stay
+// where they are: they describe the display, not this window.
+test('no renderer code reads the window rectangle from the DOM',
+  function (t) {
+    const files = rendererSources()
+    t.ok(files.length > 20, 'walked the renderer sources')
+    const pattern = /\bwindow\.(screenX|screenY|outerWidth|outerHeight)\b/
+    for (const file of files) {
+      const rel = path.relative(RENDERER, file)
+      const hits = fs.readFileSync(file, 'utf8').split('\n')
+        .map((line, i) => ({ line, n: i + 1 }))
+        .filter(({ line }) => pattern.test(line))
+        .map(({ line, n }) => n + ': ' + line.trim())
+      t.deepEqual(hits, [], rel + ' asks the host for the window rectangle')
+    }
+    t.end()
+  })
+
 // US-028: the filesystem concern. Unlike the Electron checks above the
 // offending API is a Node builtin, so the pattern names the module
 // specifier -- there is only one way to reach `fs` and no second

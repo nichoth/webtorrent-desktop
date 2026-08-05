@@ -442,22 +442,20 @@ function resumeTorrents () {
 
 // Set window dimensions to match video dimensions or fill the screen.
 //
-// The maximize check is async through the shim, so the geometry reads
-// are taken here, synchronously, before the suspension point: the saved
-// bounds and the maximize check that guards them then still describe
-// one instant, even though the save itself lands a tick later (see
-// docs/platform-shim.md). Nothing reads state.window.bounds
-// synchronously after a dispatch('setDimensions') -- restoreBounds()
-// runs when the player is closed.
+// The rectangle and the maximize check are one host read, so they
+// describe one instant even though the save lands a tick later (see
+// docs/platform-shim.md). The rectangle used to be four DOM reads of
+// the page's screen position and outer size, taken synchronously ahead
+// of an async maximize check, which is what kept the two together
+// under Electron -- but a webview's DOM does not know the OS window's
+// rectangle at all, so the reads moved to the host rather than moving
+// earlier. Nothing reads
+// state.window.bounds synchronously after a dispatch('setDimensions')
+// -- restoreBounds() runs when the player is closed.
 function setDimensions (dimensions) {
-  const bounds = {
-    x: window.screenX,
-    y: window.screenY,
-    width: window.outerWidth,
-    height: window.outerHeight
-  }
-  platformWindow.isMaximized()
-    .then(maximized => applyDimensions(dimensions, bounds, maximized))
+  platformWindow.getBounds()
+    .then(({ maximized, ...bounds }) =>
+      applyDimensions(dimensions, bounds, maximized))
     .catch(err => dispatch('error', err))
 }
 
