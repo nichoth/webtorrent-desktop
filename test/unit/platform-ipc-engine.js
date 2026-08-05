@@ -250,6 +250,16 @@ test('stopServer names the torrent to release', async function (t) {
   t.end()
 })
 
+test('forceAnnounce names the torrent to re-announce',
+  async function (t) {
+    const socket = await connected()
+    const before = socket.sent.length
+    await ipcEngine.forceAnnounce('abc')
+    t.deepEqual(socket.frames().slice(before),
+      [{ channel: 'wt-force-announce', args: ['abc'] }])
+    t.end()
+  })
+
 // AC: sends issued before the socket is open are queued and flushed on
 // open, in order. This is the pre-ready queue `main.js` relies on.
 test('sends before the socket opens are queued, then flushed in order',
