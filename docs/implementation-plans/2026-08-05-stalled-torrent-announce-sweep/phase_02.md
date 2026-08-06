@@ -436,9 +436,10 @@ Three things here are load-bearing:
    back by the cap (some eligibles, so `deferred > 0`). Without the
    second gate, a sweep with `max: 0` and eligible torrents would
    early-return `{ announced: [], deferred: 0 }`, dropping work
-   silently -- the exact failure the comment at line 156 and AC5.1's
-   rationale forbid. The gate holds the sweep to reporting either
-   silence or honesty, never deception.
+   silently -- the exact failure that AC5.1's rationale forbids, and
+   that the summary log's own comment names: "A cap that drops work
+   silently reads as 'nothing else needed it'." The gate holds the
+   sweep to reporting either silence or honesty, never deception.
 2. **`lastAnnounceAt.set` comes before the `try`, not inside it.** A
    torrent whose tracker throws on every call would otherwise be
    retried every single sweep, which is exactly the tracker-hammering
@@ -464,7 +465,7 @@ Note: the snippet above shows five `runAnnounceSweep` blocks carrying
 16 assertions. Code review found three coverage gaps: the
 failure-logging assertion for AC6.2 was vacuous, nothing constrained
 `dht` being forwarded to `announceNow`, and nothing tested the early
-return with deferred work or the cooldownMs forwarding. Two blocks
+return with deferred work or the cooldownMs forwarding. Four blocks
 were added to the original five and one assertion was rewritten. The
 counts here are the final corrected ones.
 
@@ -527,7 +528,7 @@ cannot fail for the right reason.
 ## Done when
 
 - `runAnnounceSweep` is exported from `src/engine/announce.js`.
-- `test/unit/engine-announce.js` passes: 19 `test()` blocks, 39
+- `test/unit/engine-announce.js` passes: 21 `test()` blocks, 46
   assertions.
 - `npm test` passes.
 - `src/engine/index.js` is still unchanged.
