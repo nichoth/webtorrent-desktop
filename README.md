@@ -105,22 +105,5 @@ The app never sends any personally identifying information, nor does it
 track which torrents you add.
 
 ```
-docs/superpowers/plans/2026-08-05-force-announce-diagnostic.md
-```
-
-```
-docs/superpowers/plans/2026-08-05-stalled-torrent-announce-sweep.md
-```
-
-```
-Use the superpowers:executing-plans skill to execute this implementation plan:
-
-/Users/nick/code/webtorrent-desktop/docs/superpowers/plans/2026-08-05-force-announce-diagnostic.md
-
-Working directory: /Users/nick/code/webtorrent-desktop
-Branch: force-announce-diagnostic (already created, already checked out)
-
-Execute Tasks 1 through 4 only. Task 5 is a manual human experiment that
-requires running the app and waiting for a real torrent to stall -- stop
-after Task 4 and hand Task 5 back to me.
+/ed3d-plan-and-execute:execute-implementation-plan /Users/nick/code/webtorrent-desktop/docs/implementation-plans/2026-08-05-stalled-torrent-announce-sweep/ /Users/nick/code/webtorrent-desktop/
 ```
