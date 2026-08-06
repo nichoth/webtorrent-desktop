@@ -446,10 +446,17 @@ Run:
 npm run build:node && npx tape test/unit/engine-announce.js
 ```
 
-Expected: PASS. `tape` prints **`# tests 36`** -- its "tests" line
-counts *assertions*, not `test()` blocks. There are 17 blocks: five
-`announceNow`, seven `selectStalled`, five `runAnnounceSweep`. The five
-added here carry 16 assertions on top of Phase 1's 20.
+Expected: PASS. `tape` prints **`# tests 39`** -- its "tests" line
+counts *assertions*, not `test()` blocks. There are 19 blocks: five
+`announceNow`, seven `selectStalled`, seven `runAnnounceSweep`. The
+seven added here carry 19 assertions on top of Phase 1's 20.
+
+Note: the snippet above shows five `runAnnounceSweep` blocks carrying
+16 assertions. Code review found two coverage gaps in them -- the
+failure-logging assertion for AC6.2 was vacuous, and nothing
+constrained `dht` being forwarded to `announceNow` -- so two further
+blocks were added and one assertion was rewritten. The counts here are
+the corrected ones.
 
 **Step 6: Lint**
 
@@ -510,7 +517,7 @@ cannot fail for the right reason.
 ## Done when
 
 - `runAnnounceSweep` is exported from `src/engine/announce.js`.
-- `test/unit/engine-announce.js` passes: 17 `test()` blocks, 36
+- `test/unit/engine-announce.js` passes: 19 `test()` blocks, 39
   assertions.
 - `npm test` passes.
 - `src/engine/index.js` is still unchanged.
