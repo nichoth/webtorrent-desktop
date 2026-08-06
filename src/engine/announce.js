@@ -13,6 +13,14 @@
 // minutes for HTTP and UDP. The DHT re-announces every 15 minutes plus
 // jitter. A torrent whose last peer drops can therefore sit at zero
 // peers for half an hour before it next asks anyone for peers.
+//
+// The rest of the module is the sweep that closes that window without
+// anyone clicking anything: `selectStalled` decides who qualifies and
+// `runAnnounceSweep` takes one pass, calling `announceNow` for each.
+// The guards live here rather than in `index.js` so they can be tested
+// without a client or a network -- every dependency, including the
+// clock and the logger, is a parameter. `index.js` owns only the
+// timer and the last-announced map.
 
 /**
  * Force one round of peer discovery for a torrent.

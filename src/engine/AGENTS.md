@@ -156,15 +156,28 @@ being worse than the bug it fixes, and they are the reason the logic
 lives here rather than inline in `index.js`, where it could not be
 tested: a five minute per-torrent cooldown, comfortably above any
 tracker's `min interval`; a cap of five torrents per sweep, served
-least-recently-announced first so a long list goes round robin; and a
-log line whenever the cap holds work back, because a silent truncation
-reads as "nothing else needed it".
+least-recently-announced first so a long list goes round robin; and one
+summary line per sweep that did anything, carrying the deferred count,
+because a silent truncation reads as "nothing else needed it".
+
+Be precise about that last one, because the obvious reading is too
+narrow. The line is not reserved for capped sweeps: a sweep that
+announces one torrent and defers nothing still logs. What is silent is
+a sweep with nothing to do -- `runAnnounceSweep` returns early only
+when it selected nothing *and* deferred nothing, so an idle engine
+says nothing at all.
 
 `index.js` owns only the timer and the `lastAnnounceAt` map. The map
 is seeded when a torrent's info hash arrives -- `client.add()` has just
 announced `started` and a second announce a minute later would be waste
--- and cleared in `stopTorrenting`, so it cannot outgrow the torrent
-list.
+-- and cleared in `stopTorrenting`.
+
+That covers the `wt-stop-torrenting` path, which is the only caller.
+A torrent torn down any other way -- a fatal `torrent` error, say --
+leaves its entry behind. Those orphans are inert rather than a leak:
+the sweep iterates `client.torrents` and never the map, so an entry
+with no torrent is never read, and re-adding the same info hash
+overwrites it.
 
 The three tunables are exported from here, not from `index.js`:
 `SWEEP_INTERVAL_MS`, `COOLDOWN_MS` and `MAX_PER_SWEEP`. `index.js`
