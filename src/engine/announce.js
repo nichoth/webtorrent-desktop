@@ -111,3 +111,52 @@ export function selectStalled (torrents, now, lastAnnounceAt, opts = {}) {
     deferred: Math.max(0, eligible.length - max)
   }
 }
+
+/**
+ * One pass: find the stalled torrents, ask each to re-announce, record
+ * the attempt, and log once if anything happened.
+ *
+ * Every dependency is injected rather than imported, which is what
+ * keeps the guards testable without a client or a network.
+ *
+ * @param {object} deps
+ * @param {object[]} deps.torrents The client's torrents.
+ * @param {object|false} deps.dht The client-wide DHT.
+ * @param {Map<string, number>} deps.lastAnnounceAt Mutated in place.
+ * @param {number} deps.now Milliseconds.
+ * @param {(format: string, ...args: any[]) => void} deps.log
+ * @param {number} [deps.cooldownMs]
+ * @param {number} [deps.max]
+ * @returns {{ announced: string[], deferred: number }}
+ */
+export function runAnnounceSweep (deps) {
+  const { torrents, dht, lastAnnounceAt, now, log } = deps
+  const { selected, deferred } = selectStalled(
+    torrents, now, lastAnnounceAt,
+    { cooldownMs: deps.cooldownMs, max: deps.max })
+
+  if (selected.length === 0) return { announced: [], deferred: 0 }
+
+  const announced = []
+  for (const torrent of selected) {
+    // Record the attempt before making it, so a torrent whose tracker
+    // client throws every time still waits out its cooldown rather
+    // than being retried every sweep.
+    lastAnnounceAt.set(torrent.infoHash, now)
+    try {
+      announceNow(torrent, dht)
+      announced.push(torrent.infoHash)
+    } catch (err) {
+      // The engine is long lived and one wedged tracker client must
+      // not cost the other torrents their sweep.
+      log('announce sweep: %s failed: %o', torrent.infoHash, err)
+    }
+  }
+
+  // A cap that drops work silently reads as "nothing else needed it".
+  log('announce sweep: re-announced %d stalled torrent(s), ' +
+    '%d deferred: %s',
+  announced.length, deferred, announced.join(' '))
+
+  return { announced, deferred }
+}

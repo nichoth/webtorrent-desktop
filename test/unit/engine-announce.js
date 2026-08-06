@@ -4,7 +4,8 @@ const test = require('tape')
 // in for the torrent and the DHT: what is under test is which calls go
 // out and how missing pieces are tolerated, not the network.
 const {
-  announceNow, selectStalled, COOLDOWN_MS, MAX_PER_SWEEP
+  announceNow, selectStalled, runAnnounceSweep, COOLDOWN_MS,
+  MAX_PER_SWEEP
 } = require('../../build/engine/announce')
 
 const INFO_HASH = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
@@ -190,3 +191,123 @@ test('selectStalled ignores a torrent with no info hash yet',
     t.deepEqual(selected.map((x) => x.infoHash), ['ok'])
     t.end()
   })
+
+// -- runAnnounceSweep ------------------------------------------------
+
+// A stalled torrent whose tracker records the call, so the sweep's
+// effect is observable without a network.
+function sweepable (infoHash, calls, overrides = {}) {
+  return Object.assign(stalled(infoHash), {
+    discovery: {
+      tracker: { update () { calls.push(infoHash) } }
+    }
+  }, overrides)
+}
+
+function sweepDeps (torrents, overrides = {}) {
+  return Object.assign({
+    torrents,
+    dht: false,
+    lastAnnounceAt: new Map(),
+    now: NOW,
+    log: () => {}
+  }, overrides)
+}
+
+test('runAnnounceSweep announces only the stalled torrents',
+  function (t) {
+    const calls = []
+    const deps = sweepDeps([
+      sweepable('a', calls),
+      sweepable('b', calls, { numPeers: 2 }),
+      sweepable('c', calls)
+    ])
+
+    const result = runAnnounceSweep(deps)
+
+    t.deepEqual(calls, ['a', 'c'], 'the healthy one was left alone')
+    t.deepEqual(result.announced, ['a', 'c'])
+    t.end()
+  })
+
+test('runAnnounceSweep records the attempt so the cooldown holds',
+  function (t) {
+    const calls = []
+    const lastAnnounceAt = new Map()
+    const torrents = [sweepable('a', calls)]
+
+    runAnnounceSweep(sweepDeps(torrents, { lastAnnounceAt }))
+    t.equal(lastAnnounceAt.get('a'), NOW, 'the attempt was recorded')
+
+    // A sweep one minute later must not announce it again.
+    runAnnounceSweep(
+      sweepDeps(torrents, { lastAnnounceAt, now: NOW + 60 * 1000 }))
+    t.deepEqual(calls, ['a'], 'still one announce')
+
+    // Past the cooldown it is eligible again.
+    runAnnounceSweep(sweepDeps(torrents, {
+      lastAnnounceAt, now: NOW + COOLDOWN_MS + 1
+    }))
+    t.deepEqual(calls, ['a', 'a'], 'and now it announces again')
+    t.end()
+  })
+
+test('runAnnounceSweep is silent when nothing is stalled',
+  function (t) {
+    const calls = []
+    const logged = []
+    const deps = sweepDeps([sweepable('a', calls, { numPeers: 1 })],
+      { log: (...args) => logged.push(args) })
+
+    const result = runAnnounceSweep(deps)
+
+    t.deepEqual(calls, [], 'nothing announced')
+    t.deepEqual(logged, [], 'and nothing logged')
+    t.deepEqual(result, { announced: [], deferred: 0 })
+    t.end()
+  })
+
+test('runAnnounceSweep says so when the cap holds work back',
+  function (t) {
+    const calls = []
+    const logged = []
+    const torrents = []
+    for (let i = 0; i < MAX_PER_SWEEP + 2; i++) {
+      torrents.push(sweepable('t' + i, calls))
+    }
+
+    const result = runAnnounceSweep(
+      sweepDeps(torrents, { log: (...args) => logged.push(args) }))
+
+    t.equal(result.announced.length, MAX_PER_SWEEP)
+    t.equal(result.deferred, 2)
+    t.equal(logged.length, 1, 'one line per sweep')
+    t.ok(logged[0].includes(2),
+      'and the deferred count is in it, not silently dropped')
+    t.end()
+  })
+
+test('runAnnounceSweep survives one torrent throwing', function (t) {
+  const calls = []
+  const logged = []
+  const lastAnnounceAt = new Map()
+  const bad = sweepable('bad', calls, {
+    discovery: {
+      tracker: {
+        update () { throw new Error('tracker is wedged') }
+      }
+    }
+  })
+
+  const result = runAnnounceSweep(sweepDeps(
+    [bad, sweepable('good', calls)],
+    { lastAnnounceAt, log: (...args) => logged.push(args) }))
+
+  t.deepEqual(calls, ['good'], 'the rest of the sweep still ran')
+  t.deepEqual(result.announced, ['good'], 'and the failure is not counted')
+  t.ok(logged.length >= 1, 'the failure was logged')
+  t.equal(lastAnnounceAt.get('bad'), NOW,
+    'and the wedged one still waits out its cooldown, rather than ' +
+    'being retried every sweep')
+  t.end()
+})
