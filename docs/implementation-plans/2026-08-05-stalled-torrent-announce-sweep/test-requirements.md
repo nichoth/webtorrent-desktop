@@ -49,10 +49,12 @@ blocks. Every count below is assertions unless it says otherwise.
 | AC4.1 | `runAnnounceSweep announces only the stalled torrents` | `tracker.update()` fired for `a` and `c`, never `b` |
 | AC4.2 | `runAnnounceSweep records the attempt so the cooldown holds` | `NOW` written to the map; no second announce at `+60s`; a third at `+COOLDOWN_MS+1` |
 | AC5.1 | `runAnnounceSweep says so when the cap holds work back` | exactly one log line, carrying the deferred count `2` |
+| AC5.1 | `runAnnounceSweep with max: 0 reports deferred work` | `announced: []`, `deferred: 2`, one log line carrying `2` |
 | AC5.2 | `runAnnounceSweep is silent when nothing is stalled` | zero announces, zero log lines, `{ announced: [], deferred: 0 }` |
 | AC6.1 | `runAnnounceSweep survives one torrent throwing` | `good` still announced after `bad` threw |
 | AC6.2 | `runAnnounceSweep survives one torrent throwing` | `announced` is `['good']`; the failure was logged |
 | AC6.3 | `runAnnounceSweep survives one torrent throwing` | `lastAnnounceAt.get('bad') === NOW` -- the wedged torrent still waits out its cooldown |
+| Interface | `runAnnounceSweep respects the cooldownMs override` | torrent not announced within default cooldown; announced again with `cooldownMs: 0` |
 
 > **AC6.3 was a coverage gap found while writing this document, and it
 > is now closed.** The plan originally listed AC6.3 but no assertion
@@ -96,9 +98,9 @@ blocks. Every count below is assertions unless it says otherwise.
 | After | `engine-announce.js` | Other |
 | --- | --- | --- |
 | Phase 1 | 12 blocks, 20 assertions | unchanged |
-| Phase 2 | 19 blocks, 39 assertions | unchanged |
-| Phase 3 | 19 blocks, 39 assertions | `engine-sweep-wiring.js`: 3 blocks, 7 assertions |
-| Phase 4 | 19 blocks, 39 assertions | `torrent-context-menu.js` falls 56 -> 51 |
+| Phase 2 | 21 blocks, 46 assertions | unchanged |
+| Phase 3 | 21 blocks, 46 assertions | `engine-sweep-wiring.js`: 3 blocks, 7 assertions |
+| Phase 4 | 21 blocks, 46 assertions | `torrent-context-menu.js` falls 56 -> 51 |
 
 ---
 

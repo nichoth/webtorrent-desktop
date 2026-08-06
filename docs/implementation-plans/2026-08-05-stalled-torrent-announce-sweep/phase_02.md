@@ -399,7 +399,9 @@ export function runAnnounceSweep (deps) {
     torrents, now, lastAnnounceAt,
     { cooldownMs: deps.cooldownMs, max: deps.max })
 
-  if (selected.length === 0) return { announced: [], deferred: 0 }
+  if (selected.length === 0 && deferred === 0) {
+    return { announced: [], deferred: 0 }
+  }
 
   const announced = []
   for (const torrent of selected) {
@@ -427,9 +429,16 @@ export function runAnnounceSweep (deps) {
 
 Three things here are load-bearing:
 
-1. **The early return is what makes the quiet case quiet.** Without it
-   the summary line would fire every minute forever, which is the
-   failure mode AC5.2 exists to prevent.
+1. **The early return is gated on both `selected.length === 0 AND
+   deferred === 0`.** This is what makes the quiet case quiet: AC5.2
+   requires silence when nothing is stalled (no eligibles, so
+   `deferred` is 0), but AC5.1 requires the sweep to report work held
+   back by the cap (some eligibles, so `deferred > 0`). Without the
+   second gate, a sweep with `max: 0` and eligible torrents would
+   early-return `{ announced: [], deferred: 0 }`, dropping work
+   silently -- the exact failure the comment at line 156 and AC5.1's
+   rationale forbid. The gate holds the sweep to reporting either
+   silence or honesty, never deception.
 2. **`lastAnnounceAt.set` comes before the `try`, not inside it.** A
    torrent whose tracker throws on every call would otherwise be
    retried every single sweep, which is exactly the tracker-hammering
@@ -446,17 +455,18 @@ Run:
 npm run build:node && npx tape test/unit/engine-announce.js
 ```
 
-Expected: PASS. `tape` prints **`# tests 39`** -- its "tests" line
-counts *assertions*, not `test()` blocks. There are 19 blocks: five
-`announceNow`, seven `selectStalled`, seven `runAnnounceSweep`. The
-seven added here carry 19 assertions on top of Phase 1's 20.
+Expected: PASS. `tape` prints **`# tests 46`** -- its "tests" line
+counts *assertions*, not `test()` blocks. There are 21 blocks: five
+`announceNow`, seven `selectStalled`, nine `runAnnounceSweep`. The
+nine blocks added here carry 26 assertions on top of Phase 1's 20.
 
 Note: the snippet above shows five `runAnnounceSweep` blocks carrying
-16 assertions. Code review found two coverage gaps in them -- the
-failure-logging assertion for AC6.2 was vacuous, and nothing
-constrained `dht` being forwarded to `announceNow` -- so two further
-blocks were added and one assertion was rewritten. The counts here are
-the corrected ones.
+16 assertions. Code review found three coverage gaps: the
+failure-logging assertion for AC6.2 was vacuous, nothing constrained
+`dht` being forwarded to `announceNow`, and nothing tested the early
+return with deferred work or the cooldownMs forwarding. Two blocks
+were added to the original five and one assertion was rewritten. The
+counts here are the final corrected ones.
 
 **Step 6: Lint**
 
