@@ -92,6 +92,7 @@ export function selectStalled (torrents, now, lastAnnounceAt, opts = {}) {
   const max = opts.max == null ? MAX_PER_SWEEP : opts.max
 
   const eligible = torrents.filter((torrent) =>
+    // Caller supplies a well-formed array; filter elements may be null.
     torrent &&
     torrent.infoHash &&
     torrent.numPeers === 0 &&

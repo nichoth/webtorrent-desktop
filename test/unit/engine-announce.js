@@ -96,7 +96,7 @@ const NOW = 1000000
 
 test('selectStalled picks torrents with no peers', function (t) {
   const a = stalled('a')
-  const b = stalled('b', { numPeers: 3 })
+  const b = stalled('b', { numPeers: 1 })
   const c = stalled('c')
 
   const { selected, deferred } =
@@ -155,7 +155,9 @@ test('selectStalled caps a sweep and reports what it deferred',
     const { selected, deferred } =
       selectStalled(torrents, NOW, new Map())
 
-    t.equal(selected.length, MAX_PER_SWEEP, 'the cap holds')
+    t.deepEqual(selected.map((x) => x.infoHash),
+      ['t0', 't1', 't2', 't3', 't4'],
+      'ties keep list order, so the cap serves the head first')
     t.equal(deferred, 3, 'and the remainder is counted, not dropped')
     t.end()
   })
