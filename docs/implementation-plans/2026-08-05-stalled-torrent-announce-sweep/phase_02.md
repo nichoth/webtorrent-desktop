@@ -446,10 +446,10 @@ Run:
 npm run build:node && npx tape test/unit/engine-announce.js
 ```
 
-Expected: PASS. `tape` prints **`# tests 35`** -- its "tests" line
+Expected: PASS. `tape` prints **`# tests 36`** -- its "tests" line
 counts *assertions*, not `test()` blocks. There are 17 blocks: five
 `announceNow`, seven `selectStalled`, five `runAnnounceSweep`. The five
-added here carry 16 assertions on top of Phase 1's 19.
+added here carry 16 assertions on top of Phase 1's 20.
 
 **Step 6: Lint**
 

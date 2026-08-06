@@ -95,10 +95,10 @@ blocks. Every count below is assertions unless it says otherwise.
 
 | After | `engine-announce.js` | Other |
 | --- | --- | --- |
-| Phase 1 | 12 blocks, 19 assertions | unchanged |
-| Phase 2 | 17 blocks, 35 assertions | unchanged |
-| Phase 3 | 17 blocks, 35 assertions | `engine-sweep-wiring.js`: 3 blocks, 7 assertions |
-| Phase 4 | 17 blocks, 35 assertions | `torrent-context-menu.js` falls 56 -> 51 |
+| Phase 1 | 12 blocks, 20 assertions | unchanged |
+| Phase 2 | 17 blocks, 36 assertions | unchanged |
+| Phase 3 | 17 blocks, 36 assertions | `engine-sweep-wiring.js`: 3 blocks, 7 assertions |
+| Phase 4 | 17 blocks, 36 assertions | `torrent-context-menu.js` falls 56 -> 51 |
 
 ---
 
