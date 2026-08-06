@@ -16,8 +16,20 @@ const ENTRY_SRC = path.join(
 const source = fs.readFileSync(ENTRY_SRC, 'utf8')
 
 // Comments discuss the sweep at length, so they are not scanned.
-const code = source.split('\n')
-  .filter((line) => !/^\s*(\/\/|\*|\/\*)/.test(line))
+//
+// Block comments are stripped whole rather than filtered line by line,
+// and the difference matters. The scan in `engine-entry.js` asserts
+// ABSENCE -- no `window.`, every `.send(` is `bus.send(` -- so a
+// comment body it fails to strip trips an assertion and fails safe.
+// Every assertion here asserts PRESENCE, so an unstripped comment body
+// reads as live code and passes. Filtering only lines that *start*
+// with a delimiter leaves the body of a `/* ... */` block behind,
+// which means commenting out the seeding call would report the wiring
+// as connected while it is dead. Same regex, opposite consequence.
+const code = source
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .split('\n')
+  .filter((line) => !/^\s*\/\//.test(line))
   .join('\n')
 
 test('the engine imports the sweep', function (t) {

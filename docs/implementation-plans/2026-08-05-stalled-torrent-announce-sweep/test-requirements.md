@@ -72,8 +72,8 @@ blocks. Every count below is assertions unless it says otherwise.
 
 | AC | Verified by | Asserts |
 | --- | --- | --- |
-| AC7.1 | `the engine imports the sweep` + `the sweep runs on its own interval` | `runAnnounceSweep` imported from `./announce`; `SWEEP_INTERVAL_MS` present; `setInterval(runSweep, SWEEP_INTERVAL_MS)`; `runAnnounceSweep({` called |
-| AC7.2 | `the last-announced map is seeded and cleared` | `const lastAnnounceAt = new Map()` and `lastAnnounceAt.set(` present |
+| AC7.1 | `the engine imports the sweep` + `the sweep runs on its own interval` | `runAnnounceSweep` and `SWEEP_INTERVAL_MS` both imported from `./announce`; `setInterval(runSweep, SWEEP_INTERVAL_MS)`; `runAnnounceSweep({` called |
+| AC7.2 | `the last-announced map is seeded and cleared` | `const lastAnnounceAt = new Map()` present, seeded by exactly `lastAnnounceAt.set(torrent.infoHash, Date.now())` |
 | AC7.3 | `the last-announced map is seeded and cleared` | `lastAnnounceAt.delete(` present |
 | AC7.4 | `test/unit/engine-entry.js:115`, `the engine entry point names no host or browser API` (**pre-existing**) | every `.send(` is `bus.send(`, after the `infoHash` handler is rewritten |
 
