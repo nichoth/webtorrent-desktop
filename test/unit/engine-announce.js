@@ -347,3 +347,53 @@ test('runAnnounceSweep respects the max override',
       'deferred count reflects torrents held back by cap')
     t.end()
   })
+
+test('runAnnounceSweep with max: 0 reports deferred work',
+  function (t) {
+    const calls = []
+    const logged = []
+    const torrents = [
+      sweepable('t0', calls),
+      sweepable('t1', calls)
+    ]
+
+    const result = runAnnounceSweep(
+      sweepDeps(torrents, {
+        max: 0,
+        log: (...args) => logged.push(args)
+      }))
+
+    t.deepEqual(result.announced, [], 'nothing announced with max: 0')
+    t.equal(result.deferred, 2,
+      'deferred count is the eligible torrent count')
+    t.equal(logged.length, 1, 'one log line emitted')
+    t.ok(logged[0].includes(2),
+      'the deferred count is in the log output')
+    t.end()
+  })
+
+test('runAnnounceSweep respects the cooldownMs override',
+  function (t) {
+    const calls = []
+    const lastAnnounceAt = new Map()
+    const torrents = [sweepable('a', calls)]
+
+    // First sweep records the attempt
+    runAnnounceSweep(
+      sweepDeps(torrents, { lastAnnounceAt }))
+    t.equal(calls.length, 1, 'torrent announced on first sweep')
+
+    // With default cooldown, a sweep at 2 minutes is not eligible
+    runAnnounceSweep(sweepDeps(torrents, {
+      lastAnnounceAt, now: NOW + 2 * 60 * 1000
+    }))
+    t.equal(calls.length, 1, 'not announced inside default cooldown')
+
+    // With cooldownMs: 0, the same torrent is eligible immediately
+    runAnnounceSweep(sweepDeps(torrents, {
+      lastAnnounceAt, cooldownMs: 0, now: NOW + 1
+    }))
+    t.equal(calls.length, 2,
+      'announced again with cooldownMs: 0 override')
+    t.end()
+  })
