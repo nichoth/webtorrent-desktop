@@ -146,7 +146,7 @@ the natural cadence is slow -- 30 minutes per tracker, 15 minutes plus
 jitter for the DHT -- so a torrent whose last peer drops can sit at
 zero peers for half an hour.
 
-The sweep is the automatic form. Once a minute `index.js` calls
+The sweep automates it. Once a minute `index.js` calls
 `runAnnounceSweep`, which re-announces every torrent that has zero
 peers, is not finished and is not paused. Three guards keep it from
 being worse than the bug it fixes, and they are the reason the logic

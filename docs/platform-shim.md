@@ -442,7 +442,7 @@ correctly in the webview.
 
 | Function | Replaces |
 | --- | --- |
-| `showContextMenu(items)` | `controllers/torrent-list-controller.js:265-312`, the seven-item torrent context menu |
+| `showContextMenu(items)` | `controllers/torrent-list-controller.js:257-304`, the seven-item torrent context menu |
 
 Migrated in US-029. The controller now builds one flat descriptor
 array -- the reveal item and the separator that follows it are spread
@@ -466,7 +466,7 @@ Descriptors are validated before the menu is built, so a bad one
 rejects without a half-built menu appearing.
 
 There is **no submenu type**, because the renderer has no submenu.
-Verified at US-025: `controllers/torrent-list-controller.js:265-312`
+Verified at US-025: `controllers/torrent-list-controller.js:257-304`
 is the only `remote.Menu` in `src/renderer/`, and it uses labels,
 `click` handlers, one `enabled` flag on "Save Torrent File As...",
 three separators, and a manual `'checkmark '` label prefix for "Sort
