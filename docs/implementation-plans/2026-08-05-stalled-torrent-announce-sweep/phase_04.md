@@ -387,23 +387,50 @@ Line 445 is **reworded, not deleted** -- the row documents
 | `showContextMenu(items)` | `controllers/torrent-list-controller.js:258-310`, the nine-item torrent context menu |
 ```
 
-Two things are wrong with it and both should be fixed in one pass:
+One thing is wrong with it:
 
 - **"nine-item" becomes "seven-item".** Seven is the count of actual
   labels after the removal, matching the number Step 3 puts at line 185
   of `torrent-context-menu.js`. Do not count separators; the sentence
   says "item" and the test counts labels.
-- **The cited range `258-310` is already stale.** The menu builder is
-  at `265-316` today and will be `265-312` after the item comes out.
-  Use the post-removal range.
 
-While you are here: **line 469 of the same file carries the identical
-stale range** -- "Verified at US-025:
-`controllers/torrent-list-controller.js:258-310`". It is pre-existing
-and not caused by this change, and Step 6's grep will not surface it
-because it names no announce string. Fix it in the same pass rather
-than correcting one copy of a wrong number and leaving its twin 24
-lines below.
+> ### Correction, added 2026-08-05 during execution
+>
+> **This step used to carry a second bullet instructing you to update
+> the cited range `258-310`, on the grounds that it was stale. That
+> instruction was wrong. Do not update the range.**
+>
+> Citations in `docs/platform-shim.md` are **historical**, pinned to
+> `d187b0d` (US-018, the commit that created the document). They record
+> what the pre-migration source looked like; they do not track current
+> line numbers. Every citation in that file resolves exactly against
+> `d187b0d` -- all nineteen into `torrent-list-controller.js`, plus the
+> `fs.js`, `state.js` and `migrations.js` tables. An audit run against
+> any later commit will appear to find half a dozen errors in them and
+> will be wrong.
+>
+> `258-310` is correct: at that baseline, line 258 is
+> `const menu = new remote.Menu()` and line 310 is
+> `menu.popup({ window: remote.getCurrentWindow() })` -- exactly the
+> `remote.Menu` block the surrounding prose describes, and the reason
+> line 469 can say it is the only one in `src/renderer/`.
+>
+> Following the old instruction broke the line twice in one sitting:
+> once to `265-312` as written, then to `257-304` when a reviewer
+> re-anchored it to the current post-shim file. The second was worse,
+> because `remote.Menu` no longer appears anywhere in `src/renderer/`,
+> so line 469 ended up naming a range that provably does not contain
+> the thing it claims. Both were reverted.
+>
+> The root confusion is worth naming: the old bullet said the builder
+> "is at `265-316` today", but after Step 3 the menu descriptors live
+> in `torrent-context-menu.js`, so that range named a location in a
+> different file from the one the citation references.
+
+Line 469 of the same file carries the identical range in "Verified at
+US-025: `controllers/torrent-list-controller.js:258-310`". It is also
+correct and also must not be updated. Both are left exactly as they
+are; only the "nine-item" wording on line 445 changes.
 
 **Step 5: Update the engine notes**
 
