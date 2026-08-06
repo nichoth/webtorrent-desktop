@@ -146,13 +146,6 @@ the natural cadence is slow -- 30 minutes per tracker, 15 minutes plus
 jitter for the DHT -- so a torrent whose last peer drops can sit at
 zero peers for half an hour.
 
-`wt-force-announce` in `index.js` is the manually triggered form, and
-it is **diagnostic instrumentation, not a feature**: it logs peer
-counts before the call and again at 5, 15 and 30 seconds after, all
-under the `DIAG announce` prefix. It answers one question -- does
-re-announcing on its own revive a stalled torrent -- and it comes out
-once that question has an answer.
-
 The sweep is the automatic form. Once a minute `index.js` calls
 `runAnnounceSweep`, which re-announces every torrent that has zero
 peers, is not finished and is not paused. Three guards keep it from

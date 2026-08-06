@@ -158,14 +158,6 @@ export default class TorrentListController {
     if (playSound) sound.play('DISABLE')
   }
 
-  // DIAGNOSTIC: ask the engine to re-announce this torrent to its
-  // trackers and the DHT without tearing it down. Paired with the
-  // `DIAG announce` logging in the engine, and comes out with it.
-  forceAnnounce (infoHash) {
-    const torrentSummary = TorrentSummary.getByKey(this.state, infoHash)
-    reportErrors(ipcEngine.forceAnnounce(torrentSummary.infoHash))
-  }
-
   prioritizeTorrent (infoHash) {
     this.state.saved.torrents
       .filter(torrent => ['downloading', 'seeding'].includes(torrent.status)) // Active torrents only.
@@ -300,10 +292,6 @@ export default class TorrentListController {
         label: 'Save Torrent File As...',
         click: () => dispatch('saveTorrentFileAs', torrentSummary.torrentKey),
         enabled: torrentSummary.torrentFileName != null
-      },
-      {
-        label: 'Force Re-announce',
-        click: () => this.forceAnnounce(torrentSummary.infoHash)
       },
       { type: 'separator' },
       {

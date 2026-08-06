@@ -163,7 +163,6 @@ test('a torrent with files gets the full menu, in order', function (t) {
     'Copy Magnet Link to Clipboard',
     'Copy Instant.io Link to Clipboard',
     'Save Torrent File As...',
-    'Force Re-announce',
     '--separator--',
     'Sort by Name'
   ], 'labels and separators are unchanged')
@@ -182,8 +181,8 @@ test('the reveal item is named for the platform file manager',
     ]) {
       const labels = openMenu({ platform }).map((i) => i.label)
       t.ok(labels.includes(label), `${platform} says ${label}`)
-      t.equal(labels.filter(Boolean).length, 8,
-        `${platform} gets the same eight items`)
+      t.equal(labels.filter(Boolean).length, 7,
+        `${platform} gets the same seven items`)
     }
     t.end()
   })
@@ -198,7 +197,6 @@ test('a torrent with no files drops the reveal item and its separator',
       'Copy Magnet Link to Clipboard',
       'Copy Instant.io Link to Clipboard',
       'Save Torrent File As...',
-      'Force Re-announce',
       '--separator--',
       'Sort by Name'
     ], 'only the reveal item and the separator after it are gone')
@@ -232,7 +230,7 @@ test('no other item sets enabled', function (t) {
   const items = openMenu().filter(
     (i) => i.type !== 'separator' && i.label !== 'Save Torrent File As...'
   )
-  t.equal(items.length, 7, 'seven unconditionally enabled items')
+  t.equal(items.length, 6, 'six unconditionally enabled items')
   for (const item of items) {
     t.equal(item.enabled, undefined, item.label + ' leaves enabled alone')
   }
@@ -248,14 +246,6 @@ test('Sort by Name shows a check mark when sorting by name is on',
       'checked when on')
     t.end()
   })
-
-test('the menu offers a forced re-announce', function (t) {
-  const items = openMenu()
-  const item = itemNamed(items, 'Force Re-announce')
-  t.ok(item, 'the item is present')
-  t.equal(typeof item.click, 'function', 'and it is clickable')
-  t.end()
-})
 
 test('the remove items dispatch confirmDeleteTorrent', function (t) {
   const items = openMenu()

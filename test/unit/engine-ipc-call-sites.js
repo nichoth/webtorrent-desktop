@@ -87,8 +87,7 @@ const ENGINE_COMMANDS = [
   'getAudioMetadata',
   'startServer',
   'stopServer',
-  'selectFiles',
-  'forceAnnounce'
+  'selectFiles'
 ]
 
 const ENGINE_LISTENERS = [
@@ -338,18 +337,6 @@ test('trackers, pausing and file selection go through the shim',
       'the new selection goes out')
     t.end()
   })
-
-test('a forced re-announce goes through the shim', async function (t) {
-  reset()
-  const state = {
-    saved: { torrents: [{ torrentKey: 7, infoHash: 'abc' }] }
-  }
-  new TorrentListController(state).forceAnnounce('abc')
-  await flush()
-  t.deepEqual(record.engine, [['forceAnnounce', 'abc']],
-    'the info hash goes out as forceAnnounce')
-  t.end()
-})
 
 test('a rejected engine promise is reported, not left floating',
   async function (t) {
