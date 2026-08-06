@@ -445,10 +445,10 @@ Run:
 npm run build:node && npx tape test/unit/engine-announce.js
 ```
 
-Expected: PASS. `tape` prints **`# tests 19`** -- note that its "tests"
+Expected: PASS. `tape` prints **`# tests 20`** -- note that its "tests"
 line counts *assertions*, not `test()` blocks. There are 12 blocks: the
 five existing `announceNow` ones carrying 10 assertions, plus the seven
-added here carrying 9. Looking for "12" in the output will not find it.
+added here carrying 10. Looking for "12" in the output will not find it.
 
 **Step 6: Lint**
 
@@ -515,7 +515,7 @@ inferring it from `npm test`.
 
 - `selectStalled` and the three constants are exported from
   `src/engine/announce.js`.
-- `test/unit/engine-announce.js` passes: 12 `test()` blocks, 19
+- `test/unit/engine-announce.js` passes: 12 `test()` blocks, 20
   assertions.
 - `npm test` passes.
 - Nothing in `src/engine/index.js` has changed. Wiring is Phase 3.

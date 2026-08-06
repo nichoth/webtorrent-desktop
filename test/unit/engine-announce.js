@@ -155,8 +155,9 @@ test('selectStalled caps a sweep and reports what it deferred',
     const { selected, deferred } =
       selectStalled(torrents, NOW, new Map())
 
+    t.equal(selected.length, MAX_PER_SWEEP, 'the cap holds')
     t.deepEqual(selected.map((x) => x.infoHash),
-      ['t0', 't1', 't2', 't3', 't4'],
+      torrents.slice(0, MAX_PER_SWEEP).map((x) => x.infoHash),
       'ties keep list order, so the cap serves the head first')
     t.equal(deferred, 3, 'and the remainder is counted, not dropped')
     t.end()
