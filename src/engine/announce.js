@@ -48,3 +48,65 @@ export function announceNow (torrent, dht) {
 
   return result
 }
+
+// How often the engine looks for stalled torrents. Short, because the
+// check itself is a filter over an in-memory array; the cooldown below
+// is what keeps the announces themselves rare.
+export const SWEEP_INTERVAL_MS = 60 * 1000
+
+// The floor between two forced announces of the same torrent.
+// Comfortably above any tracker's `min interval`, and far below the 30
+// minute natural cadence this exists to close.
+export const COOLDOWN_MS = 5 * 60 * 1000
+
+// A 40-torrent list must not announce 40 times in one tick. Anything
+// over the cap waits for the next sweep, oldest first.
+export const MAX_PER_SWEEP = 5
+
+function lastOf (lastAnnounceAt, infoHash) {
+  const last = lastAnnounceAt.get(infoHash)
+  return last == null ? 0 : last
+}
+
+/**
+ * Which torrents should be asked to re-announce right now.
+ *
+ * A torrent qualifies when it has no peers at all, is not finished and
+ * is not paused. One peer is enough to disqualify it: the sweep exists
+ * for torrents that have nobody to talk to, and a torrent that is
+ * talking to somebody is making progress the sweep cannot improve on.
+ *
+ * @param {object[]} torrents The client's torrents.
+ * @param {number} now Milliseconds, injected so this stays testable.
+ * @param {Map<string, number>} lastAnnounceAt Info hash -> when the
+ *   sweep last asked. A missing entry means never.
+ * @param {object} [opts]
+ * @param {number} [opts.cooldownMs]
+ * @param {number} [opts.max]
+ * @returns {{ selected: object[], deferred: number }} `deferred` is how
+ *   many eligible torrents the cap held back, for logging.
+ */
+export function selectStalled (torrents, now, lastAnnounceAt, opts = {}) {
+  const cooldownMs =
+    opts.cooldownMs == null ? COOLDOWN_MS : opts.cooldownMs
+  const max = opts.max == null ? MAX_PER_SWEEP : opts.max
+
+  const eligible = torrents.filter((torrent) =>
+    torrent &&
+    torrent.infoHash &&
+    torrent.numPeers === 0 &&
+    !torrent.done &&
+    !torrent.paused &&
+    now - lastOf(lastAnnounceAt, torrent.infoHash) >= cooldownMs)
+
+  // Least recently announced first, so a list longer than the cap is
+  // served round robin instead of the same head every sweep. A torrent
+  // never announced sorts to the front.
+  eligible.sort((a, b) =>
+    lastOf(lastAnnounceAt, a.infoHash) - lastOf(lastAnnounceAt, b.infoHash))
+
+  return {
+    selected: eligible.slice(0, max),
+    deferred: Math.max(0, eligible.length - max)
+  }
+}
