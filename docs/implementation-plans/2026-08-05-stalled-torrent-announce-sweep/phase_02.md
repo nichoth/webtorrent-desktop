@@ -510,7 +510,7 @@ cannot fail for the right reason.
 ## Done when
 
 - `runAnnounceSweep` is exported from `src/engine/announce.js`.
-- `test/unit/engine-announce.js` passes: 17 `test()` blocks, 35
+- `test/unit/engine-announce.js` passes: 17 `test()` blocks, 36
   assertions.
 - `npm test` passes.
 - `src/engine/index.js` is still unchanged.
