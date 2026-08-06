@@ -305,9 +305,45 @@ test('runAnnounceSweep survives one torrent throwing', function (t) {
 
   t.deepEqual(calls, ['good'], 'the rest of the sweep still ran')
   t.deepEqual(result.announced, ['good'], 'and the failure is not counted')
-  t.ok(logged.length >= 1, 'the failure was logged')
+  t.ok(logged.some((args) => args.includes('bad')),
+    'the failure names the torrent')
   t.equal(lastAnnounceAt.get('bad'), NOW,
     'and the wedged one still waits out its cooldown, rather than ' +
     'being retried every sweep')
   t.end()
 })
+
+test('runAnnounceSweep calls DHT lookup for each announced torrent',
+  function (t) {
+    const trackerCalls = []
+    const dhtCalls = []
+    const deps = sweepDeps([
+      sweepable('a', trackerCalls),
+      sweepable('b', trackerCalls)
+    ], { dht: fakeDht(dhtCalls) })
+
+    runAnnounceSweep(deps)
+
+    t.deepEqual(dhtCalls, [
+      ['dht.lookup', 'a'],
+      ['dht.lookup', 'b']
+    ], 'DHT lookup was called for each stalled torrent')
+    t.end()
+  })
+
+test('runAnnounceSweep respects the max override',
+  function (t) {
+    const calls = []
+    const torrents = []
+    for (let i = 0; i < 3; i++) {
+      torrents.push(sweepable('t' + i, calls))
+    }
+
+    const result = runAnnounceSweep(
+      sweepDeps(torrents, { max: 1 }))
+
+    t.equal(result.announced.length, 1, 'max: 1 caps the sweep')
+    t.equal(result.deferred, 2,
+      'deferred count reflects torrents held back by cap')
+    t.end()
+  })

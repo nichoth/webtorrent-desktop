@@ -135,7 +135,7 @@ export function runAnnounceSweep (deps) {
     torrents, now, lastAnnounceAt,
     { cooldownMs: deps.cooldownMs, max: deps.max })
 
-  if (selected.length === 0) return { announced: [], deferred: 0 }
+  if (selected.length === 0) return { announced: [], deferred }
 
   const announced = []
   for (const torrent of selected) {
