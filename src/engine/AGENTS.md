@@ -86,9 +86,12 @@ Electron module and uses no DOM.
 
 **The stdout contract with the host.** Exactly one line matches
 `WEBTORRENT_ENGINE_PORT=<port>`, printed once the server is listening.
-Everything else on stdout and stderr is log output for
-`src/main/log.js`. `src/main/engine-process.js` (US-041) parses that
-line; keep the prefix and the `=` if you touch either side.
+The host end is `src-tauri/src/engine.rs`, which holds the same prefix
+in `PORT_LINE_PREFIX`; keep the prefix and the `=` if you touch either
+side. Every other line on stdout and stderr is pumped through to the
+host's own output under an `Engine: ` prefix. `src/main/` is gone, so
+the Electron reader that older plans name here
+(`src/main/engine-process.js`, US-041) went with it.
 
 Differences from the hidden-window engine, all deliberate:
 
@@ -157,8 +160,22 @@ least-recently-announced first so a long list goes round robin; and a
 log line whenever the cap holds work back, because a silent truncation
 reads as "nothing else needed it".
 
-`index.js` owns only the interval and the `lastAnnounceAt` map. The map
+`index.js` owns only the timer and the `lastAnnounceAt` map. The map
 is seeded when a torrent's info hash arrives -- `client.add()` has just
 announced `started` and a second announce a minute later would be waste
 -- and cleared in `stopTorrenting`, so it cannot outgrow the torrent
 list.
+
+The three tunables are exported from here, not from `index.js`:
+`SWEEP_INTERVAL_MS`, `COOLDOWN_MS` and `MAX_PER_SWEEP`. `index.js`
+imports the interval rather than repeating `60 * 1000`, so the cadence
+has one home. `selectStalled` is exported next to `runAnnounceSweep`
+because the guards are worth testing without announcing anything.
+
+`test/unit/engine-sweep-wiring.js` pins that wiring by scanning the
+`index.js` source: both imports, `setInterval(runSweep,
+SWEEP_INTERVAL_MS)`, and the seed and the delete on `lastAnnounceAt`.
+An interval that fires once a minute is too slow to drive from a
+spawned sidecar, and a test-only override of it would be production
+code that exists for a test -- so renaming `runSweep` or inlining the
+constant fails that scan instead of going unnoticed.
