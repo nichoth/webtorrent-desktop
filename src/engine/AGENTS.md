@@ -152,3 +152,20 @@ counts before the call and again at 5, 15 and 30 seconds after, all
 under the `DIAG announce` prefix. It answers one question -- does
 re-announcing on its own revive a stalled torrent -- and it comes out
 once that question has an answer.
+
+The sweep is the automatic form. Once a minute `index.js` calls
+`runAnnounceSweep`, which re-announces every torrent that has zero
+peers, is not finished and is not paused. Three guards keep it from
+being worse than the bug it fixes, and they are the reason the logic
+lives here rather than inline in `index.js`, where it could not be
+tested: a five minute per-torrent cooldown, comfortably above any
+tracker's `min interval`; a cap of five torrents per sweep, served
+least-recently-announced first so a long list goes round robin; and a
+log line whenever the cap holds work back, because a silent truncation
+reads as "nothing else needed it".
+
+`index.js` owns only the interval and the `lastAnnounceAt` map. The map
+is seeded when a torrent's info hash arrives -- `client.add()` has just
+announced `started` and a second announce a minute later would be waste
+-- and cleared in `stopTorrenting`, so it cannot outgrow the torrent
+list.

@@ -30,7 +30,7 @@ import networkAddress from 'network-address'
 import WebTorrent from 'webtorrent'
 
 import config from '../config'
-import { announceNow } from './announce'
+import { announceNow, runAnnounceSweep, SWEEP_INTERVAL_MS } from './announce'
 import { createWebSocketBus } from './bus-websocket'
 
 console.time('init')
@@ -80,6 +80,13 @@ const client = new WebTorrent({ peerId: PEER_ID })
 // a server at the same time for different torrents, so each entry
 // counts its holders and is destroyed when the last one releases it.
 const servers = new Map()
+
+// Info hash -> when the sweep last asked this torrent to announce. A
+// torrent that has never been asked is eligible immediately, so a new
+// torrent is seeded here when its info hash arrives: `client.add()`
+// has just sent a `start` announce of its own and a second one a
+// minute later would be pure waste.
+const lastAnnounceAt = new Map()
 
 // Used for diffing, so we only send progress updates when necessary
 let prevProgress = null
@@ -135,6 +142,7 @@ function init () {
   }
 
   setInterval(updateTorrentProgress, 1000)
+  setInterval(runSweep, SWEEP_INTERVAL_MS)
 
   bus.listen().then((port) => {
     // The one line the host parses. Nothing may precede it on this
@@ -192,6 +200,7 @@ function startTorrenting (torrentKey, torrentID, path, fileModtimes, selections)
 
 function stopTorrenting (infoHash) {
   console.log('--- STOP TORRENTING: ', infoHash)
+  lastAnnounceAt.delete(infoHash)
   const torrent = client.get(infoHash)
   if (torrent) torrent.destroy()
 }
@@ -234,6 +243,22 @@ function forceAnnounce (infoHash) {
   }
 }
 
+// Ask any torrent sitting at zero peers to re-announce. Without this a
+// torrent whose last peer drops waits out the tracker's own interval,
+// which `bittorrent-tracker` defaults to 30 minutes for HTTP and UDP,
+// or the DHT's 15 minutes plus jitter. The guards -- who qualifies, a
+// five minute per-torrent cooldown, a cap per sweep -- are in
+// `announce.js`, along with their tests.
+function runSweep () {
+  runAnnounceSweep({
+    torrents: client.torrents,
+    dht: client.dht,
+    lastAnnounceAt,
+    now: Date.now(),
+    log: (...args) => console.log(...args)
+  })
+}
+
 // Create a new torrent, start seeding
 function createTorrent (torrentKey, options) {
   console.log('creating torrent', torrentKey, options)
@@ -249,8 +274,12 @@ function addTorrentEvents (torrent) {
     bus.send('wt-warning', torrent.key, err.message))
   torrent.on('error', (err) =>
     bus.send('wt-error', torrent.key, err.message))
-  torrent.on('infoHash', () =>
-    bus.send('wt-parsed', torrent.key, torrent.infoHash, torrent.magnetURI))
+  torrent.on('infoHash', () => {
+    // `client.add()` announces `started` as it goes, so the sweep's
+    // clock for this torrent starts here rather than at zero.
+    lastAnnounceAt.set(torrent.infoHash, Date.now())
+    bus.send('wt-parsed', torrent.key, torrent.infoHash, torrent.magnetURI)
+  })
   torrent.on('metadata', torrentMetadata)
   torrent.on('ready', torrentReady)
   torrent.on('done', torrentDone)
