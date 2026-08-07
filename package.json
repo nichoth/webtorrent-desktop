@@ -1,6 +1,6 @@
 {
   "name": "webtorrent-desktop",
-  "description": "WebTorrent, the streaming torrent client. For Mac, Windows, and Linux.",
+  "description": "WebTorrent, the streaming torrent client. For macOS.",
   "version": "0.24.0",
   "author": {
     "name": "WebTorrent, LLC",
@@ -15,7 +15,6 @@
     "tauri:build": "tauri build",
     "clean": "node ./bin/clean.js",
     "gh-release": "gh-release",
-    "install-system-deps": "brew install fakeroot dpkg rpm",
     "open-config": "node ./bin/open-config.js",
     "start": "npm run build:tauri && tauri dev",
     "test": "npm run lint && depcheck --ignores=standard,eslint,@babel/eslint-parser,madr,buffer --ignore-dirs=build,build-vite,build-tauri,build-sidecar,dist && npm run test-unit",

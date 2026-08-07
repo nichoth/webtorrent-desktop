@@ -17,18 +17,16 @@ the port and which rules exist because of it.
   ships a pinned Node 24 runtime inside the packaged app, and building
   on an older line than the one you ship is not worth the ambiguity.
 - npm 10 or later. Node 24 ships npm 11.
-- macOS on Apple Silicon, if you intend to produce a packaged build.
-  Development works on all three platforms; `npx tauri build` does
-  not, because the staged engine runtime is `darwin-arm64` only. See
+- macOS on Apple Silicon. This app targets macOS only
+  ([ADR-017](adr/ADR-017-target-macos-only.md)), and `npx tauri build`
+  in particular stages a `darwin-arm64` engine runtime and refuses any
+  other host. See
   [Package the app](../README.md#package-the-app).
-- The Rust toolchain, and Tauri 2's per-platform system dependencies:
-  the Xcode command line tools on macOS, MSVC build tools plus the
-  WebView2 runtime on Windows, `webkit2gtk-4.1` and `libsoup3` on
-  Linux. See
+- The Rust toolchain and the Xcode command line tools, which are
+  Tauri 2's macOS system dependencies. See
   [ADR-014](adr/ADR-014-dual-host-during-the-tauri-port.md) for the
-  versions.
-
-macOS, Windows, and Linux are all supported for development.
+  versions; its per-platform list also covers Windows and Linux, which
+  are not targets.
 
 ## Run
 

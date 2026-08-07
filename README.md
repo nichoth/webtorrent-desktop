@@ -102,7 +102,8 @@ host rather than producing a bundle that cannot spawn its engine. And
 the output is **unsigned and un-notarized**, so macOS will refuse it
 on another machine without a Gatekeeper override -- signing, the
 hardened runtime and notarization are US-083 in `specs/prd.json`.
-Windows and Linux packaging are not in the backlog at all.
+Windows and Linux are not targets at all -- see
+[ADR-017](docs/adr/ADR-017-target-macos-only.md).
 
 For a development binary rather than a bundle, `npm start` is the
 usual path; `cd src-tauri && cargo build` also works and produces a

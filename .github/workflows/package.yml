@@ -1,69 +1,41 @@
 name: package
-on: 
+on:
   workflow_dispatch:
 jobs:
-  package_linux:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-node@v3
-      with:
-        node-version: '16'
-    - uses: actions/cache@v3
-      with:
-        path: ~/.npm
-        key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-        restore-keys: |
-          ${{ runner.os }}-node-
-    - run: npm install
-    - run: npm run package -- linux
-    - uses: actions/upload-artifact@v3
-      with:
-        name: linux
-        path: |
-          dist/*.deb
-          dist/*.rpm
-          dist/*.zip
+  # One job, macOS, arm64 (ADR-017). This was three jobs invoking
+  # `npm run package`, which US-072 deleted with the Electron host, so
+  # the workflow had been dead since then.
+  #
+  # The artifacts are UNSIGNED and will not pass Gatekeeper on a machine
+  # that did not build them. Signing, the hardened runtime, notarization
+  # and stapling are US-083; until that lands this stays
+  # workflow_dispatch rather than release automation.
   package_macos:
     runs-on: macos-latest
     steps:
     - uses: actions/checkout@v3
     - uses: actions/setup-node@v3
       with:
-        node-version: '16'
+        node-version: '24'
     - uses: actions/cache@v3
       with:
         path: ~/.npm
         key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
         restore-keys: |
           ${{ runner.os }}-node-
+    # The pinned sidecar runtime, keyed on the manifest that pins it so
+    # a bumped version misses the cache rather than reusing the old
+    # tarball (ADR-016).
+    - uses: actions/cache@v3
+      with:
+        path: ~/.cache/webtorrent-desktop/node
+        key: ${{ runner.os }}-sidecar-node-${{ hashFiles('bin/node-runtime.json') }}
     - run: npm install
-    - run: npm run package -- darwin
+    - run: npm test
+    - run: npm run build:tauri
+    - run: npx tauri build
     - uses: actions/upload-artifact@v3
       with:
         name: macos
         path: |
-          dist/*.dmg
-          dist/*.zip
-  package_windows:
-    runs-on: windows-latest
-    steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-node@v3
-      with:
-        node-version: '16'
-    - uses: actions/cache@v3
-      with:
-        path: ~/.npm
-        key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-        restore-keys: |
-          ${{ runner.os }}-node-
-    - run: npm install
-    - run: npm run package -- win32
-    - uses: actions/upload-artifact@v3
-      with:
-        name: windows
-        path: |
-          dist/*.exe
-          dist/*.nupkg
-          dist/*.zip
+          src-tauri/target/release/bundle/dmg/*.dmg

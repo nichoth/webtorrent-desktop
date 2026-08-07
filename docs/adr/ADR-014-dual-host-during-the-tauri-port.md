@@ -178,7 +178,8 @@ reason recorded.
   macOS needs the Xcode command line tools and gives WKWebView
   (26.5 here); Windows needs MSVC build tools plus the WebView2
   runtime; Linux needs `webkit2gtk-4.1` and `libsoup3` -- the 4.1/soup3
-  pairing is v2's, not v1's.
+  pairing is v2's, not v1's. Only the macOS row is a target now
+  (ADR-017); the other two are recorded as accurate but unused.
 
 ### Capabilities known not to survive
 
