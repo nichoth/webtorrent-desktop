@@ -82,7 +82,10 @@ under `test/unit/`, Tauri 2 bundler, `standard` for lint.
     `dir` is absolute, `relative` is relative to `repoRoot`, and
     `files` are relative to `dir`.
   - `packageDir(name: string, fromDir: string) -> string | null`
-  - `ROOTS: string[]`, `EXCLUDED: Set<string>`, `PREBUILD: string`
+
+`ROOTS`, `EXCLUDED` and `PREBUILD` stay module-private. Nothing outside
+reads them, and `bin/build-tauri.js` sets the precedent of exporting
+only what another file names.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -224,9 +227,7 @@ const EXCLUDED = new Set(['bufferutil', 'utf-8-validate'])
 // needs exactly one; the other four are dead weight.
 const PREBUILD = 'darwin-arm64'
 
-module.exports = {
-  EXCLUDED, PREBUILD, ROOTS, packageDir, resolveClosure
-}
+module.exports = { packageDir, resolveClosure }
 
 /**
  * Where `require(name)` from `fromDir` would find its package.
@@ -379,7 +380,9 @@ utf-8-validate are dropped."
   - `fetchNode(platform, manifest?) -> Promise<string>` (path to the
     verified tarball in the cache)
   - `extractNodeBinary(tarball: string, destPath: string) -> void`
-  - `CACHE_PATH: string`, `MANIFEST: object`
+  - `MANIFEST: object` (the committed pin, read by its test)
+
+`CACHE_PATH` stays module-private -- nothing outside names it.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -528,7 +531,6 @@ const CACHE_PATH = path.join(
 )
 
 module.exports = {
-  CACHE_PATH,
   MANIFEST,
   extractNodeBinary,
   fetchNode,
@@ -699,7 +701,8 @@ an option: Homebrew's links against eighteen dylibs under
 - Consumes: `resolveClosure` from Task 1; `fetchNode` and
   `extractNodeBinary` from Task 2.
 - Produces: `OUT_DIR: 'build-sidecar'`, `COPY: string[]`,
-  `PLATFORM: 'darwin-arm64'`, `stage() -> Promise<void>`.
+  `PLATFORM: 'darwin-arm64'`. `stage()` stays module-private; the CLI
+  path at the bottom of the file is its only caller.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -837,7 +840,8 @@ const COPY = [
 
 const PLATFORM = 'darwin-arm64'
 
-module.exports = { COPY, OUT_DIR, PLATFORM, stage }
+// Only what another file names, as `bin/build-tauri.js` does.
+module.exports = { COPY, OUT_DIR, PLATFORM }
 
 if (require.main === module) {
   stage().catch(err => {
