@@ -26,6 +26,10 @@ function readConf () {
   return JSON.parse(fs.readFileSync(CONF_PATH, 'utf8'))
 }
 
+function ignoredDirs () {
+  return pkg.scripts.test.match(/--ignore-dirs=(\S+)/)[1].split(',')
+}
+
 test('src-tauri holds a Cargo crate with a main.rs', function (t) {
   for (const file of ['Cargo.toml', 'build.rs', 'src/main.rs']) {
     t.ok(
@@ -155,10 +159,7 @@ test('the Tauri build output is not committed or scanned', function (t) {
   // A generated directory needs registering everywhere a generated
   // directory is already named, or depcheck scans it and nodemon
   // restarts on it forever.
-  t.ok(
-    pkg.scripts.test.includes(`--ignore-dirs=build,build-vite,${OUT_DIR},dist`),
-    'depcheck skips the document root'
-  )
+  t.ok(ignoredDirs().includes(OUT_DIR), 'depcheck skips the document root')
   t.ok(
     pkg.scripts.watch.includes(`--ignore ${OUT_DIR}/`),
     'nodemon skips the document root'
@@ -222,3 +223,51 @@ test('the host and the sidecar agree on the port line', function (t) {
   t.ok(supervisor.includes(`"${pipe}"`), 'the host sets it')
   t.end()
 })
+
+// US-047: the packaged app needs the sidecar and a runtime to spawn
+// it with inside the bundle. Without them the app launches and the
+// supervisor loops on `failed to spawn`, which is a window that opens
+// and never torrents rather than a build error.
+
+test('the sidecar staging root holds what the host resolves',
+  function (t) {
+    const { COPY, OUT_DIR, PLATFORM } = require('../../bin/stage-sidecar')
+
+    t.equal(OUT_DIR, 'build-sidecar', 'the staging root is named')
+    t.equal(PLATFORM, 'darwin-arm64', 'arm64 only')
+
+    // `engine.rs` joins `build/engine/index.js` onto the resource
+    // directory, and `build/config.js` is what the entry point
+    // imports for APP_VERSION.
+    t.deepEqual(
+      COPY,
+      [
+        path.join('build', 'config.js'),
+        path.join('build', 'engine'),
+        path.join('build', 'shared')
+      ],
+      'the Babel output the sidecar loads is staged'
+    )
+    t.end()
+  })
+
+test('the sidecar staging output is not committed or scanned',
+  function (t) {
+    const { OUT_DIR } = require('../../bin/stage-sidecar')
+    const gitignore = fs.readFileSync(
+      path.join(REPO, '.gitignore'), 'utf8'
+    ).split('\n').map(line => line.trim())
+
+    t.ok(gitignore.includes(`${OUT_DIR}/`), `${OUT_DIR} is ignored`)
+    t.ok(ignoredDirs().includes(OUT_DIR), 'depcheck skips it')
+    t.ok(
+      pkg.scripts.watch.includes(`--ignore ${OUT_DIR}/`),
+      'nodemon skips it'
+    )
+
+    const clean = fs.readFileSync(
+      path.join(REPO, 'bin', 'clean.js'), 'utf8'
+    )
+    t.ok(clean.includes(`'${OUT_DIR}/'`), 'bin/clean.js removes it')
+    t.end()
+  })

@@ -16,6 +16,7 @@ const config = require('../src/config')
 rimraf.sync('build/')
 rimraf.sync('build-vite/')
 rimraf.sync('build-tauri/')
+rimraf.sync('build-sidecar/')
 rimraf.sync('dist/')
 
 // Remove any saved configuration
