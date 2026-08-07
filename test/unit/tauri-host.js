@@ -251,6 +251,27 @@ test('the sidecar staging root holds what the host resolves',
     t.end()
   })
 
+test('the bundler stages the sidecar into the app', function (t) {
+  const conf = readConf()
+  const { OUT_DIR } = require('../../bin/stage-sidecar')
+
+  // The staging root is generated, so the bundler has to build it
+  // rather than assume it: a stale or absent build-sidecar/ is an app
+  // that opens and cannot torrent.
+  t.ok(
+    (conf.build.beforeBundleCommand || '').includes('stage-sidecar'),
+    'the staging script runs before bundling'
+  )
+
+  const resources = conf.bundle.resources
+  t.ok(resources, 'bundle.resources is declared')
+  t.ok(
+    JSON.stringify(resources).includes(OUT_DIR),
+    `${OUT_DIR} is mapped into the bundle`
+  )
+  t.end()
+})
+
 test('the sidecar staging output is not committed or scanned',
   function (t) {
     const { OUT_DIR } = require('../../bin/stage-sidecar')
