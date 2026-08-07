@@ -130,5 +130,4 @@ The app never sends any personally identifying information, nor does it
 track which torrents you add.
 
 ```
-/ed3d-plan-and-execute:execute-implementation-plan /Users/nick/code/webtorrent-desktop/docs/implementation-plans/2026-08-05-stalled-torrent-announce-sweep/ /Users/nick/code/webtorrent-desktop/
 ```
