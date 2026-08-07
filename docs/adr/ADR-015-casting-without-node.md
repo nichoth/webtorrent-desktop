@@ -2,6 +2,17 @@
 
 **Date:** 2026-08-04
 
+**Citation corrected 2026-08-07.** This ADR names **US-084** twice --
+as the story that has to satisfy `protobuf-codegen`'s 1.88
+build-machine floor on every platform, and as the packaged build that
+has to account for a second listening socket. There is no US-084 in
+`specs/prd.json` and there is not meant to be: **this app targets
+macOS only.** Packaging landed as US-047 (ADR-016), macOS and arm64.
+So read both obligations as scoped to one platform -- the rustc floor
+has to hold on an arm64 Mac, and the firewall prompt is the macOS one.
+The per-platform analysis below is still accurate about the crates; it
+is simply broader than the target.
+
 ## Context
 
 `src/renderer/lib/cast.js` is the last deferred casualty of ADR-008

@@ -30,7 +30,7 @@ import networkAddress from 'network-address'
 import WebTorrent from 'webtorrent'
 
 import config from '../config'
-import { announceNow } from './announce'
+import { runAnnounceSweep, SWEEP_INTERVAL_MS } from './announce'
 import { createWebSocketBus } from './bus-websocket'
 
 console.time('init')
@@ -81,6 +81,13 @@ const client = new WebTorrent({ peerId: PEER_ID })
 // counts its holders and is destroyed when the last one releases it.
 const servers = new Map()
 
+// Info hash -> when the sweep last asked this torrent to announce. A
+// torrent that has never been asked is eligible immediately, so a new
+// torrent is seeded here when its info hash arrives: `client.add()`
+// has just sent a `start` announce of its own and a second one a
+// minute later would be pure waste.
+const lastAnnounceAt = new Map()
+
 // Used for diffing, so we only send progress updates when necessary
 let prevProgress = null
 
@@ -107,8 +114,6 @@ function init () {
     stopServer(infoHash))
   bus.on('wt-select-files', (infoHash, selections) =>
     selectFiles(infoHash, selections))
-  bus.on('wt-force-announce', (infoHash) =>
-    forceAnnounce(infoHash))
 
   // No `window` to hang an `error` listener on, so the process reports
   // for itself. Both handlers stay installed: the sidecar's job is to
@@ -135,6 +140,7 @@ function init () {
   }
 
   setInterval(updateTorrentProgress, 1000)
+  setInterval(runSweep, SWEEP_INTERVAL_MS)
 
   bus.listen().then((port) => {
     // The one line the host parses. Nothing may precede it on this
@@ -192,46 +198,25 @@ function startTorrenting (torrentKey, torrentID, path, fileModtimes, selections)
 
 function stopTorrenting (infoHash) {
   console.log('--- STOP TORRENTING: ', infoHash)
+  lastAnnounceAt.delete(infoHash)
   const torrent = client.get(infoHash)
   if (torrent) torrent.destroy()
 }
 
-// How long after a forced announce to report the peer count again. The
-// answer to "did re-announcing help" is a number a few seconds later,
-// not a return value, so the readout is scheduled.
-const ANNOUNCE_DIAG_DELAYS_MS = [5000, 15000, 30000]
-
-// DIAGNOSTIC: a manually triggered re-announce, so we can find out
-// whether peer discovery on its own revives a torrent that has stalled
-// at zero peers -- the question the automatic sweep depends on. The
-// `DIAG announce` prefix is what the operator greps for.
-function forceAnnounce (infoHash) {
-  const torrent = client.get(infoHash)
-  if (!torrent) {
-    console.log('DIAG announce: no torrent %s', infoHash)
-    return
-  }
-
-  console.log(
-    'DIAG announce %s: before peers=%d down=%dB/s progress=%s',
-    infoHash, torrent.numPeers, Math.round(torrent.downloadSpeed),
-    torrent.progress.toFixed(4))
-
-  const fired = announceNow(torrent, client.dht)
-  console.log('DIAG announce %s: sent tracker=%s dht=%s',
-    infoHash, fired.tracker, fired.dht)
-
-  for (const delay of ANNOUNCE_DIAG_DELAYS_MS) {
-    const timer = setTimeout(() => {
-      const later = client.get(infoHash)
-      if (!later) return
-      console.log('DIAG announce %s: +%ds peers=%d down=%dB/s',
-        infoHash, delay / 1000, later.numPeers,
-        Math.round(later.downloadSpeed))
-    }, delay)
-    // A pending readout must not hold the process open on shutdown.
-    if (timer.unref) timer.unref()
-  }
+// Ask any torrent sitting at zero peers to re-announce. Without this a
+// torrent whose last peer drops waits out the tracker's own interval,
+// which `bittorrent-tracker` defaults to 30 minutes for HTTP and UDP,
+// or the DHT's 15 minutes plus jitter. The guards -- who qualifies, a
+// five minute per-torrent cooldown, a cap per sweep -- are in
+// `announce.js`, along with their tests.
+function runSweep () {
+  runAnnounceSweep({
+    torrents: client.torrents,
+    dht: client.dht,
+    lastAnnounceAt,
+    now: Date.now(),
+    log: (...args) => console.log(...args)
+  })
 }
 
 // Create a new torrent, start seeding
@@ -249,8 +234,12 @@ function addTorrentEvents (torrent) {
     bus.send('wt-warning', torrent.key, err.message))
   torrent.on('error', (err) =>
     bus.send('wt-error', torrent.key, err.message))
-  torrent.on('infoHash', () =>
-    bus.send('wt-parsed', torrent.key, torrent.infoHash, torrent.magnetURI))
+  torrent.on('infoHash', () => {
+    // `client.add()` announces `started` as it goes, so the sweep's
+    // clock for this torrent starts here rather than at zero.
+    lastAnnounceAt.set(torrent.infoHash, Date.now())
+    bus.send('wt-parsed', torrent.key, torrent.infoHash, torrent.magnetURI)
+  })
   torrent.on('metadata', torrentMetadata)
   torrent.on('ready', torrentReady)
   torrent.on('done', torrentDone)

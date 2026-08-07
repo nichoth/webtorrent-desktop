@@ -811,16 +811,16 @@
       "title": "Ship the sidecar in the packaged app",
       "description": "As a user, I want the packaged app to torrent, so the sidecar has to survive packaging.",
       "acceptanceCriteria": [
-        "`bin/package.js` includes `build/engine/`, `build/shared/`, and the engine's runtime dependencies in the bundle",
-        "The sidecar runs from the packaged app on the current platform and is not blocked by asar packing",
-        "The spawn path resolves in both development and production; `config.IS_PRODUCTION` branching is covered",
+        "`bin/stage-sidecar.js` stages `build/engine/`, `build/shared/`, `build/config.js`, a generated `package.json` and the engine's resolved dependency closure into the bundle's resource directory",
+        "The sidecar runs from the packaged app on the current platform, on the pinned Node runtime staged beside it rather than one off the user's PATH",
+        "The spawn path resolves in both development and production; the `!cfg!(debug_assertions)` branching in `engine::Runtime::resolve` is covered",
         "A packaged build downloads, plays, and seeds a torrent",
         "No sidecar process is left running after quitting the packaged app",
         "Typecheck passes (`npm test` -- standard + depcheck + test-unit)"
       ],
       "priority": 47,
-      "passes": false,
-      "notes": "Needs `npm run package` and a launch of the packaged bundle on a real machine. Excluded from the headless ralph loop.",
+      "passes": true,
+      "notes": "Done on the sidecar-packaging branch. The first two criteria originally named `bin/package.js` and asar packing, both of which left with the Electron host in US-072; they are rewritten to name what replaced them. Verified on a real arm64 Mac against the packaged .app: the running sidecar was `Contents/Resources/node` executing `Contents/Resources/build/engine/index.js` with the host as its parent, and `pgrep -f build/engine` was empty after quitting. `npm test` passes 3875 assertions. Signing and notarization remain US-083, so the bundle is unsigned. Excluded from the headless ralph loop.",
       "manual": true
     },
     {

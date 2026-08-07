@@ -156,7 +156,10 @@ contract is checked rather than assumed.
 Packaging gains a requirement: the sidecar needs a Node runtime in
 the shipped app, and the engine entry point has to resolve
 `config.TORRENT_PATH` and `config.POSTER_PATH` when it is started
-outside Electron. Both are Phase 3 stories, not surprises.
+outside Electron. Both are Phase 3 stories, not surprises. The runtime
+half was settled in US-047 and is recorded in ADR-016: the bundle
+carries a pinned Node and the engine's dependency closure, staged into
+the app's resource directory.
 
 ADR-006's split is what makes this a contained change. Because
 `ipc-engine.js` shares no exports with `ipc-os.js`, replacing the

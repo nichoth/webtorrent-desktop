@@ -26,6 +26,10 @@ function readConf () {
   return JSON.parse(fs.readFileSync(CONF_PATH, 'utf8'))
 }
 
+function ignoredDirs () {
+  return pkg.scripts.test.match(/--ignore-dirs=(\S+)/)[1].split(',')
+}
+
 test('src-tauri holds a Cargo crate with a main.rs', function (t) {
   for (const file of ['Cargo.toml', 'build.rs', 'src/main.rs']) {
     t.ok(
@@ -155,10 +159,7 @@ test('the Tauri build output is not committed or scanned', function (t) {
   // A generated directory needs registering everywhere a generated
   // directory is already named, or depcheck scans it and nodemon
   // restarts on it forever.
-  t.ok(
-    pkg.scripts.test.includes(`--ignore-dirs=build,build-vite,${OUT_DIR},dist`),
-    'depcheck skips the document root'
-  )
+  t.ok(ignoredDirs().includes(OUT_DIR), 'depcheck skips the document root')
   t.ok(
     pkg.scripts.watch.includes(`--ignore ${OUT_DIR}/`),
     'nodemon skips the document root'
@@ -220,5 +221,139 @@ test('the host and the sidecar agree on the port line', function (t) {
   const pipe = 'WEBTORRENT_ENGINE_PARENT_PIPE'
   t.ok(sidecar.includes(pipe), 'the sidecar watches the parent pipe')
   t.ok(supervisor.includes(`"${pipe}"`), 'the host sets it')
+  t.end()
+})
+
+// US-047: the packaged app needs the sidecar and a runtime to spawn
+// it with inside the bundle. Without them the app launches and the
+// supervisor loops on `failed to spawn`, which is a window that opens
+// and never torrents rather than a build error.
+
+test('the sidecar staging root holds what the host resolves',
+  function (t) {
+    const { COPY, OUT_DIR, PLATFORM } = require('../../bin/stage-sidecar')
+
+    t.equal(OUT_DIR, 'build-sidecar', 'the staging root is named')
+    t.equal(PLATFORM, 'darwin-arm64', 'arm64 only')
+
+    // `engine.rs` joins `build/engine/index.js` onto the resource
+    // directory, and `build/config.js` is what the entry point
+    // imports for APP_VERSION.
+    t.deepEqual(
+      COPY,
+      [
+        path.join('build', 'config.js'),
+        path.join('build', 'engine'),
+        path.join('build', 'shared')
+      ],
+      'the Babel output the sidecar loads is staged'
+    )
+    t.end()
+  })
+
+test('the bundler stages the sidecar into the app', function (t) {
+  const conf = readConf()
+  const { OUT_DIR } = require('../../bin/stage-sidecar')
+
+  // The staging root is generated, so the bundler has to build it
+  // rather than assume it: a stale or absent build-sidecar/ is an app
+  // that opens and cannot torrent.
+  t.ok(
+    (conf.build.beforeBundleCommand || '').includes('stage-sidecar'),
+    'the staging script runs before bundling'
+  )
+
+  // The map's direction is load-bearing and not symmetric: the key is
+  // the source on disk and the value is the destination inside
+  // `Contents/Resources`. Swapped, it would declare a resource named
+  // `./` -- so pin the pair rather than asserting the string appears
+  // somewhere in it.
+  const resources = conf.bundle.resources
+  t.ok(resources, 'bundle.resources is declared')
+  t.deepEqual(
+    Object.keys(resources), [`../${OUT_DIR}/`],
+    `the source is ${OUT_DIR}, relative to src-tauri`
+  )
+  t.equal(
+    resources[`../${OUT_DIR}/`], './',
+    'staged at the root of Contents/Resources, where engine.rs looks'
+  )
+
+  // Not a glob: tauri-utils flattens glob matches onto the
+  // destination with `dest.join(file_name)`, which would put every
+  // staged file in one directory and drop every subdirectory. A plain
+  // directory path is walked and keeps its structure.
+  t.notOk(
+    Object.keys(resources).some(key => key.includes('*')),
+    'the staged tree keeps its structure rather than being globbed'
+  )
+  t.end()
+})
+
+// C1: `bundle.resources` is read by tauri-build's *build script*, so
+// the path has to exist during `cargo build` -- which happens before
+// `beforeBundleCommand` creates it, and after `npm run clean` deletes
+// it. A missing path is a hard error there, so without this a clean
+// checkout could not build at all. An empty directory is walked and
+// skipped, so creating it in `build.rs` costs a debug build nothing.
+test('the build script creates the staging root it points at',
+  function (t) {
+    const { OUT_DIR } = require('../../bin/stage-sidecar')
+    const buildScript = fs.readFileSync(
+      path.join(TAURI_DIR, 'build.rs'), 'utf8'
+    )
+
+    t.ok(
+      buildScript.includes(OUT_DIR),
+      `build.rs names ${OUT_DIR}`
+    )
+    t.ok(
+      /create_dir_all/.test(buildScript),
+      'and creates it rather than assuming it'
+    )
+
+    // Order is the whole point: created after `tauri_build::build()`
+    // has already read the config would be created too late.
+    t.ok(
+      buildScript.indexOf('create_dir_all') <
+      buildScript.indexOf('tauri_build::build()'),
+      'before tauri_build::build() reads bundle.resources'
+    )
+    t.end()
+  })
+
+test('the sidecar staging output is not committed or scanned',
+  function (t) {
+    const { OUT_DIR } = require('../../bin/stage-sidecar')
+    const gitignore = fs.readFileSync(
+      path.join(REPO, '.gitignore'), 'utf8'
+    ).split('\n').map(line => line.trim())
+
+    t.ok(gitignore.includes(`${OUT_DIR}/`), `${OUT_DIR} is ignored`)
+    t.ok(ignoredDirs().includes(OUT_DIR), 'depcheck skips it')
+    t.ok(
+      pkg.scripts.watch.includes(`--ignore ${OUT_DIR}/`),
+      'nodemon skips it'
+    )
+
+    const clean = fs.readFileSync(
+      path.join(REPO, 'bin', 'clean.js'), 'utf8'
+    )
+    t.ok(clean.includes(`'${OUT_DIR}/'`), 'bin/clean.js removes it')
+    t.end()
+  })
+
+test('the crate version matches the app version', function (t) {
+  // Until US-047 nothing read both, so a drift was cosmetic. Now the
+  // crate version names the .app and the .dmg while package.json's
+  // reaches the sidecar's peer ID through APP_VERSION, so a drift
+  // ships two different version numbers in one artifact.
+  const cargo = fs.readFileSync(
+    path.join(TAURI_DIR, 'Cargo.toml'), 'utf8'
+  )
+  const crate = cargo.match(/^version = "([^"]+)"/m)
+
+  t.ok(crate, 'Cargo.toml declares a version')
+  t.equal(crate[1], pkg.version, 'the two agree')
   t.end()
 })

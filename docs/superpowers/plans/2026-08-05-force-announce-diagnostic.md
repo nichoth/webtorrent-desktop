@@ -771,7 +771,7 @@ git commit -m "feat(ui): add a Force Re-announce item to the torrent menu"
 This is the deliverable of the whole plan. Do not skip it and do not
 start the sweep plan before it has an answer.
 
-- [ ] **Step 1: Build and start the app with a visible terminal**
+- [x] **Step 1: Build and start the app with a visible terminal**
 
 Run: `npm start`
 
@@ -789,16 +789,29 @@ priority" preference destroys and re-adds every other active torrent on
 a play click (`controllers/torrent-list-controller.js:161`), which is
 the confound this whole experiment exists to avoid.
 
-- [ ] **Step 3: Record the starting state**
+- [x] **Step 3: Record the starting state**
 
 Note, for each stalled torrent: its name, its percentage, and how long
 it has shown zero peers.
 
-- [ ] **Step 4: Fire the diagnostic**
+Stalled torrent: "Boris & Merxbow - Gensho", 97%, I think the full time since
+`npm start`.
+
+- [x] **Step 4: Fire the diagnostic**
 
 Right-click one stalled torrent and choose **Force Re-announce**.
 
-- [ ] **Step 5: Read the result**
+- [x] **Step 5: Read the result**
+
+For the "Boris + Merzbow" torrent:
+
+```
+Engine: DIAG announce ac9a4009c5b137c69c8d27fd295079c6e5b7a065: before peers=0 down=0B/s progress=0.9796
+Engine: DIAG announce ac9a4009c5b137c69c8d27fd295079c6e5b7a065: sent tracker=true dht=true
+Engine: DIAG announce ac9a4009c5b137c69c8d27fd295079c6e5b7a065: +5s peers=0 down=0B/s
+Engine: DIAG announce ac9a4009c5b137c69c8d27fd295079c6e5b7a065: +15s peers=0 down=0B/s
+Engine: DIAG announce ac9a4009c5b137c69c8d27fd295079c6e5b7a065: +30s peers=0 down=0B/
+```
 
 Four lines appear in the terminal:
 
@@ -814,6 +827,28 @@ Engine: DIAG announce <hash>: +30s peers=? down=?B/s
 
 One torrent might have a dead swarm. Three agreeing is a result.
 
+"Mount Eerie - A Crow Looked at Me"
+
+```
+Engine: DIAG announce d9622023f2fbc923147348f84c8445c719fba2b7: before peers=0 down=0B/s progress=0.0224
+Engine: DIAG announce d9622023f2fbc923147348f84c8445c719fba2b7: sent tracker=true dht=true
+Engine: DIAG announce d9622023f2fbc923147348f84c8445c719fba2b7: +5s peers=2 down=169B/s
+Engine: DIAG announce d9622023f2fbc923147348f84c8445c719fba2b7: +15s peers=2 down=16514B/s
+Engine: DIAG announce d9622023f2fbc923147348f84c8445c719fba2b7: +30s peers=2 down=12612B/s
+```
+
+---
+
+Mount Eerie - Discography
+
+```
+Engine: DIAG announce b6a81577180871a034901b43e4cf4a492c1019c7: before peers=0 down=0B/s progress=0.1958
+Engine: DIAG announce b6a81577180871a034901b43e4cf4a492c1019c7: sent tracker=true dht=true
+Engine: DIAG announce b6a81577180871a034901b43e4cf4a492c1019c7: +5s peers=1 down=140B/s
+Engine: DIAG announce b6a81577180871a034901b43e4cf4a492c1019c7: +15s peers=1 down=8176B/s
+Engine: DIAG announce b6a81577180871a034901b43e4cf4a492c1019c7: +30s peers=1 down=8176B/s
+```
+
 - [ ] **Step 7: Write down the verdict**
 
 Read it as follows:
@@ -824,7 +859,7 @@ Read it as follows:
    been created yet, which means the torrent had no metadata.
 2. **Peers rise above zero within 30 seconds, on most torrents
    tried.** Hypothesis confirmed: stalls are a discovery problem and a
-   forced announce fixes them. Proceed to
+   forced announce fixes them. Proceed to **yes**
    `2026-08-05-stalled-torrent-announce-sweep.md`.
 3. **Peers stay at zero, but destroying and re-adding the same torrent
    does revive it.** Re-announcing is not sufficient. The difference is

@@ -86,9 +86,12 @@ Electron module and uses no DOM.
 
 **The stdout contract with the host.** Exactly one line matches
 `WEBTORRENT_ENGINE_PORT=<port>`, printed once the server is listening.
-Everything else on stdout and stderr is log output for
-`src/main/log.js`. `src/main/engine-process.js` (US-041) parses that
-line; keep the prefix and the `=` if you touch either side.
+The host end is `src-tauri/src/engine.rs`, which holds the same prefix
+in `PORT_LINE_PREFIX`; keep the prefix and the `=` if you touch either
+side. Every other line on stdout and stderr is pumped through to the
+host's own output under an `Engine: ` prefix. `src/main/` is gone, so
+the Electron reader that older plans name here
+(`src/main/engine-process.js`, US-041) went with it.
 
 Differences from the hidden-window engine, all deliberate:
 
@@ -146,9 +149,46 @@ the natural cadence is slow -- 30 minutes per tracker, 15 minutes plus
 jitter for the DHT -- so a torrent whose last peer drops can sit at
 zero peers for half an hour.
 
-`wt-force-announce` in `index.js` is the manually triggered form, and
-it is **diagnostic instrumentation, not a feature**: it logs peer
-counts before the call and again at 5, 15 and 30 seconds after, all
-under the `DIAG announce` prefix. It answers one question -- does
-re-announcing on its own revive a stalled torrent -- and it comes out
-once that question has an answer.
+The sweep automates it. Once a minute `index.js` calls
+`runAnnounceSweep`, which re-announces every torrent that has zero
+peers, is not finished and is not paused. Three guards keep it from
+being worse than the bug it fixes, and they are the reason the logic
+lives here rather than inline in `index.js`, where it could not be
+tested: a five minute per-torrent cooldown, comfortably above any
+tracker's `min interval`; a cap of five torrents per sweep, served
+least-recently-announced first so a long list goes round robin; and one
+summary line per sweep that did anything, carrying the deferred count,
+because a silent truncation reads as "nothing else needed it".
+
+Be precise about that last one, because the obvious reading is too
+narrow. The line is not reserved for capped sweeps: a sweep that
+announces one torrent and defers nothing still logs. What is silent is
+a sweep with nothing to do -- `runAnnounceSweep` returns early only
+when it selected nothing *and* deferred nothing, so an idle engine
+says nothing at all.
+
+`index.js` owns only the timer and the `lastAnnounceAt` map. The map
+is seeded when a torrent's info hash arrives -- `client.add()` has just
+announced `started` and a second announce a minute later would be waste
+-- and cleared in `stopTorrenting`.
+
+That covers the `wt-stop-torrenting` path, which is the only caller.
+A torrent torn down any other way -- a fatal `torrent` error, say --
+leaves its entry behind. Those orphans are inert rather than a leak:
+the sweep iterates `client.torrents` and never the map, so an entry
+with no torrent is never read, and re-adding the same info hash
+overwrites it.
+
+The three tunables are exported from here, not from `index.js`:
+`SWEEP_INTERVAL_MS`, `COOLDOWN_MS` and `MAX_PER_SWEEP`. `index.js`
+imports the interval rather than repeating `60 * 1000`, so the cadence
+has one home. `selectStalled` is exported next to `runAnnounceSweep`
+because the guards are worth testing without announcing anything.
+
+`test/unit/engine-sweep-wiring.js` pins that wiring by scanning the
+`index.js` source: both imports, `setInterval(runSweep,
+SWEEP_INTERVAL_MS)`, and the seed and the delete on `lastAnnounceAt`.
+An interval that fires once a minute is too slow to drive from a
+spawned sidecar, and a test-only override of it would be production
+code that exists for a test -- so renaming `runSweep` or inlining the
+constant fails that scan instead of going unnoticed.

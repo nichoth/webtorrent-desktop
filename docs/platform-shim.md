@@ -442,7 +442,7 @@ correctly in the webview.
 
 | Function | Replaces |
 | --- | --- |
-| `showContextMenu(items)` | `controllers/torrent-list-controller.js:258-310`, the nine-item torrent context menu |
+| `showContextMenu(items)` | `controllers/torrent-list-controller.js:258-310`, the seven-item torrent context menu |
 
 Migrated in US-029. The controller now builds one flat descriptor
 array -- the reveal item and the separator that follows it are spread
@@ -781,7 +781,6 @@ tree: US-045 deleted the hidden window and the copy that ran in it.
 | `startServer(infoHash)` | `wt-start-server` | `controllers/playback-controller.js:261` |
 | `stopServer(infoHash)` | `wt-stop-server` | `controllers/playback-controller.js:365` |
 | `selectFiles(infoHash, selections)` | `wt-select-files` | `controllers/torrent-list-controller.js:193` |
-| `forceAnnounce(infoHash)` | `wt-force-announce` | new in this story (diagnostic) |
 
 ### Events
 
@@ -945,14 +944,6 @@ is "one-shot" when it triggers exactly one reply message, and
 | `wt-start-server` | `(infoHash: string)` | one-shot; replies on `wt-server-running` and `wt-server-${infoHash}` |
 | `wt-stop-server` | `(infoHash: string)` | fire-and-forget |
 | `wt-select-files` | `(infoHash: string, selections: boolean[])` | fire-and-forget |
-| `wt-force-announce` | `(infoHash: string)` | fire-and-forget; the engine logs `DIAG announce` lines rather than replying |
-
-`wt-force-announce` is **diagnostic instrumentation, not a feature.**
-It asks one torrent to re-announce to its trackers and the DHT without
-destroying it, and the engine prints peer counts before the call and
-again at 5, 15 and 30 seconds after. It exists to answer whether peer
-discovery on its own revives a torrent stalled at zero peers, and it
-comes out once that question has an answer.
 
 `torrentKey` is a **number**, not a string: it is
 `state.nextTorrentKey++`, seeded at `1` in `lib/state.js:64`. The

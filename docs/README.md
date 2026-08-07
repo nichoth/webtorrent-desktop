@@ -12,18 +12,21 @@ the port and which rules exist because of it.
 
 ## Requirements
 
-- Node.js `20.19+` or `22.12+`. This is what Vite 8 requires; the
-  `engines` field in `package.json` still says `^16 || ^18` and is out
-  of date.
-- npm 7 or later.
-- The Rust toolchain, and Tauri 2's per-platform system dependencies:
-  the Xcode command line tools on macOS, MSVC build tools plus the
-  WebView2 runtime on Windows, `webkit2gtk-4.1` and `libsoup3` on
-  Linux. See
+- Node.js 24 or later, which is what `engines` in `package.json`
+  declares. Vite 8 itself would take `20.19+` or `22.12+`, but US-047
+  ships a pinned Node 24 runtime inside the packaged app, and building
+  on an older line than the one you ship is not worth the ambiguity.
+- npm 10 or later. Node 24 ships npm 11.
+- macOS on Apple Silicon. This app targets macOS only
+  ([ADR-017](adr/ADR-017-target-macos-only.md)), and `npx tauri build`
+  in particular stages a `darwin-arm64` engine runtime and refuses any
+  other host. See
+  [Package the app](../README.md#package-the-app).
+- The Rust toolchain and the Xcode command line tools, which are
+  Tauri 2's macOS system dependencies. See
   [ADR-014](adr/ADR-014-dual-host-during-the-tauri-port.md) for the
-  versions.
-
-macOS, Windows, and Linux are all supported for development.
+  versions; its per-platform list also covers Windows and Linux, which
+  are not targets.
 
 ## Run
 
@@ -146,16 +149,36 @@ npm run open-config   # open the app's config directory
 ```
 
 `npm run clean` removes state from your system, not just the repo: it
-deletes `build/`, `build-vite/`, `dist/`, the saved app config, the
-temp download directory, and the installed `.torrent` and magnet link
-handlers.
+deletes `build/`, `build-vite/`, `build-tauri/`, `build-sidecar/`,
+`dist/`, the saved app config, the temp download directory, and the
+installed `.torrent` and magnet link handlers.
 
 ## Package
 
-There is no packaging script yet. `bin/package.js` drove
-`electron-packager` and left with the Electron host; Tauri's bundler
-replaces it, and US-083 and US-084 own the signed macOS, Windows and
-Linux builds.
+```sh
+npm run build:tauri && npx tauri build
+```
+
+That produces `WebTorrent.app` and a `.dmg` under
+`src-tauri/target/release/bundle/`. Both halves are needed:
+`build:tauri` assembles the document root the window loads, and
+`tauri build` compiles the host, runs `bin/stage-sidecar.js` through
+`beforeBundleCommand`, and bundles the two together.
+
+The staging step is what makes the packaged app able to torrent
+(US-047). A release build resolves its engine to
+`Contents/Resources/node` and `Contents/Resources/build/engine/
+index.js` rather than to `node` on your `PATH` and the repository's
+own `build/`, so the bundle has to carry a Node runtime and the
+engine's dependency closure. `bin/stage-sidecar.js` assembles both
+into `build-sidecar/`, and `bundle.resources` maps that into the app.
+The runtime is pinned in `bin/node-runtime.json` by version and
+SHA-256; the first build on a machine downloads it once, to
+`~/.cache/webtorrent-desktop/node/`.
+
+The build is arm64-only and **unsigned**. It runs where you built it,
+and it will not pass Gatekeeper on anyone else's machine. Signing,
+the hardened runtime, notarization and stapling are US-083.
 
 ## Porting to Tauri
 

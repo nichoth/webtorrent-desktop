@@ -2,6 +2,20 @@
 
 **Date:** 2026-07-29
 
+**Amended by US-047 (2026-08-07).** The decision stands; one of its
+rejection arguments no longer distinguishes the options. The ffmpeg
+alternative below was rejected partly on "a 40 to 80 MB binary per
+platform inside the app bundle" and the notarization surface it would
+add. ADR-016 has since put a 116 MB Node binary and a nested `.node`
+addon in that bundle, so both costs are paid regardless of what this
+ADR decided. What still separates the options is the argument the
+rejection ends on: ffmpeg duplicates a decoder the webview already
+ships and already uses to play the same file. A future reader weighing
+ffmpeg should price it as marginal, not as the first large binary.
+That paragraph also cites a **US-084**, which is not in
+`specs/prd.json` -- the story numbering moved and no such story was
+written. Read it as US-083 alone.
+
 ## Context
 
 ADR-012 moves the engine out of a hidden `BrowserWindow` and into a

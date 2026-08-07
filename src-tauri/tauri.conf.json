@@ -3,7 +3,8 @@
   "productName": "WebTorrent",
   "identifier": "io.webtorrent.webtorrent",
   "build": {
-    "frontendDist": "../build-tauri"
+    "frontendDist": "../build-tauri",
+    "beforeBundleCommand": "node bin/stage-sidecar.js"
   },
   "app": {
     "windows": [
@@ -25,7 +26,10 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["app", "dmg"],
+    "resources": {
+      "../build-sidecar/": "./"
+    },
     "icon": [
       "../static/WebTorrent.icns",
       "../static/WebTorrent.png"

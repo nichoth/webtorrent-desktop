@@ -77,12 +77,38 @@ meantime and what a replacement harness would take.
 
 ### Package the app
 
-Packaging is not wired up yet. `npm run package` drove
-`electron-packager` and was deleted along with the Electron host;
-Tauri's own bundler replaces it, and the signed macOS, Windows and
-Linux builds are the next stories in `specs/prd.json` (US-083 and
-US-084). Until then the way to get a binary is
-`npm run build:tauri && (cd src-tauri && cargo build)`.
+```
+$ npm run build:tauri && npx tauri build
+```
+
+On an Apple Silicon Mac this produces
+`src-tauri/target/release/bundle/macos/WebTorrent.app` and a matching
+`.dmg`. `npm run package` drove `electron-packager` and was deleted
+along with the Electron host; Tauri's own bundler replaces it.
+
+The app is self-contained. Before bundling, `bin/stage-sidecar.js`
+assembles `build-sidecar/` -- a pinned Node 24 runtime, the Babel
+output of `src/engine/`, and the engine's dependency closure -- and
+the bundler copies that into `Contents/Resources`, which is where the
+Rust host looks for the sidecar in a release build. The first run
+downloads the Node tarball (~50MB) and caches it in
+`~/.cache/webtorrent-desktop/node/`, so later builds do not re-fetch
+it.
+
+Two limits worth knowing. The build is **arm64 macOS only**: the
+staged Node runtime and the `utp-native` prebuild are both
+`darwin-arm64`, and the staging script refuses to run on any other
+host rather than producing a bundle that cannot spawn its engine. And
+the output is **unsigned and un-notarized**, so macOS will refuse it
+on another machine without a Gatekeeper override -- signing, the
+hardened runtime and notarization are US-083 in `specs/prd.json`.
+Windows and Linux are not targets at all -- see
+[ADR-017](docs/adr/ADR-017-target-macos-only.md).
+
+For a development binary rather than a bundle, `npm start` is the
+usual path; `cd src-tauri && cargo build` also works and produces a
+debug build, which resolves the engine from `node` on your `PATH` and
+the repository's own `build/` instead of from the bundle.
 
 #### Recommended readings to start working in the app
 
@@ -105,22 +131,4 @@ The app never sends any personally identifying information, nor does it
 track which torrents you add.
 
 ```
-docs/superpowers/plans/2026-08-05-force-announce-diagnostic.md
-```
-
-```
-docs/superpowers/plans/2026-08-05-stalled-torrent-announce-sweep.md
-```
-
-```
-Use the superpowers:executing-plans skill to execute this implementation plan:
-
-/Users/nick/code/webtorrent-desktop/docs/superpowers/plans/2026-08-05-force-announce-diagnostic.md
-
-Working directory: /Users/nick/code/webtorrent-desktop
-Branch: force-announce-diagnostic (already created, already checked out)
-
-Execute Tasks 1 through 4 only. Task 5 is a manual human experiment that
-requires running the app and waiting for a real torrent to stall -- stop
-after Task 4 and hand Task 5 back to me.
 ```
