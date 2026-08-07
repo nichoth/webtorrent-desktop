@@ -151,16 +151,36 @@ npm run open-config   # open the app's config directory
 ```
 
 `npm run clean` removes state from your system, not just the repo: it
-deletes `build/`, `build-vite/`, `dist/`, the saved app config, the
-temp download directory, and the installed `.torrent` and magnet link
-handlers.
+deletes `build/`, `build-vite/`, `build-tauri/`, `build-sidecar/`,
+`dist/`, the saved app config, the temp download directory, and the
+installed `.torrent` and magnet link handlers.
 
 ## Package
 
-There is no packaging script yet. `bin/package.js` drove
-`electron-packager` and left with the Electron host; Tauri's bundler
-replaces it, and US-083 and US-084 own the signed macOS, Windows and
-Linux builds.
+```sh
+npm run build:tauri && npx tauri build
+```
+
+That produces `WebTorrent.app` and a `.dmg` under
+`src-tauri/target/release/bundle/`. Both halves are needed:
+`build:tauri` assembles the document root the window loads, and
+`tauri build` compiles the host, runs `bin/stage-sidecar.js` through
+`beforeBundleCommand`, and bundles the two together.
+
+The staging step is what makes the packaged app able to torrent
+(US-047). A release build resolves its engine to
+`Contents/Resources/node` and `Contents/Resources/build/engine/
+index.js` rather than to `node` on your `PATH` and the repository's
+own `build/`, so the bundle has to carry a Node runtime and the
+engine's dependency closure. `bin/stage-sidecar.js` assembles both
+into `build-sidecar/`, and `bundle.resources` maps that into the app.
+The runtime is pinned in `bin/node-runtime.json` by version and
+SHA-256; the first build on a machine downloads it once, to
+`~/.cache/webtorrent-desktop/node/`.
+
+The build is arm64-only and **unsigned**. It runs where you built it,
+and it will not pass Gatekeeper on anyone else's machine. Signing,
+the hardened runtime, notarization and stapling are US-083.
 
 ## Porting to Tauri
 
