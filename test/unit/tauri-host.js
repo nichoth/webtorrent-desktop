@@ -263,14 +263,64 @@ test('the bundler stages the sidecar into the app', function (t) {
     'the staging script runs before bundling'
   )
 
+  // The map's direction is load-bearing and not symmetric: the key is
+  // the source on disk and the value is the destination inside
+  // `Contents/Resources`. Swapped, it would declare a resource named
+  // `./` -- so pin the pair rather than asserting the string appears
+  // somewhere in it.
   const resources = conf.bundle.resources
   t.ok(resources, 'bundle.resources is declared')
-  t.ok(
-    JSON.stringify(resources).includes(OUT_DIR),
-    `${OUT_DIR} is mapped into the bundle`
+  t.deepEqual(
+    Object.keys(resources), [`../${OUT_DIR}/`],
+    `the source is ${OUT_DIR}, relative to src-tauri`
+  )
+  t.equal(
+    resources[`../${OUT_DIR}/`], './',
+    'staged at the root of Contents/Resources, where engine.rs looks'
+  )
+
+  // Not a glob: tauri-utils flattens glob matches onto the
+  // destination with `dest.join(file_name)`, which would put every
+  // staged file in one directory and drop every subdirectory. A plain
+  // directory path is walked and keeps its structure.
+  t.notOk(
+    Object.keys(resources).some(key => key.includes('*')),
+    'the staged tree keeps its structure rather than being globbed'
   )
   t.end()
 })
+
+// C1: `bundle.resources` is read by tauri-build's *build script*, so
+// the path has to exist during `cargo build` -- which happens before
+// `beforeBundleCommand` creates it, and after `npm run clean` deletes
+// it. A missing path is a hard error there, so without this a clean
+// checkout could not build at all. An empty directory is walked and
+// skipped, so creating it in `build.rs` costs a debug build nothing.
+test('the build script creates the staging root it points at',
+  function (t) {
+    const { OUT_DIR } = require('../../bin/stage-sidecar')
+    const buildScript = fs.readFileSync(
+      path.join(TAURI_DIR, 'build.rs'), 'utf8'
+    )
+
+    t.ok(
+      buildScript.includes(OUT_DIR),
+      `build.rs names ${OUT_DIR}`
+    )
+    t.ok(
+      /create_dir_all/.test(buildScript),
+      'and creates it rather than assuming it'
+    )
+
+    // Order is the whole point: created after `tauri_build::build()`
+    // has already read the config would be created too late.
+    t.ok(
+      buildScript.indexOf('create_dir_all') <
+      buildScript.indexOf('tauri_build::build()'),
+      'before tauri_build::build() reads bundle.resources'
+    )
+    t.end()
+  })
 
 test('the sidecar staging output is not committed or scanned',
   function (t) {
