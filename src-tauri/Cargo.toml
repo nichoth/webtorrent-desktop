@@ -1,8 +1,9 @@
 [package]
 name = "webtorrent-desktop"
-# Kept in sync with `version` in package.json by hand. Nothing reads
-# both, so nothing catches a drift; the packaging stories (US-083,
-# US-084) are where this stops being cosmetic.
+# Kept in sync with `version` in package.json by hand. US-047 gave the
+# drift teeth -- this names the .app and the .dmg while package.json's
+# reaches the sidecar's peer ID -- so `test/unit/tauri-host.js` now
+# checks that the two agree.
 version = "0.24.0"
 description = "Streaming torrent client"
 authors = ["WebTorrent, LLC"]

@@ -292,3 +292,18 @@ test('the sidecar staging output is not committed or scanned',
     t.ok(clean.includes(`'${OUT_DIR}/'`), 'bin/clean.js removes it')
     t.end()
   })
+
+test('the crate version matches the app version', function (t) {
+  // Until US-047 nothing read both, so a drift was cosmetic. Now the
+  // crate version names the .app and the .dmg while package.json's
+  // reaches the sidecar's peer ID through APP_VERSION, so a drift
+  // ships two different version numbers in one artifact.
+  const cargo = fs.readFileSync(
+    path.join(TAURI_DIR, 'Cargo.toml'), 'utf8'
+  )
+  const crate = cargo.match(/^version = "([^"]+)"/m)
+
+  t.ok(crate, 'Cargo.toml declares a version')
+  t.equal(crate[1], pkg.version, 'the two agree')
+  t.end()
+})
