@@ -11,11 +11,12 @@ tree are deleted and `src/renderer/lib/platform/tauri/` is promoted to
 `WT_HOST` variable, `bin/shim-resolver.js` and the `resolveId` plugin
 that read it are gone with nothing to select between.
 `test/unit/electron-removed.js` asserts both, so this record is now
-history rather than a rule. **Two sections outlive it and are still
-live:** "Target versions" is the current toolchain baseline, and
-"Capabilities known not to survive" is the open work US-081 and US-082
-own. Everything else below describes an arrangement that no longer
-exists.
+history rather than a rule. **One section outlives it and is still
+live:** "Target versions" is the current toolchain baseline, amended
+below for Node. "Capabilities known not to survive" was the open work
+US-081 and US-082 owned; both now pass, so that section is the record
+of a resolved casualty rather than a pointer at pending work.
+Everything else below describes an arrangement that no longer exists.
 
 ## Context
 
@@ -164,10 +165,15 @@ reason recorded.
   machine has 1.97.1; that is the version Phase 4 is developed on, and
   `cargo fmt --check` plus `cargo clippy -- -D warnings` are gates
   from US-051 onward.
-- **Node:** the Vite 8 build needs **20.19+**. The `engines` field in
-  `package.json` still says `^16.0.0 || ^18.0.0`, which has been stale
-  since Vite 8 landed; a Phase 4 story should correct it, and this ADR
-  changes no code.
+- **Node:** three independent floors, which is worth stating plainly
+  because they are easy to confuse. The Vite 8 build needs **20.19+**.
+  The `engines` field declares **`>=24.0.0`** -- it said
+  `^16.0.0 || ^18.0.0` when this ADR was written, stale since Vite 8
+  landed, and US-047 corrected it. And the sidecar runs on a
+  **separately pinned 24.19.0** that the bundle carries, which is not
+  the machine's Node at all (ADR-016). `engines` is open-ended rather
+  than a caret range because it constrains the build and test machine,
+  not just the sidecar.
 - **Per-platform system toolchain**, all of it Tauri 2's baseline:
   macOS needs the Xcode command line tools and gives WKWebView
   (26.5 here); Windows needs MSVC build tools plus the WebView2

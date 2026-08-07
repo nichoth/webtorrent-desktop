@@ -2,6 +2,16 @@
 
 **Date:** 2026-08-04
 
+**Citation corrected 2026-08-07.** This ADR names **US-084** twice --
+as the story that has to satisfy `protobuf-codegen`'s 1.88
+build-machine floor on every platform, and as the packaged build that
+has to account for a second listening socket. There is no US-084 in
+`specs/prd.json`; the numbering moved after this was written and no
+such story exists. Packaging landed as US-047 (ADR-016), which is
+macOS and arm64 only, so both obligations are real but unowned for
+Windows and Linux -- there is no cross-platform packaging story in the
+PRD at all. Whoever writes one inherits them.
+
 ## Context
 
 `src/renderer/lib/cast.js` is the last deferred casualty of ADR-008
