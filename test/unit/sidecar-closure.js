@@ -1,11 +1,83 @@
 const test = require('tape')
+const fs = require('fs')
 const path = require('path')
+const { isBuiltin } = require('module')
 
 const {
   resolveClosure, packageDir
 } = require('../../bin/sidecar-closure')
 
 const REPO = path.join(__dirname, '..', '..')
+
+// The Babel output the sidecar actually loads. `build/config.js`
+// because the entry point imports it for APP_VERSION, `build/shared`
+// for the wire envelope -- the same three the staging script copies.
+const STAGED_SOURCES = [
+  path.join(REPO, 'build', 'config.js'),
+  path.join(REPO, 'build', 'engine'),
+  path.join(REPO, 'build', 'shared')
+]
+
+function jsFilesIn (target) {
+  if (fs.statSync(target).isFile()) return [target]
+  return fs.readdirSync(target)
+    .filter(name => name.endsWith('.js'))
+    .map(name => path.join(target, name))
+}
+
+/**
+ * The package names the staged sources require, as Node would resolve
+ * them: no relative paths, no builtins, and a subpath or a scope
+ * reduced to the package it belongs to.
+ */
+function bareSpecifiers () {
+  const names = new Set()
+
+  for (const target of STAGED_SOURCES) {
+    for (const file of jsFilesIn(target)) {
+      // A `require` inside a comment is not a dependency, and the
+      // header comments in `src/engine/` name modules in prose.
+      const source = fs.readFileSync(file, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/(^|[^:])\/\/.*$/gm, '$1')
+
+      const calls = source.matchAll(
+        /require\(\s*['"]([^'"]+)['"]\s*\)/g
+      )
+      for (const [, specifier] of calls) {
+        if (specifier.startsWith('.') || specifier.startsWith('/')) {
+          continue
+        }
+        const parts = specifier.split('/')
+        const name = specifier.startsWith('@')
+          ? parts.slice(0, 2).join('/')
+          : parts[0]
+        if (isBuiltin(name)) continue
+        names.add(name)
+      }
+    }
+  }
+
+  return names
+}
+
+// `ROOTS` in `bin/sidecar-closure.js` is a hand-written list, and the
+// closure is only ever as complete as its seed. One bare import added
+// to `src/engine/` drops a package -- and everything reachable only
+// through it -- out of the bundle, with no build error and no test
+// failure: the app opens and cannot torrent. So re-derive the seed
+// from the built files rather than trusting the list.
+test('the closure seeds on every package the sidecar requires',
+  function (t) {
+    const names = new Set(resolveClosure().map(entry => entry.name))
+    const required = bareSpecifiers()
+
+    t.ok(required.size > 0, `the scan found imports: ${[...required]}`)
+    for (const name of required) {
+      t.ok(names.has(name), `${name} is in the closure`)
+    }
+    t.end()
+  })
 
 test('the closure reaches the engine\'s own dependencies',
   function (t) {

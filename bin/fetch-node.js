@@ -32,6 +32,7 @@ const CACHE_PATH = path.join(
 )
 
 module.exports = {
+  CACHE_PATH,
   MANIFEST,
   extractNodeBinary,
   fetchNode,
@@ -72,9 +73,15 @@ function verifyTarball (manifest, platform, bytes) {
 
 /**
  * The verified tarball's path, downloading it if the cache is cold.
+ *
+ * `cachePath` is a parameter so that a test can exercise the
+ * delete-on-corrupt-cache and verify-before-write paths against a
+ * temporary directory rather than the developer's real cache.
  */
-async function fetchNode (platform, manifest = MANIFEST) {
-  const cached = path.join(CACHE_PATH, tarballName(manifest, platform))
+async function fetchNode (
+  platform, manifest = MANIFEST, cachePath = CACHE_PATH
+) {
+  const cached = path.join(cachePath, tarballName(manifest, platform))
 
   if (fs.existsSync(cached)) {
     try {
@@ -104,7 +111,7 @@ async function fetchNode (platform, manifest = MANIFEST) {
   // something a later run can pick up and trust.
   verifyTarball(manifest, platform, bytes)
 
-  fs.mkdirSync(CACHE_PATH, { recursive: true })
+  fs.mkdirSync(cachePath, { recursive: true })
   fs.writeFileSync(cached, bytes)
   return cached
 }
