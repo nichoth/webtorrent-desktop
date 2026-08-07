@@ -268,19 +268,35 @@ ahead of what it was written against, and no automated end-to-end
 torrent test exists to catch a regression. The manual pass must use a
 real torrent, not merely confirm the app launches.
 
-## To resolve during implementation
+## Resolved during implementation
 
-Two questions are answerable only by building a bundle, and are
-deliberately not settled here.
+Two questions were answerable only by building a bundle. Both were,
+and both went the way the design hoped -- recorded here so the next
+person does not have to rebuild to find out.
 
-**Does Tauri's resource copy preserve the executable bit on `node`?**
-If it does not, the fix is small but it changes the design: either
-`chmod` during host setup, or stage the binary differently. This is
-the most likely thing to bite.
+**Tauri's resource copy preserves the executable bit.**
+`Contents/Resources/node` comes through `-rwxr-xr-x` and reports
+`v24.19.0`. The contingency -- `chmod` from the host at setup -- was
+not needed, and `src-tauri/src/main.rs` is untouched by this work.
 
-**What are the exact `bundle.resources` map semantics** for copying a
-directory's contents into the Resources root rather than into a
-subdirectory of it?
+**The `bundle.resources` map form flattens.** `{"../build-sidecar/":
+"./"}` puts `build/`, `node`, `node_modules/` and `package.json`
+directly in `Contents/Resources` beside `WebTorrent.icns`, rather than
+nesting them under a `build-sidecar/` subdirectory. The list form was
+not needed.
+
+Two things worth knowing that only surfaced from running it:
+
+`beforeBundleCommand` runs with the repository root as its working
+directory. That is a different base than `frontendDist` in the same
+config block, which is relative to `src-tauri/` -- hence
+`"node bin/stage-sidecar.js"` and `"../build-tauri"` sitting next to
+each other and both being correct.
+
+It also runs *after* the Rust compile rather than before it, so a
+staging failure costs a full compile first. That is a slow way to
+learn about a typo, which is part of why the staging script is
+runnable and testable on its own.
 
 ## Also in scope
 
