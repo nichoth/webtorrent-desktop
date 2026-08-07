@@ -11,23 +11,26 @@
  * stated in Rust and asserted by a Rust test, so this script does not
  * choose it -- it satisfies it.
  *
- * A `cargo build` without the bundler is a debug build, so the
- * development path is untouched: `node` off the `PATH`, the
- * repository's own `build/`.
+ * A `cargo build` without the bundler is a debug build, so how the
+ * host *resolves* the sidecar is untouched: `node` off the `PATH`, the
+ * repository's own `build/`. It does not run this script either --
+ * `src-tauri/build.rs` only creates the staging root so that
+ * `bundle.resources` has a path to point at, and an empty one copies
+ * nothing.
  */
 
 const fs = require('fs')
 const path = require('path')
 
 const { fetchNode, extractNodeBinary } = require('./fetch-node')
-const { resolveClosure } = require('./sidecar-closure')
+const { PLATFORM, resolveClosure } = require('./sidecar-closure')
 
 const ROOT_PATH = path.join(__dirname, '..')
 
-// The directory name is duplicated in four other places -- .gitignore,
-// nodemon's --ignore list, depcheck's --ignore-dirs and bin/clean.js --
-// because none of those can require this module. `tauri-host.js` holds
-// them together.
+// The directory name is duplicated in five other places -- .gitignore,
+// nodemon's --ignore list, depcheck's --ignore-dirs, bin/clean.js and
+// src-tauri/build.rs -- because none of those can require this module.
+// `tauri-host.js` holds them together.
 const OUT_DIR = 'build-sidecar'
 
 // Repo-relative paths from the Babel output, copied in the same layout
@@ -39,20 +42,51 @@ const COPY = [
   path.join('build', 'shared')
 ]
 
-const PLATFORM = 'darwin-arm64'
-
-// Only what another file names, as `bin/build-tauri.js` does.
-module.exports = { COPY, OUT_DIR, PLATFORM }
+module.exports = { COPY, OUT_DIR, PLATFORM, assertHost, stage }
 
 if (require.main === module) {
-  stage().catch(err => {
-    console.error(err.message)
-    process.exit(1)
-  })
+  stage()
+    .then(() => console.log(`Assembled ${OUT_DIR}/ for ${PLATFORM}`))
+    .catch(err => {
+      console.error(err.message)
+      process.exit(1)
+    })
 }
 
-async function stage () {
-  const outPath = path.join(ROOT_PATH, OUT_DIR)
+/**
+ * Every part of the staged tree is `PLATFORM`-specific -- the Node
+ * binary this downloads and the `utp-native` prebuild the closure
+ * keeps. Nothing downstream re-checks: on an x64 or a Linux host this
+ * would assemble happily, and the mismatch would first be visible as
+ * `Engine: failed to spawn` out of a shipped build, which is the
+ * symptom this whole branch exists to remove.
+ *
+ * @param {string} [host] the running machine's, as a parameter only so
+ *   that a test on a matching host can still exercise the refusal.
+ */
+function assertHost (host = `${process.platform}-${process.arch}`) {
+  if (host !== PLATFORM) {
+    throw new Error(
+      `bin/stage-sidecar.js stages ${PLATFORM} and this host is ` +
+      `${host} -- cross-staging would ship a runtime the app cannot run`
+    )
+  }
+}
+
+/**
+ * @param {object} [options]
+ * @param {string} [options.outPath] the directory to assemble; the
+ *   repository's own staging root by default.
+ * @param {(outPath: string) => Promise<void>} [options.installRuntime]
+ *   puts the Node binary at `<outPath>/node`; downloads and extracts
+ *   the pinned tarball by default. The seam is there so a test can
+ *   assemble a tree without a 50MB download.
+ */
+async function stage ({
+  outPath = path.join(ROOT_PATH, OUT_DIR),
+  installRuntime = installNodeRuntime
+} = {}) {
+  assertHost()
   fs.rmSync(outPath, { recursive: true, force: true })
 
   for (const entry of COPY) {
@@ -67,11 +101,12 @@ async function stage () {
 
   writeManifest(outPath)
   copyClosure(outPath)
+  await installRuntime(outPath)
+}
 
+async function installNodeRuntime (outPath) {
   const tarball = await fetchNode(PLATFORM)
   extractNodeBinary(tarball, path.join(outPath, 'node'))
-
-  console.log(`Assembled ${OUT_DIR}/ for ${PLATFORM}`)
 }
 
 /**

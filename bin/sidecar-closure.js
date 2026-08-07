@@ -23,7 +23,12 @@ const path = require('path')
 
 const ROOT_PATH = path.join(__dirname, '..')
 
-// The bare specifiers the Babel output under `build/` requires.
+// The bare specifiers the Babel output under `build/` requires --
+// `music-metadata`, `network-address`, `webtorrent` and `ws` from
+// `build/engine/`, and `application-config` and `arch` through
+// `build/config.js`, which the entry point imports for APP_VERSION.
+// `test/unit/sidecar-closure.js` re-derives this list from the built
+// files and fails if anything here is missing.
 const ROOTS = [
   'application-config',
   'arch',
@@ -40,11 +45,16 @@ const ROOTS = [
 // is a nested Mach-O that notarization would have to sign (US-083).
 const EXCLUDED = new Set(['bufferutil', 'utf-8-validate'])
 
-// `utp-native` ships a prebuild per platform. An arm64-only bundle
-// needs exactly one; the other four are dead weight.
-const PREBUILD = 'darwin-arm64'
+// The one platform this branch stages, spelled the way both the Node
+// tarball name and `utp-native`'s prebuild directories spell it.
+// `bin/stage-sidecar.js` imports it from here rather than repeating
+// it: an x64 Node beside an arm64 addon is a bundle that dies at
+// require time, and the two strings drifting apart is how that
+// happens. `utp-native` ships a prebuild per platform and an
+// arm64-only bundle needs exactly one; the other four are dead weight.
+const PLATFORM = 'darwin-arm64'
 
-module.exports = { packageDir, resolveClosure }
+module.exports = { PLATFORM, packageDir, resolveClosure }
 
 /**
  * Where `require(name)` from `fromDir` would find its package.
@@ -134,10 +144,10 @@ function filesFor (name, dir) {
   walk(dir)
 
   if (name === 'utp-native') {
-    const wanted = `prebuilds${path.sep}${PREBUILD}${path.sep}`
+    const wanted = `prebuilds${path.sep}${PLATFORM}${path.sep}`
     if (!files.some(file => file.startsWith(wanted))) {
       throw new Error(
-        `utp-native carries no ${PREBUILD} prebuild -- staging it ` +
+        `utp-native carries no ${PLATFORM} prebuild -- staging it ` +
         'would drop the sidecar to TCP-only peers with nothing but a ' +
         'console warning to say so'
       )
@@ -150,5 +160,5 @@ function filesFor (name, dir) {
 function keepPrebuild (relative) {
   const parts = relative.split(path.sep)
   if (parts[0] !== 'prebuilds') return true
-  return parts[1] === PREBUILD
+  return parts[1] === PLATFORM
 }
