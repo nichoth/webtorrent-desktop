@@ -6,11 +6,12 @@
 as the story that has to satisfy `protobuf-codegen`'s 1.88
 build-machine floor on every platform, and as the packaged build that
 has to account for a second listening socket. There is no US-084 in
-`specs/prd.json`; the numbering moved after this was written and no
-such story exists. Packaging landed as US-047 (ADR-016), which is
-macOS and arm64 only, so both obligations are real but unowned for
-Windows and Linux -- there is no cross-platform packaging story in the
-PRD at all. Whoever writes one inherits them.
+`specs/prd.json` and there is not meant to be: **this app targets
+macOS only.** Packaging landed as US-047 (ADR-016), macOS and arm64.
+So read both obligations as scoped to one platform -- the rustc floor
+has to hold on an arm64 Mac, and the firewall prompt is the macOS one.
+The per-platform analysis below is still accurate about the crates; it
+is simply broader than the target.
 
 ## Context
 
