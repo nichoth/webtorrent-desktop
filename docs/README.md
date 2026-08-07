@@ -12,10 +12,15 @@ the port and which rules exist because of it.
 
 ## Requirements
 
-- Node.js `20.19+` or `22.12+`. This is what Vite 8 requires; the
-  `engines` field in `package.json` still says `^16 || ^18` and is out
-  of date.
-- npm 7 or later.
+- Node.js 24 or later, which is what `engines` in `package.json`
+  declares. Vite 8 itself would take `20.19+` or `22.12+`, but US-047
+  ships a pinned Node 24 runtime inside the packaged app, and building
+  on an older line than the one you ship is not worth the ambiguity.
+- npm 10 or later. Node 24 ships npm 11.
+- macOS on Apple Silicon, if you intend to produce a packaged build.
+  Development works on all three platforms; `npx tauri build` does
+  not, because the staged engine runtime is `darwin-arm64` only. See
+  [Package the app](../README.md#package-the-app).
 - The Rust toolchain, and Tauri 2's per-platform system dependencies:
   the Xcode command line tools on macOS, MSVC build tools plus the
   WebView2 runtime on Windows, `webkit2gtk-4.1` and `libsoup3` on

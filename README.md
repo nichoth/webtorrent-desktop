@@ -77,12 +77,37 @@ meantime and what a replacement harness would take.
 
 ### Package the app
 
-Packaging is not wired up yet. `npm run package` drove
-`electron-packager` and was deleted along with the Electron host;
-Tauri's own bundler replaces it, and the signed macOS, Windows and
-Linux builds are the next stories in `specs/prd.json` (US-083 and
-US-084). Until then the way to get a binary is
-`npm run build:tauri && (cd src-tauri && cargo build)`.
+```
+$ npm run build:tauri && npx tauri build
+```
+
+On an Apple Silicon Mac this produces
+`src-tauri/target/release/bundle/macos/WebTorrent.app` and a matching
+`.dmg`. `npm run package` drove `electron-packager` and was deleted
+along with the Electron host; Tauri's own bundler replaces it.
+
+The app is self-contained. Before bundling, `bin/stage-sidecar.js`
+assembles `build-sidecar/` -- a pinned Node 24 runtime, the Babel
+output of `src/engine/`, and the engine's dependency closure -- and
+the bundler copies that into `Contents/Resources`, which is where the
+Rust host looks for the sidecar in a release build. The first run
+downloads the Node tarball (~50MB) and caches it in
+`~/.cache/webtorrent-desktop/node/`, so later builds do not re-fetch
+it.
+
+Two limits worth knowing. The build is **arm64 macOS only**: the
+staged Node runtime and the `utp-native` prebuild are both
+`darwin-arm64`, and the staging script refuses to run on any other
+host rather than producing a bundle that cannot spawn its engine. And
+the output is **unsigned and un-notarized**, so macOS will refuse it
+on another machine without a Gatekeeper override -- signing, the
+hardened runtime and notarization are US-083 in `specs/prd.json`.
+Windows and Linux packaging are not in the backlog at all.
+
+For a development binary rather than a bundle, `npm start` is the
+usual path; `cd src-tauri && cargo build` also works and produces a
+debug build, which resolves the engine from `node` on your `PATH` and
+the repository's own `build/` instead of from the bundle.
 
 #### Recommended readings to start working in the app
 

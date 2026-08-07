@@ -2,7 +2,9 @@
 
 **Date:** 2026-08-06
 
-**Status:** design, approved -- not yet implemented
+**Status:** implemented. See "Resolved during implementation" for what
+building a bundle answered, and "Corrected after implementation" for
+one thing the design got wrong.
 
 ## Why this exists
 
@@ -40,8 +42,8 @@ including `@rpath/libnode.141.dylib`, `libicui18n.78.dylib` and
 binary alone runs only on a machine with an identical Homebrew
 install.
 
-**The dependency closure is 190 package directories, 1622 files,
-9.3 MB**, not the six direct requires visible in `build/engine/`.
+**The dependency closure is 190 package directories, 1618 files,
+8.36 MB**, not the six direct requires visible in `build/engine/`.
 Three of those packages carry native N-API prebuilds: `utp-native`,
 `bufferutil` and `utf-8-validate`.
 
@@ -139,10 +141,22 @@ list or a source-to-target map.
 2. `bundle.resources` maps `../build-sidecar/` into the Resources
    root.
 
-A plain `cargo build` remains a debug build, so `production` is false
-and the sidecar still resolves to `node` on `PATH` and the
-repository's own `build/`. The development path README documents is
-untouched.
+A third piece is needed to make those two work together, and the
+design missed it. `bundle.resources` is read by `tauri-build`'s build
+script, which runs during *every* `cargo build`, debug and release
+alike -- and a resource path that does not exist is a hard error
+there. `build-sidecar/` is gitignored, created only by
+`beforeBundleCommand` (which runs after the cargo build) and deleted
+by `bin/clean.js`, so the generated directory was a prerequisite of
+the build that generates it. `src-tauri/build.rs` therefore creates it
+before calling `tauri_build::build()`. See "Corrected after
+implementation".
+
+A plain `cargo build` is still a debug build, so `production` is false
+and the sidecar still *resolves* to `node` on `PATH` and the
+repository's own `build/`. What changed is the build, not the
+resolution: a debug build now creates an empty `build-sidecar/` if
+there is none.
 
 ## Components
 
@@ -154,12 +168,19 @@ its SHA-256:
 ```json
 {
   "version": "24.19.0",
-  "darwin-arm64": {
-    "sha256":
-      "8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d"
+  "platforms": {
+    "darwin-arm64": {
+      "sha256":
+        "8294b7aa9b03997481c06babf1e8b270c859358f27da57a11509afe537ac381d"
+    }
   }
 }
 ```
+
+The `platforms` nesting is what the code reads
+(`verifyTarball` indexes `manifest.platforms[platform]`), and it is
+what keeps `version` from colliding with a platform key if a second
+one is ever pinned.
 
 Committing the hash is the security-relevant part. Verifying a
 download against a `SHASUMS256.txt` fetched from the same host proves
@@ -202,10 +223,10 @@ past:
   The other four platform directories are dead weight in an arm64-only
   bundle.
 
-The walker returns a file list rather than copying as it goes. The
-interesting logic is then a pure function, and the filesystem work is
-a thin shell around it -- which is what makes it testable with no
-network and no bundle.
+The walker returns a file list rather than copying as it goes. It
+still reads the filesystem -- resolution *is* a filesystem question --
+but it writes nothing, so what decides which files ship is separable
+from the copying and testable with no network and no bundle.
 
 ## Error handling
 
@@ -252,13 +273,35 @@ port-line prefix. Two additions belong there:
    exactly this on the other output directory, so this is a mirror of
    an existing pattern rather than a new idea.
 
-**`test/unit/stage-sidecar.js`** is new and covers the walker. Run it
-against the real `node_modules` and assert that `webtorrent`, `ws` and
-`music-metadata` are present, that `bufferutil` and `utf-8-validate`
-are absent, and that `utp-native` is present with `darwin-arm64` as
-its only prebuild directory. Manifest parsing, URL construction and
-checksum comparison get fixture-based tests. No network in the unit
-suite.
+Three unit files are new, one per module rather than the single
+`stage-sidecar.js` this design first sketched:
+
+**`test/unit/sidecar-closure.js`** covers the walker, run against the
+real `node_modules`: `webtorrent`, `ws` and `music-metadata` present,
+`bufferutil` and `utf-8-validate` absent, `utp-native` present with
+`darwin-arm64` as its only prebuild directory, and `debug` staged at
+each of its own paths. It also re-derives `ROOTS` by scanning
+`build/config.js`, `build/engine/` and `build/shared/` for bare
+`require()` specifiers, so a new import that nobody adds to the list
+fails here rather than in a bundle.
+
+**`test/unit/fetch-node.js`** covers manifest parsing, URL
+construction and checksum comparison from fixtures, plus the two cache
+paths that make the pin worth having -- a cached tarball that no
+longer matches is deleted, and a download that does not match is never
+written. `fetchNode` takes its cache directory as a parameter so those
+run against a temp directory, and `globalThis.fetch` is stubbed. No
+network in the unit suite.
+
+**`test/unit/stage-sidecar.js`** covers assembly. `stage()` takes an
+output path and a runtime-install function, so the smoke test
+assembles a real tree into a temp directory with the 50MB download
+stubbed out, and asserts that `node`, `package.json`,
+`build/engine/index.js` and `node_modules/webtorrent/package.json`
+land where `Runtime::resolve` looks for them. It also pins the
+platform guard: staging refuses any host that is not `darwin-arm64`,
+because cross-staging produces a bundle whose failure mode is
+`Engine: failed to spawn` in the shipped app.
 
 **Manual.** US-047's own criterion -- a packaged build downloads,
 plays and seeds -- stays manual, and the story is already marked
@@ -298,6 +341,50 @@ staging failure costs a full compile first. That is a slow way to
 learn about a typo, which is part of why the staging script is
 runnable and testable on its own.
 
+## Corrected after implementation
+
+**A clean checkout could not build.** Every task above passed review on
+its own; nothing in that scope could see it. With `build-sidecar/`
+absent -- a fresh clone, or anyone who has run `npm run clean` --
+`cd src-tauri && cargo build` exited 101 with
+`resource path '../build-sidecar' doesn't exist`, which broke
+`npm start`, `npx tauri build` and the command README documented.
+
+The fix is four lines in `src-tauri/build.rs`: create
+`../build-sidecar` before calling `tauri_build::build()`. Three
+approaches were tested rather than argued.
+
+1. **A glob, `"../build-sidecar/*"`.** Rejected, and it does not work
+   in either direction. `tauri-utils` errors with `GlobPathNotFound`
+   when a glob matches nothing, so it does not fix the empty case; and
+   for globbed matches it computes the destination as
+   `dest.join(file_name)`, which would flatten the whole staged tree
+   into one directory and drop every subdirectory. Verified by reading
+   `tauri-utils-2.9.3/src/resources.rs` and by building.
+2. **Staging from `beforeBuildCommand`.** Would work, but it also runs
+   for `tauri dev`, so every developer would pay the ~50MB Node
+   download on first run and each debug build would copy ~128MB into
+   `target/debug/`.
+3. **Creating the directory in `build.rs`.** Taken. `tauri-utils`
+   walks a directory resource and skips it when the walk yields no
+   files, so an *empty* directory is not an error -- only a missing
+   one is. A debug build therefore copies nothing, `beforeBundleCommand`
+   still fills the directory before the bundler collects resources, and
+   the packaged Resources are unchanged.
+
+The tradeoff: `build.rs` now knows the staging directory's name, which
+is a sixth place `build-sidecar` is spelled. `test/unit/tauri-host.js`
+holds all six together, and additionally pins that `bundle.resources`
+maps `../build-sidecar/` to `./` in that direction and is not a glob.
+
+**The staged platform is now checked.** `PLATFORM` was written out
+twice, in `bin/stage-sidecar.js` and `bin/sidecar-closure.js`, with
+nothing holding the two together -- a drift would put an x64 Node
+beside an arm64 `utp-native` prebuild, which fails at require time in
+the packaged app. It is now defined once in `bin/sidecar-closure.js`
+and imported. `stage()` also refuses to run on a host that is not
+`darwin-arm64`, which nothing checked before.
+
 ## Also in scope
 
 `package.json`'s `engines.node` becomes `>=24.0.0`, replacing
@@ -307,6 +394,12 @@ Node 24 widens the gap between the declared and the actual runtime.
 The range is open-ended rather than `^24.0.0` because `engines`
 constrains the machine that runs the build and the test suite, not
 just the sidecar, and that machine is on a newer line.
+
+`engines.npm` has to move with it. It read
+`^7.10.0 || ^8.0.0 || ^9.0.0 || ^10.0.0`, and Node 24 ships npm 11, so
+raising `node` alone left a block that nothing could satisfy -- the
+same defect in the other field. It becomes `>=10.0.0`, open-ended for
+the same reason.
 
 `src-tauri/Cargo.toml` notes that its `version` is kept in sync with
 `package.json` by hand and that "the packaging stories are where this
