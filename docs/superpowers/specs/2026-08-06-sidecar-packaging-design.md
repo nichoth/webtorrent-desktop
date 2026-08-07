@@ -40,10 +40,19 @@ including `@rpath/libnode.141.dylib`, `libicui18n.78.dylib` and
 binary alone runs only on a machine with an identical Homebrew
 install.
 
-**The dependency closure is 174 packages, about 8.5 MB**, not the six
-direct requires visible in `build/engine/`. Three of those packages
-carry native N-API prebuilds: `utp-native`, `bufferutil` and
-`utf-8-validate`.
+**The dependency closure is 190 package directories, 1622 files,
+9.3 MB**, not the six direct requires visible in `build/engine/`.
+Three of those packages carry native N-API prebuilds: `utp-native`,
+`bufferutil` and `utf-8-validate`.
+
+**The closure is not cleanly hoisted.** `debug` appears at 12
+different paths in it and `readable-stream` at 10, at differing
+versions under differing parents -- `node_modules/music-metadata/`
+and `node_modules/webtorrent/` each carry their own `debug`. So the
+staged `node_modules` has to preserve the tree rather than flatten
+it. Flattening by package name would silently pick one version of
+`debug` for every consumer, which is a class of bug that surfaces
+only at runtime in a packaged app.
 
 **All three native packages are optional.**
 `node_modules/webtorrent/lib/utp.js` is a `try`/`catch` require that
@@ -168,10 +177,19 @@ npm dependency is added and `depcheck` in `npm test` stays quiet.
 
 ### The closure walker
 
-The walker resolves the way Node does, using `createRequire` from each
-package's own directory, so hoisted and nested `node_modules` layouts
-both come out right. Reading `dependencies` out of each `package.json`
-and constructing paths by hand would guess at a layout npm owns.
+The walker resolves the way Node does: from a package's own directory,
+check `<dir>/node_modules/<name>`, then walk up a level and check
+again. That is Node's own algorithm, it handles hoisted and nested
+layouts alike, and unlike `require.resolve('<name>/package.json')` it
+cannot be defeated by a package whose `exports` map declines to
+expose its manifest -- a real hazard across 190 packages.
+
+Each resolved package is recorded by its path relative to the
+repository root, and staging copies it to the same relative path
+under `build-sidecar/`. Preserving the tree rather than flattening it
+is what makes resolution in the bundle identical to resolution in
+development, which is the property that lets the manual verification
+mean something.
 
 Its roots are the bare specifiers the built engine requires --
 `application-config`, `arch`, `music-metadata`, `network-address`,
