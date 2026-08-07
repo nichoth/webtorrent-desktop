@@ -88,11 +88,31 @@ root. That directory becomes `Contents/Resources`:
 ```
 build-sidecar/
   node                     official Node 24 arm64, executable
+  package.json             generated; carries `version` only
   build/config.js
   build/engine/
   build/shared/
   node_modules/            resolved closure, minus excluded optionals
 ```
+
+The generated `package.json` is not optional. `build/config.js:12`
+requires `../package.json` and reads `version` from it as
+`APP_VERSION` (`build/config.js:77`), which the engine folds into its
+Azureus-style peer ID. Staged without it, the sidecar dies on load:
+
+```
+Error: Cannot find module '../package.json'
+Require stack:
+- .../build/config.js
+- .../build/engine/index.js
+```
+
+Verified by staging the layout by hand and running the engine under
+it, first failing exactly as above and then, with a root
+`package.json` present, printing `WEBTORRENT_ENGINE_PORT=57269` and
+its init timing. It is generated rather than copied so that the
+bundle does not carry the repository's dependency and script maps,
+which describe a tree the packaged app does not have.
 
 `node_modules` sits at the root because Node resolves `require` by
 walking up from the requiring file. From
