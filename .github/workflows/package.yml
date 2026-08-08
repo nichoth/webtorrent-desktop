@@ -1,5 +1,11 @@
 name: package
 on:
+  # `npm version` in RELEASE_PROCESS.md tags `vX.Y.Z`, and pushing that
+  # tag is the last step of cutting a version, so that is what builds
+  # the bundle. workflow_dispatch stays for building off a branch.
+  push:
+    tags:
+      - 'v*'
   workflow_dispatch:
 jobs:
   # One job, macOS, arm64 (ADR-017). This was three jobs invoking
@@ -8,25 +14,27 @@ jobs:
   #
   # The artifacts are UNSIGNED and will not pass Gatekeeper on a machine
   # that did not build them. Signing, the hardened runtime, notarization
-  # and stapling are US-083; until that lands this stays
-  # workflow_dispatch rather than release automation.
+  # and stapling are US-083; until that lands the .dmg goes to a
+  # workflow artifact, which needs a GitHub login to fetch, and not to a
+  # release, which would offer the public a download macOS refuses.
   package_macos:
     runs-on: macos-latest
     steps:
-    - uses: actions/checkout@v3
-    - uses: actions/setup-node@v3
+    - uses: actions/checkout@v7
+    - uses: actions/setup-node@v7
       with:
         node-version: '24'
-    - uses: actions/cache@v3
-      with:
-        path: ~/.npm
-        key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
-        restore-keys: |
-          ${{ runner.os }}-node-
+        # setup-node's own npm cache, on ~/.npm keyed by
+        # package-lock.json, in place of a hand-rolled actions/cache
+        # block that did the same thing by hand. Naming `npm` here also
+        # settles the automatic package-manager detection added in v5,
+        # which otherwise turns on only when package.json carries a
+        # `packageManager` field -- this one does not.
+        cache: npm
     # The pinned sidecar runtime, keyed on the manifest that pins it so
     # a bumped version misses the cache rather than reusing the old
     # tarball (ADR-016).
-    - uses: actions/cache@v3
+    - uses: actions/cache@v6
       with:
         path: ~/.cache/webtorrent-desktop/node
         key: ${{ runner.os }}-sidecar-node-${{ hashFiles('bin/node-runtime.json') }}
@@ -34,8 +42,17 @@ jobs:
     - run: npm test
     - run: npm run build:tauri
     - run: npx tauri build
-    - uses: actions/upload-artifact@v3
+    - uses: actions/upload-artifact@v7
       with:
-        name: macos
-        path: |
-          src-tauri/target/release/bundle/dmg/*.dmg
+        # Upload the .dmg as itself rather than zipping it, so the
+        # download is the disk image and not a zip around one. The
+        # artifact takes the file's own name, which already carries the
+        # version, so `name` is not set -- it would be ignored. This
+        # also refuses to run if the glob ever matches more than one
+        # file, which for one bundler target means something is wrong.
+        archive: false
+        # Fail rather than pass with an empty artifact: the bundler can
+        # exit 0 having written nothing, and a green run with no .dmg
+        # reads as a successful package.
+        if-no-files-found: error
+        path: src-tauri/target/release/bundle/dmg/*.dmg

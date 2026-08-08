@@ -12,7 +12,15 @@ jobs:
       pull-requests: write
 
     steps:
-    - uses: actions/stale@v6
+    # v11, up from v6. Two behaviour changes on the way here reach this
+    # config. From v7 the action no longer takes the `stale` label back
+    # off an item that later gains one of the exempt labels below --
+    # that is the maintainer's job now. From v9 the action is stateful:
+    # a run that exhausts `operations-per-run` (30 by default, and this
+    # config does not raise it) resumes at the next unprocessed item
+    # rather than restarting at the first, so a backlog now drains over
+    # successive daily runs instead of the same items being reprocessed.
+    - uses: actions/stale@v11
       with:
         repo-token: ${{ secrets.GITHUB_TOKEN }}
         stale-issue-message: 'Is this still relevant? If so, what is blocking it? Is there anything you can do to help move it forward?'
