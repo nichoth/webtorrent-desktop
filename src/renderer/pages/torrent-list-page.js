@@ -8,6 +8,7 @@ import * as TorrentSummary from '../lib/torrent-summary'
 import * as TorrentPlayer from '../lib/torrent-player'
 import { dispatcher } from '../lib/dispatcher'
 import { calculateEta } from '../lib/time'
+import { stallReason, etaSpeed } from '../lib/torrent-status'
 
 export default class TorrentList extends React.Component {
   render () {
@@ -193,10 +194,14 @@ export default class TorrentList extends React.Component {
       const downloaded = prog.downloaded
       const total = prog.length || 0
       const missing = total - downloaded
-      const downloadSpeed = prog.downloadSpeed
-      if (downloadSpeed === 0 || missing === 0) return
+      // Verified speed, not socket speed. A peer that sends keepalives
+      // and no usable blocks left the old figure at tens of bytes per
+      // second, which is enough to divide by and get a confident,
+      // meaningless answer. No verified data means no estimate.
+      const speed = etaSpeed(prog)
+      if (speed === 0 || missing === 0) return
 
-      const etaStr = calculateEta(missing, downloadSpeed)
+      const etaStr = calculateEta(missing, speed)
 
       return (<span key='eta'>{etaStr}</span>)
     }
@@ -210,7 +215,17 @@ export default class TorrentList extends React.Component {
       } else if (torrentSummary.status === 'downloading') {
         if (!torrentSummary.progress) status = ''
         else if (!torrentSummary.progress.ready) status = 'Verifying'
-        else status = 'Downloading'
+        else {
+          // Saying "Downloading" while nothing verifies, next to an ETA
+          // derived from a transfer that never lands, is how a torrent
+          // three pieces short of done looked healthy for days.
+          const reason = stallReason(torrentSummary.progress)
+          if (reason === 'corrupt-peers') {
+            status = 'Stalled -- corrupt peer blocked'
+          } else if (reason === 'no-progress') {
+            status = 'Stalled -- no peer has the rest'
+          } else status = 'Downloading'
+        }
       } else if (torrentSummary.status === 'seeding') {
         status = 'Seeding'
       } else { // torrentSummary.status is 'new' or something unexpected

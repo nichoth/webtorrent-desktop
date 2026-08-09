@@ -32,6 +32,8 @@ import WebTorrent from 'webtorrent'
 import config from '../config'
 import { runAnnounceSweep, SWEEP_INTERVAL_MS } from './announce'
 import { createWebSocketBus } from './bus-websocket'
+import { createHashFailTracker, parseFailedPiece } from './hashfail'
+import { createStallTracker, verifiedBytes } from './stall'
 
 console.time('init')
 
@@ -87,6 +89,33 @@ const servers = new Map()
 // has just sent a `start` announce of its own and a second one a
 // minute later would be pure waste.
 const lastAnnounceAt = new Map()
+
+// Which peers have served corrupt piece data, client-wide. A peer that
+// poisons one torrent gets no second chance on another, which is also
+// what `client.blocked` can express: WebTorrent consults it once per
+// `addPeer`, so the ban covers reconnections without any bookkeeping
+// here.
+const hashFails = createHashFailTracker()
+
+// Info hash -> what the UI is told about that torrent's corrupt peers.
+// The tracker itself is client-wide and keyed by address, which cannot
+// answer "is *this* torrent stuck", so the per-torrent tally lives here
+// and is dropped with the torrent.
+const corruptPeerStats = new Map()
+
+// How fast each torrent is verifying data, and how long since it last
+// managed to. Neither question can be answered from what WebTorrent
+// reports: `downloadSpeed` counts every byte off the socket, and
+// `downloaded` counts piece buffers that may still fail their hash.
+const stalls = createStallTracker()
+
+// The one hook WebTorrent 1.9.7 offers for refusing a peer. It is
+// documented as a static IP blocklist loaded at construction, but
+// `Torrent#addPeer` only ever asks `client.blocked.contains(host)`, so
+// a live view of the ban set works and covers every path a peer can
+// arrive by -- tracker, DHT, PEX, incoming. Without this a banned peer
+// reconnects within seconds and the loop resumes.
+client.blocked = { contains: (host) => hashFails.isBanned(host) }
 
 // Used for diffing, so we only send progress updates when necessary
 let prevProgress = null
@@ -199,6 +228,8 @@ function startTorrenting (torrentKey, torrentID, path, fileModtimes, selections)
 function stopTorrenting (infoHash) {
   console.log('--- STOP TORRENTING: ', infoHash)
   lastAnnounceAt.delete(infoHash)
+  corruptPeerStats.delete(infoHash)
+  stalls.forget(infoHash)
   const torrent = client.get(infoHash)
   if (torrent) torrent.destroy()
 }
@@ -230,10 +261,33 @@ function createTorrent (torrentKey, options) {
 }
 
 function addTorrentEvents (torrent) {
-  torrent.on('warning', (err) =>
-    bus.send('wt-warning', torrent.key, err.message))
+  torrent.on('warning', (err) => {
+    onTorrentWarning(torrent, err)
+    bus.send('wt-warning', torrent.key, err.message)
+  })
   torrent.on('error', (err) =>
     bus.send('wt-error', torrent.key, err.message))
+
+  torrent.on('wire', (wire) => {
+    // The choke point for the ban. `Torrent#_onWire` is the one funnel
+    // every connection passes through -- outgoing, incoming, and
+    // WebTorrent's own reconnect -- so a banned peer cannot get a wire
+    // past this line by any route.
+    //
+    // `client.blocked` alone is not enough, and the gap is not
+    // theoretical: it is consulted by the public `addPeer` only, while
+    // the backoff reconnect in `conn.on('close')` calls the private
+    // `_addPeer` and walks straight past it. So does
+    // `_addIncomingPeer`. Destroying the offender's wire without this
+    // guard just starts that reconnect, and the corrupt data resumes a
+    // second later.
+    if (hashFails.isBanned(wire.remoteAddress)) return wire.destroy()
+
+    // Who sent which block. `wire.remoteAddress` is set by WebTorrent
+    // when the connection is established, before any block can arrive.
+    wire.on('piece', (index) =>
+      hashFails.recordContribution(index, wire.remoteAddress))
+  })
   torrent.on('infoHash', () => {
     // `client.add()` announces `started` as it goes, so the sweep's
     // clock for this torrent starts here rather than at zero.
@@ -270,6 +324,59 @@ function addTorrentEvents (torrent) {
       bus.send('wt-file-modtimes', torrent.key, fileModtimes)
     })
   }
+}
+
+// Charge a failed piece to whoever fed it, and cut off any peer that
+// has now failed once too often.
+//
+// Only verification failures are acted on. Every other warning -- a
+// tracker timeout, a bad peer handshake -- reaches the bus unchanged,
+// which is the same passthrough the caller had before.
+function onTorrentWarning (torrent, err) {
+  const pieceIndex = parseFailedPiece(err && err.message)
+  if (pieceIndex === null) return
+
+  const stats = statsFor(torrent)
+  stats.hashFails += 1
+
+  const { banned } = hashFails.recordFailure(pieceIndex)
+  if (banned.length === 0) return
+
+  stats.bannedPeers += banned.length
+
+  banned.forEach((address) => {
+    console.log(
+      'banning peer %s: %s pieces failed verification, latest %s on %s',
+      address, hashFails.strikesFor(address) || 'enough', pieceIndex,
+      torrent.name)
+  })
+
+  // `client.blocked` keeps a banned peer from being re-added, but says
+  // nothing about the connection it is already on. Without this the
+  // existing wire keeps serving the same garbage and the ban only takes
+  // effect whenever that connection happens to drop.
+  disconnectBanned()
+}
+
+// Drop every live wire belonging to a banned peer, across all torrents:
+// the ban is client-wide, and a peer poisoning one torrent is a peer
+// worth losing on the rest.
+function disconnectBanned () {
+  client.torrents.forEach((torrent) => {
+    // `wires` is mutated as connections close, so iterate a copy.
+    torrent.wires.slice().forEach((wire) => {
+      if (hashFails.isBanned(wire.remoteAddress)) wire.destroy()
+    })
+  })
+}
+
+function statsFor (torrent) {
+  let stats = corruptPeerStats.get(torrent.infoHash)
+  if (!stats) {
+    stats = { hashFails: 0, bannedPeers: 0 }
+    corruptPeerStats.set(torrent.infoHash, stats)
+  }
+  return stats
 }
 
 // Produces a JSON saveable summary of a torrent
@@ -350,10 +457,25 @@ function getTorrentProgress () {
         numPiecesPresent
       }
     })
+    // Absent until a piece of this torrent actually fails, so the
+    // common case adds two zeroes rather than a lookup miss.
+    const corrupt = corruptPeerStats.get(torrent.infoHash)
+
+    // `stalledForMs` is deliberately not on the wire. It changes every
+    // tick, which would defeat the diff in `updateTorrentProgress` and
+    // put the whole payload on the bus once a second forever. `stalled`
+    // and a rounded speed both settle, so an idle torrent goes quiet.
+    const motion = stalls.sample(
+      torrent.infoHash, verifiedBytes(torrent), Date.now())
+
     return {
       torrentKey: torrent.key,
       ready: torrent.ready,
       progress: torrent.progress,
+      hashFails: corrupt ? corrupt.hashFails : 0,
+      bannedPeers: corrupt ? corrupt.bannedPeers : 0,
+      verifiedSpeed: Math.round(motion.verifiedSpeed),
+      stalled: motion.stalled,
       downloaded: torrent.downloaded,
       downloadSpeed: torrent.downloadSpeed,
       uploadSpeed: torrent.uploadSpeed,

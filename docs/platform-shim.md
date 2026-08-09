@@ -1055,6 +1055,10 @@ with `wt-progress`:
     torrentKey: number,
     ready: boolean,
     progress: number,             // 0..1
+    hashFails: number,            // pieces that failed verification
+    bannedPeers: number,          // peers cut off for serving those
+    verifiedSpeed: number,        // bytes/sec that passed their hash
+    stalled: boolean,             // nothing verified for a while
     downloaded: number,           // bytes
     downloadSpeed: number,        // bytes/sec
     uploadSpeed: number,          // bytes/sec
@@ -1070,6 +1074,31 @@ with `wt-progress`:
   }>
 }
 ```
+
+`hashFails` and `bannedPeers` are cumulative counts for the life of the
+torrent in the current engine process, not rates. Both are zero for a
+torrent that has never had a piece fail its SHA-1 check, which is nearly
+all of them. `bannedPeers` counts peers the engine cut off for repeatedly
+serving corrupt data, and is what
+`renderer/lib/torrent-status.js:isStalledOnCorruptPeers` reads to tell a
+torrent between peers from one that has no clean source left. An
+implementation with no equivalent notion may report zero for both; the
+status line then falls back to `Downloading`, which is what it said
+before these fields existed.
+
+`verifiedSpeed` and `stalled` exist because `downloadSpeed` and
+`downloaded` answer a different question than the UI asks.
+`downloadSpeed` is fed from the raw socket, so it counts handshakes,
+keepalives and `have` messages: a peer serving no usable block still
+shows tens of bytes per second, which is enough to divide by and get a
+confident, meaningless ETA. `downloaded` includes piece buffers that
+have not passed their hash, so a torrent whose pieces all fail reads as
+moving. Both are still on the wire unchanged -- the speed readout is
+honest about what is crossing the socket -- but the ETA and the status
+line read `verifiedSpeed` and `stalled` instead, via
+`renderer/lib/torrent-status.js`. An implementation that omits them
+falls back to the old `downloadSpeed` behaviour rather than hiding
+every ETA.
 
 `bitfield` is the only payload field anywhere in the protocol that is
 not plain JSON. The engine puts a `bitfield` instance on the wire, but
