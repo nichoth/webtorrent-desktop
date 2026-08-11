@@ -99,6 +99,32 @@ test('a banned peer cannot get a wire by any other route', function (t) {
   t.end()
 })
 
+// The residue of the guard above. It stops the banned peer's data but
+// not its reconnect: `wire.destroy()` closes the connection, WebTorrent
+// re-adds the peer from `conn.on('close')` through the private
+// `_addPeer`, and `Peer#onHandshake` has already reset `retries` to 0
+// by the time our guard runs -- so the backoff never exhausts. The peer
+// came back every second forever, paying for a handshake and a full
+// bitfield each time, which is the download speed a stalled torrent was
+// showing next to "corrupt peer blocked". `_addPeer` is the one funnel
+// both the public `addPeer` and the reconnect pass through.
+test('a banned peer cannot be re-added by the backoff reconnect',
+  function (t) {
+    t.ok(/import \{[^}]*guardPeerAdds[^}]*\} from '\.\/hashfail'/
+      .test(code), 'the peer-add guard comes from hashfail.js')
+    t.ok(/guardPeerAdds\(\s*torrent\s*,\s*hashFails\.isBanned\s*\)/
+      .test(code), 'and is installed on every torrent')
+
+    // Installed with the rest of the per-torrent wiring, so a torrent
+    // cannot exist unguarded.
+    const wiring = /function addTorrentEvents \(torrent\) \{[\s\S]*?\n\}/
+      .exec(code)
+    t.ok(wiring, 'addTorrentEvents is found')
+    t.ok(wiring && /guardPeerAdds\(/.test(wiring[0]),
+      'and the guard goes on with the event handlers')
+    t.end()
+  })
+
 test('warnings that are not verification failures still reach the bus',
   function (t) {
     // The handler grew a side effect; the passthrough it wrapped has to
@@ -114,11 +140,25 @@ test('the UI is told about corrupt peers', function (t) {
   t.ok(/hashFails: corrupt/.test(code),
     'wt-progress carries the failure count')
   t.ok(/bannedPeers: corrupt/.test(code),
-    'and the ban count the status line reads')
+    'and the running ban tally')
   t.ok(/corruptPeerStats\.delete\(infoHash\)/.test(code),
     'and the tally is dropped with the torrent')
   t.end()
 })
+
+// The tally above only ever goes up, so "this torrent has banned
+// someone" stays true forever and cannot answer "is that why it is
+// stuck now". The status line needs the second question, so the engine
+// -- which owns the clock -- answers it.
+test('the UI is told whether a ban explains the current stall',
+  function (t) {
+    t.ok(/import \{[^}]*bannedSinceProgress[^}]*\} from '\.\/hashfail'/
+      .test(code), 'the comparison comes from hashfail.js')
+    t.ok(/lastBanAt/.test(code), 'the engine records when it last banned')
+    t.ok(/bannedSinceProgress: /.test(code),
+      'and wt-progress carries the answer the status line reads')
+    t.end()
+  })
 
 // The ETA and the stall label are only as honest as what they are fed.
 // Sampling `torrent.downloaded` here instead of `verifiedBytes` would

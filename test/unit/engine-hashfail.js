@@ -6,7 +6,8 @@ const test = require('tape')
 // them from are `index.js`'s problem, and the wiring is checked
 // separately in `engine-hashfail-wiring.js`.
 const {
-  createHashFailTracker, parseFailedPiece, MAX_STRIKES, MAX_TRACKED_PIECES
+  createHashFailTracker, parseFailedPiece, peerHost, guardPeerAdds,
+  bannedSinceProgress, MAX_STRIKES, MAX_TRACKED_PIECES
 } = require('../../build/engine/hashfail')
 
 const A = '176.190.134.108'
@@ -221,3 +222,154 @@ test('banned peers are listed for the caller to disconnect', function (t) {
     'both bans are readable after the fact')
   t.end()
 })
+
+// The ban set is keyed by host, and the addresses WebTorrent hands
+// `_addPeer` are "ip:port". Getting this wrong in either direction is
+// silent: a host that never matches bans nobody, and a match on the
+// whole "ip:port" would ban a peer only until it picked a new port.
+test('peerHost reads the host out of an address', function (t) {
+  t.equal(peerHost('176.190.134.108:6881'), '176.190.134.108',
+    'IPv4 loses its port')
+  t.equal(peerHost('[2001:db8::1]:6881'), '2001:db8::1',
+    'and IPv6 loses its brackets as well, which is the form ' +
+    'wire.remoteAddress takes')
+  t.end()
+})
+
+test('peerHost reads a connection object too', function (t) {
+  // The WebRTC path hands `_addPeer` a simple-peer connection rather
+  // than a string, the same way `Torrent#addPeer` finds its host.
+  t.equal(peerHost({ remoteAddress: '10.0.0.7' }), '10.0.0.7',
+    'the address a live connection reports')
+  t.end()
+})
+
+test('peerHost yields null for anything it cannot read', function (t) {
+  const unreadable = ['', 'not-an-address', null, undefined, 42, {}]
+  unreadable.forEach((value) => {
+    t.equal(peerHost(value), null,
+      `unreadable: ${JSON.stringify(value)}`)
+  })
+  t.end()
+})
+
+// A torrent, cut down to the one method the guard wraps.
+function fakeTorrent () {
+  const added = []
+  return {
+    added,
+    _addPeer (peer, type) {
+      added.push({ peer, type })
+      return { peer, type }
+    }
+  }
+}
+
+// The bug this exists for. Destroying a banned peer's wire is not the
+// end of it: WebTorrent's backoff reconnect in `conn.on('close')` calls
+// the private `_addPeer`, which never looks at `client.blocked`, and
+// `Peer#onHandshake` resets `retries` to 0 before the wire event fires.
+// So the backoff never exhausts and the banned peer comes back every
+// second forever, paying for a handshake and a full bitfield each time
+// -- which the UI shows as download speed on a stalled torrent.
+test('a banned peer is never re-added', function (t) {
+  const torrent = fakeTorrent()
+  guardPeerAdds(torrent, (host) => host === A)
+
+  t.equal(torrent._addPeer(`${A}:6881`, 'tcp'), null,
+    'the reconnect gets nothing back, so it schedules no retry')
+  t.deepEqual(torrent.added, [],
+    'and the real _addPeer is never reached')
+  t.end()
+})
+
+test('an unbanned peer is added exactly as before', function (t) {
+  const torrent = fakeTorrent()
+  guardPeerAdds(torrent, (host) => host === A)
+
+  const result = torrent._addPeer(`${B}:6881`, 'utp')
+  t.deepEqual(result, { peer: `${B}:6881`, type: 'utp' },
+    'the return value is the real one, which the caller uses')
+  t.deepEqual(torrent.added, [{ peer: `${B}:6881`, type: 'utp' }],
+    'and the arguments arrive unchanged')
+  t.end()
+})
+
+// The guard is installed once per torrent, but a peer is banned much
+// later. Capturing the ban set at install time would guard against an
+// empty one for the life of the torrent.
+test('the guard reads the ban set at call time', function (t) {
+  const torrent = fakeTorrent()
+  const banned = new Set()
+  guardPeerAdds(torrent, (host) => banned.has(host))
+
+  t.ok(torrent._addPeer(`${A}:6881`, 'tcp'), 'allowed before the ban')
+  banned.add(A)
+  t.equal(torrent._addPeer(`${A}:6881`, 'tcp'), null,
+    'and refused after it')
+  t.end()
+})
+
+// `_addPeer` destroys a connection it declines rather than leaking the
+// socket, on every one of its own refusal paths. The guard is another
+// one and owes the same.
+test('a refused connection object is destroyed', function (t) {
+  const torrent = fakeTorrent()
+  guardPeerAdds(torrent, () => true)
+
+  let destroyed = false
+  const conn = { remoteAddress: A, destroy: () => { destroyed = true } }
+
+  t.equal(torrent._addPeer(conn, 'webrtc'), null, 'refused')
+  t.equal(destroyed, true, 'and the socket is not left open')
+  t.end()
+})
+
+// An address the guard cannot parse is one it cannot match against the
+// ban set either. Refusing it would drop peers over a format the guard
+// simply does not recognise; passing it through is what happened
+// before the guard existed.
+test('an unreadable address is passed through', function (t) {
+  const torrent = fakeTorrent()
+  guardPeerAdds(torrent, () => true)
+
+  t.ok(torrent._addPeer('web-seed-id', 'webSeed'),
+    'no host to check means no grounds to refuse')
+  t.end()
+})
+
+// Once a peer is banned the count never goes down, so "has this torrent
+// ever banned anyone" stays true for the life of the torrent. Answering
+// "is this stall the ban's doing" with it labelled every later stall --
+// including the ordinary one where no peer has the last few pieces --
+// as a corrupt peer being blocked.
+test('a ban explains a stall only if it happened during the stall',
+  function (t) {
+    const now = 100000
+    // Stalled for a minute, so the torrent last verified at 40000.
+    const stalledForMs = 60000
+
+    t.equal(bannedSinceProgress(50000, stalledForMs, now), true,
+      'a ban after the last verified byte is a live explanation')
+    t.equal(bannedSinceProgress(30000, stalledForMs, now), false,
+      'and one from before it is history, not the cause')
+    t.equal(bannedSinceProgress(40000, stalledForMs, now), true,
+      'a ban at the moment progress stopped counts')
+    t.end()
+  })
+
+test('a torrent that never banned anyone has no ban to blame',
+  function (t) {
+    t.equal(bannedSinceProgress(0, 60000, 100000), false, 'never banned')
+    t.equal(bannedSinceProgress(undefined, 60000, 100000), false,
+      'and neither has one with no tally at all')
+    t.end()
+  })
+
+test('a torrent that is still moving has nothing to explain',
+  function (t) {
+    // stalledForMs 0 means it verified something this very tick.
+    t.equal(bannedSinceProgress(99999, 0, 100000), false,
+      'progress since the ban clears it')
+    t.end()
+  })

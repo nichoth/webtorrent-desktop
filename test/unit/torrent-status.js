@@ -14,6 +14,7 @@ function prog (overrides = {}) {
     verifiedSpeed: 0,
     stalled: false,
     bannedPeers: 0,
+    bannedSinceProgress: false,
     hashFails: 0
   }, overrides)
 }
@@ -31,10 +32,35 @@ test('a stalled torrent with no bans ran out of sources', function (t) {
 })
 
 test('a stalled torrent with bans names the corrupt peers', function (t) {
-  t.equal(stallReason(prog({ stalled: true, bannedPeers: 1 })),
+  t.equal(stallReason(prog({ stalled: true, bannedSinceProgress: true })),
     'corrupt-peers', 'the more specific explanation wins')
   t.end()
 })
+
+// `bannedPeers` counts every ban this torrent ever made and never goes
+// down, so reading it here labelled every later stall "corrupt peer
+// blocked" -- including the ordinary one where the swarm simply has no
+// seeder for the last few pieces, long after the bad peer was gone.
+test('a ban the torrent has since recovered from is not the reason',
+  function (t) {
+    t.equal(
+      stallReason(prog({
+        stalled: true, bannedPeers: 4, bannedSinceProgress: false
+      })),
+      'no-progress',
+      'the torrent verified data after the ban, so the ban is history')
+    t.end()
+  })
+
+// The engine owns the clock, so it is the one that can compare the ban
+// to the stall. A payload without the answer degrades to the vaguer
+// message rather than to a confident wrong one.
+test('a payload that does not answer the question blames nobody',
+  function (t) {
+    t.equal(stallReason({ stalled: true, progress: 0.99, bannedPeers: 2 }),
+      'no-progress', 'no answer is not a yes')
+    t.end()
+  })
 
 // Seeding is not stalling. A complete torrent verifies nothing further
 // by definition, so the engine's silence timer would otherwise mark

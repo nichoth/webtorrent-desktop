@@ -1057,6 +1057,7 @@ with `wt-progress`:
     progress: number,             // 0..1
     hashFails: number,            // pieces that failed verification
     bannedPeers: number,          // peers cut off for serving those
+    bannedSinceProgress: boolean, // one of those bans is why it is quiet
     verifiedSpeed: number,        // bytes/sec that passed their hash
     stalled: boolean,             // nothing verified for a while
     downloaded: number,           // bytes
@@ -1079,12 +1080,19 @@ with `wt-progress`:
 torrent in the current engine process, not rates. Both are zero for a
 torrent that has never had a piece fail its SHA-1 check, which is nearly
 all of them. `bannedPeers` counts peers the engine cut off for repeatedly
-serving corrupt data, and is what
-`renderer/lib/torrent-status.js:isStalledOnCorruptPeers` reads to tell a
-torrent between peers from one that has no clean source left. An
-implementation with no equivalent notion may report zero for both; the
-status line then falls back to `Downloading`, which is what it said
-before these fields existed.
+serving corrupt data.
+
+`bannedSinceProgress` is the narrower question the status line actually
+asks: is one of those bans why this torrent is quiet *now*. It cannot be
+derived from `bannedPeers`, which only ever goes up -- reading that
+instead labelled every later stall as a corrupt peer being blocked, long
+after the bad peer was gone and the real cause was that no seeder had
+the last few pieces. The engine answers it because it owns the clock:
+true when the most recent ban came after the last byte this torrent
+verified. `renderer/lib/torrent-status.js:stallReason` reads it. An
+implementation with no equivalent notion may report zero for the counts
+and omit this field; the status line then says `Stalled -- no peer has
+the rest` rather than naming a cause it cannot confirm.
 
 `verifiedSpeed` and `stalled` exist because `downloadSpeed` and
 `downloaded` answer a different question than the UI asks.

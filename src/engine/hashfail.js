@@ -148,6 +148,92 @@ export function createHashFailTracker (options = {}) {
   }
 }
 
+// An "ip:port" address, with the host captured. IPv6 arrives bracketed
+// -- `[2001:db8::1]:6881` -- because a bare one is all colons and there
+// would be no telling the port from the address. `wire.remoteAddress`,
+// which is what the ban set is keyed by, holds the unbracketed host, so
+// that is what comes back.
+const ADDRESS = /^(?:\[([0-9a-fA-F:.]+)\]|([^[\]:]+)):(\d+)$/
+
+/**
+ * The host a peer would connect from, however the peer is expressed.
+ *
+ * `_addPeer` takes either an "ip:port" string or a live connection, the
+ * same two shapes `Torrent#addPeer` handles.
+ *
+ * @param {string|object} peer an address, or a connection object
+ * @returns {string|null} the host, or null if there is none to read
+ */
+export function peerHost (peer) {
+  if (peer && typeof peer.remoteAddress === 'string') {
+    return peer.remoteAddress || null
+  }
+  if (typeof peer !== 'string') return null
+  const match = ADDRESS.exec(peer)
+  if (!match) return null
+  return match[1] || match[2]
+}
+
+/**
+ * Refuse banned peers at the one place every peer is added.
+ *
+ * Destroying a banned peer's wire stops its data and nothing else.
+ * WebTorrent answers the closed connection by re-adding the peer from
+ * `conn.on('close')` (`lib/torrent.js`), and it does so through the
+ * private `_addPeer`, which -- unlike the public `addPeer` -- never
+ * consults `client.blocked`. The backoff that should give up after
+ * three attempts never gets there either: `Peer#onHandshake` resets
+ * `retries` to 0, and the handshake completes before the `wire` event
+ * the ban is enforced on. So the peer returned every second forever,
+ * paying for a TCP connect, a handshake and a full bitfield each time.
+ * On a torrent that was otherwise stalled, that churn was the whole of
+ * its reported download speed.
+ *
+ * Returning null is what ends it: the reconnect only carries on `if
+ * (newPeer)`, so a refusal is the end of that chain rather than the
+ * start of the next one.
+ *
+ * Incoming connections do not come through here -- `_addIncomingPeer`
+ * registers them directly -- but they have no reconnect loop either,
+ * and the guard on the `wire` event still catches them.
+ *
+ * @param {object} torrent a WebTorrent torrent
+ * @param {function} isBanned called with a host, at add time
+ */
+export function guardPeerAdds (torrent, isBanned) {
+  const addPeer = torrent._addPeer.bind(torrent)
+
+  torrent._addPeer = (peer, type) => {
+    const host = peerHost(peer)
+    if (host && isBanned(host)) {
+      // Every refusal path in `_addPeer` closes a connection it
+      // declines rather than leaking the socket. This is one of them.
+      if (typeof peer !== 'string') peer.destroy()
+      return null
+    }
+    return addPeer(peer, type)
+  }
+}
+
+/**
+ * Whether a ban is a live explanation for a torrent's silence.
+ *
+ * The ban tally only ever goes up, so "has this torrent banned anyone"
+ * stays true for as long as the torrent exists and cannot answer "is
+ * that why it is stuck". This can: a ban that happened after the last
+ * byte verified is part of the current silence, and one from before it
+ * is history the torrent has already recovered from.
+ *
+ * @param {number} lastBanAt epoch ms of the most recent ban, 0 for none
+ * @param {number} stalledForMs how long since the torrent last verified
+ * @param {number} now epoch milliseconds
+ * @returns {boolean}
+ */
+export function bannedSinceProgress (lastBanAt, stalledForMs, now) {
+  if (!lastBanAt) return false
+  return lastBanAt >= now - stalledForMs
+}
+
 // The message WebTorrent emits as a `warning` when a piece fails its
 // SHA-1 check, in `lib/torrent.js`. Matching on it is what turns that
 // warning into a piece index. The engine subscribes to `warning`

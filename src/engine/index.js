@@ -32,7 +32,10 @@ import WebTorrent from 'webtorrent'
 import config from '../config'
 import { runAnnounceSweep, SWEEP_INTERVAL_MS } from './announce'
 import { createWebSocketBus } from './bus-websocket'
-import { createHashFailTracker, parseFailedPiece } from './hashfail'
+import {
+  bannedSinceProgress, createHashFailTracker, guardPeerAdds,
+  parseFailedPiece
+} from './hashfail'
 import { createStallTracker, verifiedBytes } from './stall'
 
 console.time('init')
@@ -261,6 +264,14 @@ function createTorrent (torrentKey, options) {
 }
 
 function addTorrentEvents (torrent) {
+  // Before any handler, because the reconnect this closes off starts
+  // the moment the first wire to a banned peer is destroyed below.
+  // `client.blocked` covers discovery; this covers WebTorrent's own
+  // backoff, which walks past it into the private `_addPeer`. Without
+  // it a banned peer reconnects once a second for the life of the
+  // torrent, and the handshake traffic reads as download speed.
+  guardPeerAdds(torrent, hashFails.isBanned)
+
   torrent.on('warning', (err) => {
     onTorrentWarning(torrent, err)
     bus.send('wt-warning', torrent.key, err.message)
@@ -343,6 +354,9 @@ function onTorrentWarning (torrent, err) {
   if (banned.length === 0) return
 
   stats.bannedPeers += banned.length
+  // The tally above never goes down, so it cannot say whether a ban has
+  // anything to do with how the torrent looks right now. This can.
+  stats.lastBanAt = Date.now()
 
   banned.forEach((address) => {
     console.log(
@@ -373,7 +387,7 @@ function disconnectBanned () {
 function statsFor (torrent) {
   let stats = corruptPeerStats.get(torrent.infoHash)
   if (!stats) {
-    stats = { hashFails: 0, bannedPeers: 0 }
+    stats = { hashFails: 0, bannedPeers: 0, lastBanAt: 0 }
     corruptPeerStats.set(torrent.infoHash, stats)
   }
   return stats
@@ -443,6 +457,11 @@ function getTorrentProgress () {
   // Track progress for every file in each torrent
   // TODO: ideally this would be tracked by WebTorrent, which could do it
   // more efficiently than looping over torrent.bitfield
+  // One reading of the clock for the whole payload, so a torrent's
+  // stall and the ban compared against it are measured from the same
+  // instant.
+  const now = Date.now()
+
   const torrentProg = client.torrents.map(torrent => {
     const fileProg = torrent.files && torrent.files.map(file => {
       const numPieces = file._endPiece - file._startPiece + 1
@@ -466,7 +485,7 @@ function getTorrentProgress () {
     // put the whole payload on the bus once a second forever. `stalled`
     // and a rounded speed both settle, so an idle torrent goes quiet.
     const motion = stalls.sample(
-      torrent.infoHash, verifiedBytes(torrent), Date.now())
+      torrent.infoHash, verifiedBytes(torrent), now)
 
     return {
       torrentKey: torrent.key,
@@ -474,6 +493,12 @@ function getTorrentProgress () {
       progress: torrent.progress,
       hashFails: corrupt ? corrupt.hashFails : 0,
       bannedPeers: corrupt ? corrupt.bannedPeers : 0,
+      // Whether a ban is why this torrent is quiet, which the running
+      // tally above cannot say -- it counts every ban the torrent ever
+      // made and never comes back down. Only the engine can answer it:
+      // it owns the clock both times are measured against.
+      bannedSinceProgress: bannedSinceProgress(
+        corrupt ? corrupt.lastBanAt : 0, motion.stalledForMs, now),
       verifiedSpeed: Math.round(motion.verifiedSpeed),
       stalled: motion.stalled,
       downloaded: torrent.downloaded,

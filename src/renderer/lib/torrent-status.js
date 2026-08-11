@@ -17,6 +17,14 @@
  * story from one that simply ran out of seeders, even though both look
  * like silence.
  *
+ * Not `bannedPeers`, which counts every ban this torrent ever made and
+ * never comes back down: once a single bad peer had been cut off, every
+ * later stall was reported as a corrupt peer being blocked, including
+ * the ordinary one where the swarm has no seeder for the last few
+ * pieces. `bannedSinceProgress` is the engine's answer to the narrower
+ * question, and its absence means no answer -- which leaves the vaguer
+ * message rather than a confident wrong one.
+ *
  * @param {object} prog one torrent's entry in a progress payload
  * @returns {string|null} 'corrupt-peers', 'no-progress', or null when
  *   the torrent is moving or complete
@@ -24,7 +32,7 @@
 export function stallReason (prog) {
   if (!prog || !prog.stalled) return null
   if (prog.progress >= 1) return null
-  return prog.bannedPeers > 0 ? 'corrupt-peers' : 'no-progress'
+  return prog.bannedSinceProgress ? 'corrupt-peers' : 'no-progress'
 }
 
 /**
