@@ -1,7 +1,7 @@
 const test = require('tape')
 
 const {
-  stallReason, etaSpeed
+  stallReason, etaSpeed, displayDownloadSpeed
 } = require('../../build/renderer/lib/torrent-status')
 
 // One torrent's entry in a progress payload, cut down to the fields
@@ -104,3 +104,44 @@ test('the ETA falls back when verified speed is not reported',
     t.equal(etaSpeed(null), 0, 'as does no payload at all')
     t.end()
   })
+
+// The report this exists for: "Stalled -- corrupt peer blocked" on one
+// line and a download speed on the next, which reads as the app still
+// pulling from the peer it just said it had blocked. Measured over two
+// minutes, that torrent reported 189 B/s and gained zero bytes -- the
+// figure was handshakes and keepalives from two peers with nothing to
+// offer.
+test('a stalled torrent shows no download speed', function (t) {
+  t.equal(displayDownloadSpeed(prog({
+    stalled: true, bannedSinceProgress: true, downloadSpeed: 189
+  })), 0, 'socket chatter does not contradict the stall label')
+  t.equal(displayDownloadSpeed(prog({
+    stalled: true, downloadSpeed: 63
+  })), 0, 'and the same holds when no ban explains the stall')
+  t.end()
+})
+
+// The regression the obvious fix would have caused. `verifiedSpeed` is
+// the honest rate but reads zero through most of a slow download, so
+// using it here would blank the speed on torrents that are fine. Only
+// the stall suppresses the figure; nothing else does.
+test('a moving torrent still shows its download speed', function (t) {
+  t.equal(displayDownloadSpeed(prog({ downloadSpeed: 5529 })), 5529,
+    'a torrent that is not stalled reports as it always did')
+  const lumpy = prog({ downloadSpeed: 60, verifiedSpeed: 0 })
+  t.equal(displayDownloadSpeed(lumpy), 60,
+    'including one whose pieces verify in lumps too far apart for ' +
+    'the verified-speed window to register')
+  t.end()
+})
+
+// Seeding is not stalling, and a paused or empty payload has no figure
+// to show rather than a wrong one.
+test('completeness and missing payloads are handled', function (t) {
+  t.equal(displayDownloadSpeed(prog({
+    stalled: true, progress: 1, downloadSpeed: 400
+  })), 400, 'a complete torrent is never stalled, so it is unaffected')
+  t.equal(displayDownloadSpeed(null), 0, 'no payload, no speed')
+  t.equal(displayDownloadSpeed({}), 0, 'and neither has an empty one')
+  t.end()
+})

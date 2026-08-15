@@ -159,17 +159,29 @@ const ADDRESS = /^(?:\[([0-9a-fA-F:.]+)\]|([^[\]:]+)):(\d+)$/
  * The host a peer would connect from, however the peer is expressed.
  *
  * `_addPeer` takes either an "ip:port" string or a live connection, the
- * same two shapes `Torrent#addPeer` handles.
+ * same two shapes `Torrent#addPeer` handles. `_addIncomingPeer` takes a
+ * third: a `Peer` built around a socket that is already accepted, which
+ * carries its host on `conn` rather than on itself.
  *
- * @param {string|object} peer an address, or a connection object
+ * @param {string|object} peer an address, a connection, or a `Peer`
  * @returns {string|null} the host, or null if there is none to read
  */
 export function peerHost (peer) {
   if (peer && typeof peer.remoteAddress === 'string') {
     return peer.remoteAddress || null
   }
+  if (peer && peer.conn && typeof peer.conn.remoteAddress === 'string') {
+    return peer.conn.remoteAddress || null
+  }
+  // `Peer#destroy` nulls `conn`, and `addr` is the copy that outlives
+  // it. Same "ip:port" form as the string case below.
+  if (peer && typeof peer.addr === 'string') return parseHost(peer.addr)
   if (typeof peer !== 'string') return null
-  const match = ADDRESS.exec(peer)
+  return parseHost(peer)
+}
+
+function parseHost (address) {
+  const match = ADDRESS.exec(address)
   if (!match) return null
   return match[1] || match[2]
 }
@@ -212,6 +224,53 @@ export function guardPeerAdds (torrent, isBanned) {
       return null
     }
     return addPeer(peer, type)
+  }
+}
+
+/**
+ * Refuse a banned peer that dialled us, before it is registered.
+ *
+ * `guardPeerAdds` covers every route a peer is *added* by, but not the
+ * one it arrives by. An incoming connection is accepted in
+ * `lib/conn-pool.js:_onConnection`, which reads the info hash out of
+ * the handshake and hands the peer to `_addIncomingPeer` -- consulting
+ * neither `client.blocked` nor `_addPeer` on the way. The guard on the
+ * `wire` event does still catch it, but only at the end of that
+ * sequence, and two things have already happened by then:
+ *
+ * - The TCP connect and the full BitTorrent handshake were paid for,
+ *   and we have started answering with our own.
+ * - `_registerPeer` has attached the `download` and `upload` listeners
+ *   that feed `torrent.downloadSpeed`, so the banned peer's bytes are
+ *   counted against the torrent.
+ *
+ * Refusing here, before `_registerPeer`, is what makes those bytes
+ * impossible rather than merely brief: a peer that is never registered
+ * has nothing listening to it. Nothing can stop a banned peer dialling
+ * us -- only the peer decides that -- but this is the earliest point at
+ * which we can decline without paying for it.
+ *
+ * `Peer#destroy` is safe to call here even though `conn-pool.js` has
+ * already set `peer.swarm`: the wire is not in `torrent.wires` yet and
+ * `unordered-array-remove` ignores an index of -1, `removePeer` ignores
+ * an id it does not hold, and the `peer.onHandshake()` that follows
+ * this call returns early on a destroyed peer.
+ *
+ * @param {object} torrent a WebTorrent torrent
+ * @param {function} isBanned called with a host, at accept time
+ */
+export function guardIncomingPeers (torrent, isBanned) {
+  const addIncomingPeer = torrent._addIncomingPeer.bind(torrent)
+
+  torrent._addIncomingPeer = (peer) => {
+    const host = peerHost(peer)
+    if (host && isBanned(host)) {
+      // Every refusal path in `_addIncomingPeer` closes the connection
+      // it declines. This is one of them.
+      peer.destroy()
+      return
+    }
+    return addIncomingPeer(peer)
   }
 }
 

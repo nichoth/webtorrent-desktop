@@ -32,9 +32,10 @@ import WebTorrent from 'webtorrent'
 import config from '../config'
 import { runAnnounceSweep, SWEEP_INTERVAL_MS } from './announce'
 import { createWebSocketBus } from './bus-websocket'
+import { limitPendingDials } from './dials'
 import {
-  bannedSinceProgress, createHashFailTracker, guardPeerAdds,
-  parseFailedPiece
+  bannedSinceProgress, createHashFailTracker, guardIncomingPeers,
+  guardPeerAdds, parseFailedPiece
 } from './hashfail'
 import { createStallTracker, verifiedBytes } from './stall'
 
@@ -272,6 +273,18 @@ function addTorrentEvents (torrent) {
   // torrent, and the handshake traffic reads as download speed.
   guardPeerAdds(torrent, hashFails.isBanned)
 
+  // The other half of the same job, for the direction `_addPeer` never
+  // sees. A banned peer that dials us reaches `_addIncomingPeer`
+  // without passing any blocklist, and is registered -- which is what
+  // attaches the byte counters -- before the `wire` guard below gets a
+  // say. Refusing at the accept keeps its handshake off the torrent's
+  // download speed entirely.
+  guardIncomingPeers(torrent, hashFails.isBanned)
+
+  // `client.maxConns` counts connections that are up, so it never sees
+  // a dial still waiting on its SYN and cannot bound them. This can.
+  limitPendingDials(torrent)
+
   torrent.on('warning', (err) => {
     onTorrentWarning(torrent, err)
     bus.send('wt-warning', torrent.key, err.message)
@@ -480,12 +493,24 @@ function getTorrentProgress () {
     // common case adds two zeroes rather than a lookup miss.
     const corrupt = corruptPeerStats.get(torrent.infoHash)
 
+    // Read once: `downloaded` is a getter that walks every piece, and
+    // it is the stall signal as well as a reported field.
+    const downloaded = torrent.downloaded
+
     // `stalledForMs` is deliberately not on the wire. It changes every
     // tick, which would defeat the diff in `updateTorrentProgress` and
     // put the whole payload on the bus once a second forever. `stalled`
     // and a rounded speed both settle, so an idle torrent goes quiet.
-    const motion = stalls.sample(
-      torrent.infoHash, verifiedBytes(torrent), now)
+    //
+    // Two counters, because the two questions have different answers:
+    // the speed an ETA is built on may only count data that is
+    // certainly kept, while "has it stopped" has to notice the 16 KB
+    // block rather than wait on the megabyte piece. `stall.js` has the
+    // argument.
+    const motion = stalls.sample(torrent.infoHash, {
+      verified: verifiedBytes(torrent),
+      payload: downloaded
+    }, now)
 
     return {
       torrentKey: torrent.key,
@@ -501,7 +526,7 @@ function getTorrentProgress () {
         corrupt ? corrupt.lastBanAt : 0, motion.stalledForMs, now),
       verifiedSpeed: Math.round(motion.verifiedSpeed),
       stalled: motion.stalled,
-      downloaded: torrent.downloaded,
+      downloaded,
       downloadSpeed: torrent.downloadSpeed,
       uploadSpeed: torrent.uploadSpeed,
       numPeers: torrent.numPeers,

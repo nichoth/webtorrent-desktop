@@ -15,8 +15,32 @@
 // Dividing what is missing by the first is how a torrent receiving
 // nothing usable reported "12 h 25 min remaining", and watching the
 // second is how a torrent whose pieces never verify looks like it is
-// making progress. Both are answered by the same substitution: count
-// only bytes that passed their SHA-1 check, which is the bitfield.
+// making progress.
+//
+// So the two questions are answered from two different counters, which
+// is not the same as answering both from the bitfield:
+//
+// - **How fast is it going**, for the ETA, is bitfield bytes. An
+//   estimate may only be built on data that is certainly kept.
+// - **Has it stopped**, for the status line, is the high-water mark of
+//   `torrent.downloaded`.
+//
+// The second used to be the bitfield too, and that was wrong in a way
+// that took measuring to see. Pieces verify in lumps: at 8 KB/s with
+// megabyte pieces one lands every few minutes, so a torrent that was
+// downloading perfectly well went a minute without verifying anything
+// and got labelled "Stalled". Measured over four minutes, a torrent
+// gaining 2 MB verified something in 13% of ticks and one gaining
+// 180 KB in none of them -- both were reported stuck the whole time.
+//
+// The high-water mark is what makes `downloaded` usable for this
+// despite the sawtooth in the header above. A piece that fails takes
+// the counter back down and the next attempt climbs the same ground
+// again, so the *maximum* only moves when the torrent holds payload it
+// has never held before. The corrupt-peer case this module was written
+// for still reads as stalled -- the first attempt sets the mark and
+// every retry after it is flat -- while a slow download moves the mark
+// every 16 KB block and reads as what it is.
 //
 // Everything here is a parameter, including the clock, so the policy
 // can be tested without waiting on it.
@@ -47,7 +71,9 @@ export function createStallTracker (options = {}) {
     windowMs = SPEED_WINDOW_MS
   } = options
 
-  // Key -> { samples: [{ at, bytes }], best, lastAdvanceAt }
+  // Key -> { samples: [{ at, bytes }], bestPayload, lastAdvanceAt }.
+  // `samples` is verified bytes, for the speed; `bestPayload` is the
+  // high-water mark of payload bytes, for the stall.
   const state = new Map()
 
   /**
@@ -55,31 +81,40 @@ export function createStallTracker (options = {}) {
    * really going and whether it has stopped.
    *
    * @param {string} key identifies the torrent
-   * @param {number} verifiedBytes bytes that have passed their hash
+   * @param {object} bytes where the torrent has got to
+   * @param {number} bytes.verified bytes that have passed their hash,
+   *   which the speed is measured in
+   * @param {number} bytes.payload bytes held including pieces still in
+   *   flight, which the stall is measured in
    * @param {number} now epoch milliseconds
    * @returns {{ verifiedSpeed: number, stalledForMs: number,
    *   stalled: boolean }} speed in bytes per second
    */
-  function sample (key, verifiedBytes, now) {
+  function sample (key, bytes, now) {
+    const { verified, payload } = bytes
+
     let entry = state.get(key)
     if (!entry) {
       // The first sample is a baseline, not a measurement. Reporting a
       // stall here would mark every torrent stalled the moment it was
       // added.
-      entry = { samples: [], best: verifiedBytes, lastAdvanceAt: now }
+      entry = { samples: [], bestPayload: payload, lastAdvanceAt: now }
       state.set(key, entry)
-      entry.samples.push({ at: now, bytes: verifiedBytes })
+      entry.samples.push({ at: now, bytes: verified })
       return { verifiedSpeed: 0, stalledForMs: 0, stalled: false }
     }
 
-    // Only forward movement counts. A re-verify can move the count
-    // down, and that is not progress in any sense the UI cares about.
-    if (verifiedBytes > entry.best) {
-      entry.best = verifiedBytes
+    // Only forward movement counts, and this is the whole reason the
+    // stall can be read off a counter that goes down: a failed piece
+    // takes `payload` back and the retry re-covers ground already
+    // marked, so the maximum sits still until data the torrent has
+    // never held before arrives.
+    if (payload > entry.bestPayload) {
+      entry.bestPayload = payload
       entry.lastAdvanceAt = now
     }
 
-    entry.samples.push({ at: now, bytes: verifiedBytes })
+    entry.samples.push({ at: now, bytes: verified })
 
     // Keep one sample from before the window so the average spans the
     // whole window rather than starting at whatever landed inside it.
@@ -90,7 +125,7 @@ export function createStallTracker (options = {}) {
 
     const oldest = entry.samples[0]
     const elapsed = now - oldest.at
-    const gained = verifiedBytes - oldest.bytes
+    const gained = verified - oldest.bytes
     const verifiedSpeed = (elapsed > 0 && gained > 0)
       ? (gained / elapsed) * 1000
       : 0

@@ -8,7 +8,9 @@ import * as TorrentSummary from '../lib/torrent-summary'
 import * as TorrentPlayer from '../lib/torrent-player'
 import { dispatcher } from '../lib/dispatcher'
 import { calculateEta } from '../lib/time'
-import { stallReason, etaSpeed } from '../lib/torrent-status'
+import {
+  stallReason, etaSpeed, displayDownloadSpeed
+} from '../lib/torrent-status'
 
 export default class TorrentList extends React.Component {
   render () {
@@ -184,7 +186,11 @@ export default class TorrentList extends React.Component {
 
     function renderSpeeds () {
       let str = ''
-      if (prog.downloadSpeed > 0) str += ' ↓ ' + prettyBytes(prog.downloadSpeed) + '/s'
+      // Zero while stalled, where a socket-speed figure only argues
+      // with the label next to it. Upload stays raw: bytes we put on
+      // the wire are bytes we sent, whatever the peer does with them.
+      const down = displayDownloadSpeed(prog)
+      if (down > 0) str += ' ↓ ' + prettyBytes(down) + '/s'
       if (prog.uploadSpeed > 0) str += ' ↑ ' + prettyBytes(prog.uploadSpeed) + '/s'
       if (str === '') return
       return (<span key='download'>{str}</span>)

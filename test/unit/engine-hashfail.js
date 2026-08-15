@@ -7,7 +7,8 @@ const test = require('tape')
 // separately in `engine-hashfail-wiring.js`.
 const {
   createHashFailTracker, parseFailedPiece, peerHost, guardPeerAdds,
-  bannedSinceProgress, MAX_STRIKES, MAX_TRACKED_PIECES
+  guardIncomingPeers, bannedSinceProgress, MAX_STRIKES,
+  MAX_TRACKED_PIECES
 } = require('../../build/engine/hashfail')
 
 const A = '176.190.134.108'
@@ -337,6 +338,106 @@ test('an unreadable address is passed through', function (t) {
     'no host to check means no grounds to refuse')
   t.end()
 })
+
+// An incoming peer is neither of the two shapes `_addPeer` takes. It is
+// a `Peer`, built by `lib/peer.js:_createIncomingPeer` from a socket
+// that is already connected, so its host is on the connection rather
+// than on the peer itself.
+test('peerHost reads an incoming peer', function (t) {
+  t.equal(peerHost({ conn: { remoteAddress: A }, addr: `${A}:6881` }), A,
+    'the address the accepted socket reports')
+  t.equal(peerHost({ addr: `${B}:51413` }), B,
+    'and its addr serves when the socket has already gone')
+  t.end()
+})
+
+// A torrent, cut down to the one method the incoming guard wraps.
+function fakeIncomingTorrent () {
+  const added = []
+  return {
+    added,
+    _addIncomingPeer (peer) {
+      added.push(peer)
+      return peer
+    }
+  }
+}
+
+// An incoming `Peer` as `conn-pool.js` hands it over: connected,
+// handshake already exchanged, wire built but not yet in `torrent.wires`.
+function fakeIncomingPeer (host) {
+  const peer = {
+    addr: `${host}:51413`,
+    conn: { remoteAddress: host },
+    destroyed: false,
+    destroy () { peer.destroyed = true }
+  }
+  return peer
+}
+
+// The hole `guardPeerAdds` cannot reach. `client.blocked` is consulted
+// by the public `addPeer` only, and the guard on `_addPeer` covers
+// every outbound route -- but an incoming connection arrives through
+// `conn-pool.js:_onConnection`, which routes it straight to
+// `_addIncomingPeer` with no ban check anywhere on the path. The guard
+// on the `wire` event still cuts it, but only after a full TCP connect
+// and BitTorrent handshake, and `_registerPeer` has by then attached
+// the `download`/`upload` listeners that feed `torrent.downloadSpeed`.
+// So a banned peer could dial us forever, and its bytes were counted.
+test('a banned peer cannot get in through an incoming connection',
+  function (t) {
+    const torrent = fakeIncomingTorrent()
+    guardIncomingPeers(torrent, (host) => host === A)
+    const peer = fakeIncomingPeer(A)
+
+    torrent._addIncomingPeer(peer)
+    t.deepEqual(torrent.added, [],
+      'the real _addIncomingPeer is never reached, so the peer is ' +
+      'never registered and none of its bytes are counted')
+    t.equal(peer.destroyed, true,
+      'and the accepted socket is closed rather than left open')
+    t.end()
+  })
+
+test('an unbanned incoming peer is registered exactly as before',
+  function (t) {
+    const torrent = fakeIncomingTorrent()
+    guardIncomingPeers(torrent, (host) => host === A)
+    const peer = fakeIncomingPeer(B)
+
+    t.equal(torrent._addIncomingPeer(peer), peer,
+      'the return value is the real one')
+    t.deepEqual(torrent.added, [peer], 'and the peer arrives unchanged')
+    t.equal(peer.destroyed, false, 'with its connection intact')
+    t.end()
+  })
+
+// Same reason as the outbound guard: it is installed once per torrent
+// and the ban happens much later.
+test('the incoming guard reads the ban set at call time', function (t) {
+  const torrent = fakeIncomingTorrent()
+  const banned = new Set()
+  guardIncomingPeers(torrent, (host) => banned.has(host))
+
+  t.ok(torrent._addIncomingPeer(fakeIncomingPeer(A)), 'allowed before')
+  banned.add(A)
+  const after = fakeIncomingPeer(A)
+  torrent._addIncomingPeer(after)
+  t.equal(after.destroyed, true, 'and refused after the ban')
+  t.equal(torrent.added.length, 1, 'only the first one got through')
+  t.end()
+})
+
+test('an incoming peer with no readable host is passed through',
+  function (t) {
+    const torrent = fakeIncomingTorrent()
+    guardIncomingPeers(torrent, () => true)
+    const peer = { destroyed: false, destroy () { this.destroyed = true } }
+
+    t.ok(torrent._addIncomingPeer(peer),
+      'no host to check means no grounds to refuse')
+    t.end()
+  })
 
 // Once a peer is banned the count never goes down, so "has this torrent
 // ever banned anyone" stays true for the life of the torrent. Answering

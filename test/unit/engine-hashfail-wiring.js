@@ -125,6 +125,27 @@ test('a banned peer cannot be re-added by the backoff reconnect',
     t.end()
   })
 
+// The direction neither of the guards above covers. `_addPeer` is only
+// reached by peers we add; a peer that dials us arrives through
+// `conn-pool.js:_onConnection` and is handed straight to
+// `_addIncomingPeer`, which consults no blocklist. The `wire` guard
+// still cuts the connection, but `_registerPeer` has by then attached
+// the `download`/`upload` listeners feeding `torrent.downloadSpeed`, so
+// the banned peer's handshake was counted against the torrent -- and it
+// could dial again immediately, for as long as it liked.
+test('a banned peer cannot get in by dialling us', function (t) {
+  t.ok(/import \{[^}]*guardIncomingPeers[^}]*\} from '\.\/hashfail'/
+    .test(code), 'the incoming guard comes from hashfail.js')
+  t.ok(/guardIncomingPeers\(\s*torrent\s*,\s*hashFails\.isBanned\s*\)/
+    .test(code), 'and is installed on every torrent')
+
+  const wiring = /function addTorrentEvents \(torrent\) \{[\s\S]*?\n\}/
+    .exec(code)
+  t.ok(wiring && /guardIncomingPeers\(/.test(wiring[0]),
+    'alongside the outbound guard, so neither direction is left open')
+  t.end()
+})
+
 test('warnings that are not verification failures still reach the bus',
   function (t) {
     // The handler grew a side effect; the passthrough it wrapped has to
@@ -160,22 +181,33 @@ test('the UI is told whether a ban explains the current stall',
     t.end()
   })
 
-// The ETA and the stall label are only as honest as what they are fed.
-// Sampling `torrent.downloaded` here instead of `verifiedBytes` would
-// reinstate the original bug in full: that number includes piece
-// buffers that have not passed their hash, so a torrent whose pieces
-// all fail still reads as moving.
-test('progress is sampled in verified bytes', function (t) {
-  t.ok(/import \{[^}]*createStallTracker[^}]*\} from '\.\/stall'/
-    .test(code), 'the stall tracker comes from stall.js')
-  t.ok(/import \{[^}]*verifiedBytes[^}]*\} from '\.\/stall'/.test(code),
-    'and so does the verified-byte count')
-  t.ok(/stalls\.sample\(\s*\n?\s*torrent\.infoHash,\s*verifiedBytes\(torrent\)/
-    .test(code), 'the sample is verified bytes, not torrent.downloaded')
-  t.ok(/stalls\.forget\(infoHash\)/.test(code),
-    'and the history is dropped with the torrent')
-  t.end()
-})
+// The ETA and the stall label are only as honest as what they are fed,
+// and they are not fed the same thing. The speed an estimate is built
+// on has to be verified bytes: `torrent.downloaded` includes piece
+// buffers that have not passed their hash, and dividing by that is the
+// original bug in full. The stall cannot use verified bytes, because
+// pieces land minutes apart on a slow torrent and it reported healthy
+// downloads as stuck. `stall.js` takes both and says which is which.
+test('progress is sampled in verified bytes and payload bytes',
+  function (t) {
+    t.ok(/import \{[^}]*createStallTracker[^}]*\} from '\.\/stall'/
+      .test(code), 'the stall tracker comes from stall.js')
+    t.ok(/import \{[^}]*verifiedBytes[^}]*\} from '\.\/stall'/.test(code),
+      'and so does the verified-byte count')
+
+    const call = /stalls\.sample\([\s\S]*?\}, now\)/.exec(code)
+    t.ok(call, 'the tracker is sampled')
+    const body = call ? call[0] : ''
+    t.ok(/torrent\.infoHash/.test(body), 'per torrent')
+    t.ok(/verified:\s*verifiedBytes\(torrent\)/.test(body),
+      'the speed is measured in bytes that passed their hash')
+    t.ok(/payload:\s*downloaded/.test(body),
+      'and the stall in bytes held, which moves per block')
+
+    t.ok(/stalls\.forget\(infoHash\)/.test(code),
+      'and the history is dropped with the torrent')
+    t.end()
+  })
 
 test('the UI is told the verified speed and the stall', function (t) {
   t.ok(/verifiedSpeed: Math\.round\(motion\.verifiedSpeed\)/.test(code),
