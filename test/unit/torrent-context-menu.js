@@ -32,7 +32,7 @@ let record = null
 
 function reset (platform = 'darwin') {
   record = {
-    menus: [], dispatches: [], sent: [], copied: [], shell: [], platform
+    menus: [], dispatches: [], copied: [], shell: [], platform
   }
   // `lib/dispatcher` holds one process-wide dispatch and every unit
   // test file that requires it registers its own. Re-register per test
@@ -45,26 +45,6 @@ function stub (modulePath, exports) {
   const id = require.resolve(modulePath)
   require.cache[id] = { id, filename: id, loaded: true, exports }
 }
-
-stub('electron', {
-  __esModule: true,
-  ipcRenderer: {
-    send (...args) { record.sent.push(args) },
-    on () {},
-    once () {},
-    removeListener () {}
-  }
-})
-
-// The controller pulls in the dialog and window shims transitively;
-// they only need to be requirable here, never called.
-stub('@electron/remote', {
-  __esModule: true,
-  dialog: {},
-  getCurrentWindow: () => ({}),
-  Menu: class { append () {} popup () {} },
-  MenuItem: class {}
-})
 
 const BUILT = path.join(ROOT, 'build', 'renderer')
 const { setDispatch } = require(path.join(BUILT, 'lib', 'dispatcher'))
