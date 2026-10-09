@@ -18,7 +18,7 @@ the port and which rules exist because of it.
   on an older line than the one you ship is not worth the ambiguity.
 - npm 10 or later. Node 24 ships npm 11.
 - macOS on Apple Silicon. This app targets macOS only
-  ([ADR-017](adr/ADR-017-target-macos-only.md)), and `npx tauri build`
+  ([ADR-017](adr/ADR-017-target-macos-only.md)), and `npm run package`
   in particular stages a `darwin-arm64` engine runtime and refuses any
   other host. See
   [Package the app](../README.md#package-the-app).
@@ -156,11 +156,12 @@ installed `.torrent` and magnet link handlers.
 ## Package
 
 ```sh
-npm run build:tauri && npx tauri build
+npm run package
 ```
 
 That produces `WebTorrent.app` and a `.dmg` under
-`src-tauri/target/release/bundle/`. Both halves are needed:
+`src-tauri/target/release/bundle/`. The script is
+`npm run build:tauri && tauri build`, and both halves are needed:
 `build:tauri` assembles the document root the window loads, and
 `tauri build` compiles the host, runs `bin/stage-sidecar.js` through
 `beforeBundleCommand`, and bundles the two together.
@@ -176,9 +177,16 @@ The runtime is pinned in `bin/node-runtime.json` by version and
 SHA-256; the first build on a machine downloads it once, to
 `~/.cache/webtorrent-desktop/node/`.
 
-The build is arm64-only and **unsigned**. It runs where you built it,
-and it will not pass Gatekeeper on anyone else's machine. Signing,
-the hardened runtime, notarization and stapling are US-083.
+The build is arm64-only and **ad-hoc signed**:
+`bundle.macOS.signingIdentity` is `"-"` and `hardenedRuntime` is
+`false` in `src-tauri/tauri.conf.json`. That seals the bundle without
+a certificate, so it runs where you built it, and on anyone else's
+Mac it opens after a one-time Open Anyway approval rather than being
+reported as damaged. It does not pass Gatekeeper. A Developer ID
+signature, the hardened runtime, notarization and stapling are
+US-083. CI runs the same `npm run package`; see
+[RELEASE_PROCESS.md](../RELEASE_PROCESS.md) for the release steps and
+what a recipient does on first launch.
 
 ## Porting to Tauri
 

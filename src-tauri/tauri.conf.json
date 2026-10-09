@@ -35,7 +35,8 @@
       "../static/WebTorrent.png"
     ],
     "macOS": {
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "hardenedRuntime": false
     }
   }
 }

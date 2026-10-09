@@ -8,9 +8,11 @@ on:
       - 'v*'
   workflow_dispatch:
 jobs:
-  # One job, macOS, arm64 (ADR-017). This was three jobs invoking
-  # `npm run package`, which US-072 deleted with the Electron host, so
-  # the workflow had been dead since then.
+  # One job, macOS, arm64 (ADR-017). This was three jobs invoking the
+  # Electron-era `npm run package`, which US-072 deleted with the
+  # Electron host. The name is back as the Tauri build: the document
+  # root, then the bundler, in one script so CI and a local release
+  # build run the same thing.
   #
   # The artifacts are AD-HOC signed (`signingIdentity: "-"` in
   # tauri.conf.json), not Developer ID signed or notarized, so they do
@@ -45,8 +47,13 @@ jobs:
         key: ${{ runner.os }}-sidecar-node-${{ hashFiles('bin/node-runtime.json') }}
     - run: npm install
     - run: npm test
-    - run: npm run build:tauri
-    - run: npx tauri build
+    - run: npm run package
+    # The bundler can exit 0 with a bundle whose signature does not
+    # verify -- that is the "is damaged" dialog on the recipient's Mac,
+    # which offers no Open Anyway. Fail here instead of uploading it.
+    - run: >-
+        codesign --verify --deep --strict --verbose=2
+        src-tauri/target/release/bundle/macos/WebTorrent.app
     - uses: actions/upload-artifact@v7
       with:
         # Upload the .dmg as itself rather than zipping it, so the

@@ -13,6 +13,7 @@
     "build:renderer": "vite build",
     "build:tauri": "npm run build && node ./bin/build-tauri.js",
     "tauri:build": "tauri build",
+    "package": "npm run build:tauri && tauri build",
     "clean": "node ./bin/clean.js",
     "gh-release": "gh-release",
     "open-config": "node ./bin/open-config.js",

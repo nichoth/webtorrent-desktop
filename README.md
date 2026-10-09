@@ -4,28 +4,21 @@ Rewriting it in Tauri.
 
 ## Install
 
-### Recommended Install
+This Tauri version is not published anywhere yet. Builds are an
+arm64 macOS `.dmg` handed to people directly, and because they are
+ad-hoc signed rather than notarized, macOS asks you to approve the app
+once before it opens -- see
+[First launch](RELEASE_PROCESS.md#first-launch). Apple Silicon Macs
+only.
 
-Download the latest version of WebTorrent Desktop from
-[the official website](https://webtorrent.io/desktop/):
+To build one yourself, see [Package the app](#package-the-app), or
+the ["How to Contribute"](#how-to-contribute) instructions to run the
+development version.
 
-### [✨ Download WebTorrent Desktop ✨](https://webtorrent.io/desktop/)
-
-### Advanced Install
-
-- Download specific installer files from the
-  [GitHub releases](https://github.com/webtorrent/webtorrent-desktop/releases)
-  page.
-
-- Use [Homebrew-Cask](https://github.com/caskroom/homebrew-cask) to
-  install from the command line:
-
-  ```
-  $ brew install --cask webtorrent
-  ```
-
-- Try the (unstable) development version by cloning the Git repository.
-  See the ["How to Contribute"](#how-to-contribute) instructions.
+The [official website](https://webtorrent.io/desktop/), the
+[GitHub releases](https://github.com/webtorrent/webtorrent-desktop/releases)
+page and `brew install --cask webtorrent` all install the upstream
+Electron app, not this one.
 
 ## Screenshots
 
@@ -78,13 +71,15 @@ meantime and what a replacement harness would take.
 ### Package the app
 
 ```
-$ npm run build:tauri && npx tauri build
+$ npm run package
 ```
 
 On an Apple Silicon Mac this produces
 `src-tauri/target/release/bundle/macos/WebTorrent.app` and a matching
-`.dmg`. `npm run package` drove `electron-packager` and was deleted
-along with the Electron host; Tauri's own bundler replaces it.
+`.dmg` in `bundle/dmg/`. The script is `npm run build:tauri` followed
+by `tauri build`, and it is what CI runs too -- see
+[RELEASE_PROCESS.md](RELEASE_PROCESS.md) for cutting a release and
+downloading the build from GitHub Actions.
 
 The app is self-contained. Before bundling, `bin/stage-sidecar.js`
 assembles `build-sidecar/` -- a pinned Node 24 runtime, the Babel
@@ -99,9 +94,13 @@ Two limits worth knowing. The build is **arm64 macOS only**: the
 staged Node runtime and the `utp-native` prebuild are both
 `darwin-arm64`, and the staging script refuses to run on any other
 host rather than producing a bundle that cannot spawn its engine. And
-the output is **unsigned and un-notarized**, so macOS will refuse it
-on another machine without a Gatekeeper override -- signing, the
-hardened runtime and notarization are US-083 in `specs/prd.json`.
+the output is **ad-hoc signed** (`bundle.macOS.signingIdentity` is
+`"-"` in `src-tauri/tauri.conf.json`): signed without a certificate,
+so it costs nothing, but it is not notarized and does not pass
+Gatekeeper. On another Mac it opens only after the one-time approval
+in [First launch](RELEASE_PROCESS.md#first-launch). A Developer ID
+signature, the hardened runtime and notarization are US-083 in
+`specs/prd.json`.
 Windows and Linux are not targets at all -- see
 [ADR-017](docs/adr/ADR-017-target-macos-only.md).
 
