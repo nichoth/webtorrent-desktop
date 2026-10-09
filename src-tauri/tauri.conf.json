@@ -33,6 +33,9 @@
     "icon": [
       "../static/WebTorrent.icns",
       "../static/WebTorrent.png"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": "-"
+    }
   }
 }

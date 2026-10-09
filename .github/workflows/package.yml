@@ -12,11 +12,16 @@ jobs:
   # `npm run package`, which US-072 deleted with the Electron host, so
   # the workflow had been dead since then.
   #
-  # The artifacts are UNSIGNED and will not pass Gatekeeper on a machine
-  # that did not build them. Signing, the hardened runtime, notarization
-  # and stapling are US-083; until that lands the .dmg goes to a
-  # workflow artifact, which needs a GitHub login to fetch, and not to a
-  # release, which would offer the public a download macOS refuses.
+  # The artifacts are AD-HOC signed (`signingIdentity: "-"` in
+  # tauri.conf.json), not Developer ID signed or notarized, so they do
+  # not pass Gatekeeper on a machine that did not build them. Ad-hoc
+  # signing seals the bundle, which turns "is damaged" into the
+  # unidentified-developer prompt that System Settings > Privacy &
+  # Security > Open Anyway gets past. A Developer ID signature,
+  # notarization and stapling are US-083; until that lands the .dmg
+  # goes to a workflow artifact, which needs a GitHub login to fetch,
+  # and not to a release, which would offer the public a download
+  # macOS refuses.
   package_macos:
     runs-on: macos-latest
     steps:
