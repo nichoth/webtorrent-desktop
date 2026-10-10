@@ -1,10 +1,11 @@
 [package]
 name = "webtorrent-desktop"
-# Kept in sync with `version` in package.json by hand. US-047 gave the
+# Kept in sync with `version` in package.json by `npm version`, whose
+# `version` script runs `bin/sync-crate-version.js`. US-047 gave the
 # drift teeth -- this names the .app and the .dmg while package.json's
-# reaches the sidecar's peer ID -- so `test/unit/tauri-host.js` now
-# checks that the two agree.
-version = "0.24.0"
+# reaches the sidecar's peer ID -- so `test/unit/tauri-host.js` checks
+# that the two agree.
+version = "0.25.0"
 description = "Streaming torrent client"
 authors = ["WebTorrent, LLC"]
 license = "MIT"

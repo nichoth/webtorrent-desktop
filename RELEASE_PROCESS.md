@@ -39,7 +39,10 @@ Releases are cut from the `redesign` branch.
   npm version [major|minor|patch]
   ```
 
-  This creates both a commit and a `vX.Y.Z` git tag.
+  This creates both a commit and a `vX.Y.Z` git tag. Its `version`
+  script also sets the crate version in `src-tauri/Cargo.toml` and
+  `src-tauri/Cargo.lock` to match, so the commit and tag include them.
+  Tauri names the `.app` and `.dmg` from the crate version.
 
 - Push the branch and the new tag
 
