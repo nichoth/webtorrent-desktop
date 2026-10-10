@@ -20,12 +20,16 @@ jobs:
   # signing seals the bundle, which turns "is damaged" into the
   # unidentified-developer prompt that System Settings > Privacy &
   # Security > Open Anyway gets past. A Developer ID signature,
-  # notarization and stapling are US-083; until that lands the .dmg
-  # goes to a workflow artifact, which needs a GitHub login to fetch,
-  # and not to a release, which would offer the public a download
-  # macOS refuses.
+  # notarization and stapling are US-083. Until that lands, a tag
+  # build is published as a GitHub release anyway, and everyone who
+  # installs it goes through the First launch steps in
+  # RELEASE_PROCESS.md. A workflow_dispatch build only uploads a
+  # workflow artifact.
   package_macos:
     runs-on: macos-latest
+    # `gh release create` needs write access to the repo's contents.
+    permissions:
+      contents: write
     steps:
     - uses: actions/checkout@v7
     - uses: actions/setup-node@v7
@@ -68,3 +72,14 @@ jobs:
         # reads as a successful package.
         if-no-files-found: error
         path: src-tauri/target/release/bundle/dmg/*.dmg
+    # Tag pushes only, so a hand-started branch build stays a workflow
+    # artifact. `gh` is preinstalled on the runner.
+    - if: startsWith(github.ref, 'refs/tags/v')
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: >-
+        gh release create "$GITHUB_REF_NAME"
+        src-tauri/target/release/bundle/dmg/*.dmg
+        --repo "$GITHUB_REPOSITORY"
+        --title "$GITHUB_REF_NAME"
+        --generate-notes

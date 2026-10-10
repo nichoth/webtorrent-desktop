@@ -4,10 +4,10 @@ Rewriting it in Tauri.
 
 ## Install
 
-This Tauri version is not published anywhere yet. Builds are an
-arm64 macOS `.dmg` handed to people directly, and because they are
-ad-hoc signed rather than notarized, macOS asks you to approve the app
-once before it opens -- see
+Download the arm64 macOS `.dmg` from this fork's
+[releases](https://github.com/nichoth/webtorrent-desktop/releases).
+Builds are ad-hoc signed rather than notarized, so macOS asks you to
+approve the app once before it opens -- see
 [First launch](RELEASE_PROCESS.md#first-launch). Apple Silicon Macs
 only.
 
