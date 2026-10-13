@@ -32,10 +32,7 @@ const HELPERS = ['index.js', 'not-implemented.js']
 
 const UNIMPLEMENTED = {
   'ipc-os.js': [
-    // US-065: the file and magnet open events, and the two signals the
-    // host waits on before it shows the window and before it quits.
-    'signalReady',
-    'signalStateSaved',
+    // US-065: the open-torrent and open-files dialogs.
     'openTorrentFileDialog',
     'openFilesDialog',
     // US-064: registering as the .torrent and magnet handler.

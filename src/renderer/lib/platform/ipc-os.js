@@ -142,12 +142,30 @@ export async function show () {
   return invoke('show')
 }
 
+/**
+ * Tell the host the renderer's listeners are registered, which is
+ * Electron's `ipcReady`. The host records it, and the file and magnet
+ * open events (US-065) wait on it. Signalling again after a reload is
+ * not an error.
+ *
+ * The command answers `null`; awaiting it and returning nothing keeps
+ * the caller's `undefined`.
+ *
+ * @returns {Promise<void>}
+ */
 export async function signalReady () {
-  notImplemented('ipc-os', 'signalReady')
+  await invoke('ipc_ready')
 }
 
+/**
+ * Tell the host a state save finished, which is Electron's
+ * `stateSaved`. The host acknowledges it and does nothing else yet:
+ * its quit does not wait for a save.
+ *
+ * @returns {Promise<void>}
+ */
 export async function signalStateSaved () {
-  notImplemented('ipc-os', 'signalStateSaved')
+  await invoke('state_saved')
 }
 
 export async function openTorrentFileDialog () {
