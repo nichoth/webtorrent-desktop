@@ -20,17 +20,17 @@ new `ipc_ready` and `state_saved` commands in `generate_handler!`),
 `signalStateSaved`), `test/unit/platform-ipc-os.js`,
 `test/unit/platform-stubs.js` (`UNIMPLEMENTED` register)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] The readiness record starts not ready
-- [ ] The readiness record reports ready after the ready signal
-- [ ] A repeated ready signal (a webview reload) is not an error and
+- [x] The readiness record starts not ready
+- [x] The readiness record reports ready after the ready signal
+- [x] A repeated ready signal (a webview reload) is not an error and
       leaves the record ready
-- [ ] `signalReady()` invokes the host command `ipc_ready` with no
+- [x] `signalReady()` invokes the host command `ipc_ready` with no
       arguments and resolves to `undefined`
-- [ ] `signalStateSaved()` invokes the host command `state_saved` with
+- [x] `signalStateSaved()` invokes the host command `state_saved` with
       no arguments and resolves to `undefined`
-- [ ] `signalReady` and `signalStateSaved` are removed from the stub
+- [x] `signalReady` and `signalStateSaved` are removed from the stub
       register, and the existing two-way stub sweep passes
-- [ ] `npm test`, `cargo fmt --check`, `cargo clippy -- -D warnings`
+- [x] `npm test`, `cargo fmt --check`, `cargo clippy -- -D warnings`
       and `cargo test` in `src-tauri` all pass
