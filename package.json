@@ -1,7 +1,7 @@
 {
   "name": "webtorrent-desktop",
   "description": "WebTorrent, the streaming torrent client. For macOS.",
-  "version": "0.25.3",
+  "version": "0.25.4",
   "author": {
     "name": "WebTorrent, LLC",
     "email": "feross@webtorrent.io",
