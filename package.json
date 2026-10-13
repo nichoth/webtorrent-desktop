@@ -26,7 +26,7 @@
     "watch": "nodemon --exec \"npm run start\" --ext js,css --ignore build/ --ignore build-vite/ --ignore build-tauri/ --ignore build-sidecar/ --ignore dist/",
     "preversion": "npm run lint",
     "version": "node ./bin/sync-crate-version.js && git add src-tauri/Cargo.toml src-tauri/Cargo.lock",
-    "postversion": "git push --follow tags"
+    "postversion": "git push --follow-tags"
   },
   "babel": {
     "sourceType": "unambiguous",
