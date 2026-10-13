@@ -23,21 +23,21 @@ via the shared `subscribe` helper, like `onDispatch`),
 `src/renderer/main.js` (read only; startup IPC registration is not
 restructured)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] `onLog` subscribes once to the host event `log`, spreads an array
+- [x] `onLog` subscribes once to the host event `log`, spreads an array
       payload into the listener's arguments, honours `{ once: true }`,
       and resolves to an unsubscribe function
-- [ ] `onError` does the same for the host event `error`
-- [ ] `onLog` and `onError` are removed from the stub register, and the
+- [x] `onError` does the same for the host event `error`
+- [x] `onLog` and `onError` are removed from the stub register, and the
       existing two-way stub sweep passes
-- [ ] The register's US-065 comment lists only the two open dialogs,
+- [x] The register's US-065 comment lists only the two open dialogs,
       and its reference to a host log module that does not exist is
       corrected
-- [ ] In the boot seam test, with `invoke` answering enough to get past
+- [x] In the boot seam test, with `invoke` answering enough to get past
       `app_paths` and the state load, the built renderer invokes
       `ipc_ready`
-- [ ] In the same test, `ipc_ready` arrives after the
+- [x] In the same test, `ipc_ready` arrives after the
       `plugin:event|listen` calls for `log`, `error` and `dispatch`
       (assert the ordering, not any banner text)
 - [x] `npm test`, `cargo fmt --check`, `cargo clippy -- -D warnings`
