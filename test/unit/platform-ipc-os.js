@@ -361,6 +361,35 @@ test('onDispatch honours { once: true }', async function (t) {
   t.end()
 })
 
+// -- the startup handshake --------------------------------------------
+//
+// Electron's `ipcReady` and `stateSaved`. Both are commands that take
+// nothing, and a Rust command that returns nothing answers `null`, so
+// the stub answers that too: the caller still sees `undefined`.
+
+test('signalReady tells the host the UI is listening', async function (t) {
+  reset()
+  answer = null
+  const result = await ipcOs.signalReady()
+
+  t.deepEqual(invocations, [{ command: 'ipc_ready', args: undefined }],
+    'one command, no arguments')
+  t.equal(result, undefined, 'resolves to nothing')
+  t.end()
+})
+
+test('signalStateSaved tells the host a save finished',
+  async function (t) {
+    reset()
+    answer = null
+    const result = await ipcOs.signalStateSaved()
+
+    t.deepEqual(invocations, [{ command: 'state_saved', args: undefined }],
+      'one command, no arguments')
+    t.equal(result, undefined, 'resolves to nothing')
+    t.end()
+  })
+
 // -- the dock and the taskbar (US-063) --------------------------------
 //
 // `setProgress` above is the third of the three, and was already the

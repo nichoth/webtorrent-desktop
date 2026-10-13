@@ -30,6 +30,7 @@ mod fs;
 mod menu;
 mod paths;
 mod power;
+mod ready;
 mod shell;
 mod shortcuts;
 mod startup;
@@ -56,6 +57,7 @@ use fs::{Access, Allowlist, FileStats, Root};
 use menu::{Action, AppMenu, ContextMenus, Platform};
 use paths::AppPaths;
 use power::PowerSaveBlocker;
+use ready::Readiness;
 use shortcuts::MediaShortcuts;
 use watcher::FolderWatcher;
 use window::{Debounce, FullscreenWatch, ProgressBar, WindowLayout};
@@ -539,6 +541,24 @@ fn notify_player_update(
     app_menu.set_enabled(menu::SKIP_NEXT, has_next);
     app_menu.set_enabled(menu::SKIP_PREVIOUS, has_previous);
 }
+
+// -- the startup handshake ------------------------------------------
+
+/// `ipcOs.signalReady`: the renderer's listeners are registered, which
+/// is Electron's `ipcReady`. A webview reload signals again, and that
+/// is not an error. See [`crate::ready`].
+#[tauri::command]
+fn ipc_ready(ready: tauri::State<'_, Readiness>) {
+    ready.signal();
+}
+
+/// `ipcOs.signalStateSaved`: the renderer finished a state save.
+///
+/// An acknowledgement and nothing else. Electron's quit waited on
+/// `stateSaved` before exiting; this host's [`quit`] exits at once, so
+/// there is nothing here yet to wake.
+#[tauri::command]
+fn state_saved() {}
 
 // -- the external player (US-080) ------------------------------------
 //
@@ -1674,6 +1694,9 @@ fn main() {
             // Nothing is discovered and nothing is connected until the
             // renderer asks (US-075).
             app.manage(cast::Session::default());
+            // The renderer has not loaded yet, so it is not listening
+            // until it says so.
+            app.manage(Readiness::default());
 
             // The engine sidecar (US-070), which is
             // `engineProcess.init()` in `src/main/index.js`: it comes
@@ -1739,6 +1762,8 @@ fn main() {
             notify_player_play,
             notify_player_pause,
             notify_player_update,
+            ipc_ready,
+            state_saved,
             set_badge,
             download_finished,
             start_folder_watcher,

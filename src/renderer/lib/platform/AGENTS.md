@@ -268,3 +268,10 @@ engine seam be reimplemented without touching `ipc-os.js`.
   probes every place VLC might be, a process each. A synchronous
   command would do either on the main thread with the window frozen
   behind it.
+- A Rust command that returns `()` answers **`null`**, not
+  `undefined`. An export documented as `Promise<void>` that does
+  `return invoke(...)` therefore resolves to `null` for real, even
+  though a test whose `invoke` stub answers `undefined` cannot tell the
+  difference. Where "resolves to nothing" is part of the contract,
+  `await invoke(...)` and return nothing, and have the test's stub
+  answer `null` so it actually checks it.
