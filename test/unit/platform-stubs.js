@@ -37,9 +37,7 @@ const UNIMPLEMENTED = {
     'openFilesDialog',
     // US-064: registering as the .torrent and magnet handler.
     'setDefaultFileHandler',
-    // The host's log and error channels. `src-tauri/src/log.rs` writes
-    // the host's own; nothing emits these to the renderer yet.
-    'onLog',
+    // The host's error channel. Nothing on the host emits it yet.
     'onError'
   ]
 }
