@@ -112,6 +112,82 @@ test('the engine answers wt-start-torrenting under plain node',
     t.end()
   })
 
+// The Tauri host stops the engine by closing its stdin. A pipe emits
+// both `end` and `close`, and with a torrent loaded the client is still
+// being destroyed when the second one arrives -- which must not shut
+// down a second time.
+test('closing the parent pipe shuts the engine down once',
+  async function (t) {
+    const expected = parseTorrent(await fs.promises.readFile(FIXTURE))
+    const downloadPath = await fs.promises.mkdtemp(
+      path.join(os.tmpdir(), 'wt-engine-test-')
+    )
+
+    const child = spawn(process.execPath, [ENTRY], {
+      cwd: REPO,
+      env: {
+        ...process.env,
+        NODE_ENV: 'test',
+        WEBTORRENT_ENGINE_TOKEN: TOKEN,
+        WEBTORRENT_ENGINE_PARENT_PIPE: '1'
+      },
+      stdio: ['pipe', 'pipe', 'pipe']
+    })
+
+    const stdout = []
+    const stderr = []
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => stdout.push(chunk))
+    child.stderr.on('data', (chunk) => stderr.push(chunk))
+    const exited = new Promise((resolve) => child.on('exit', resolve))
+
+    let client = null
+    try {
+      const port = await waitFor(() => {
+        const line = stdout.join('').split('\n')
+          .find((l) => l.startsWith('WEBTORRENT_ENGINE_PORT='))
+        return line && Number(line.slice('WEBTORRENT_ENGINE_PORT='.length))
+      }, 20000)
+
+      client = new WebSocket(
+        'ws://127.0.0.1:' + port + '/?token=' + TOKEN
+      )
+      const frames = []
+      client.on('message', (data) => frames.push(decode(data)))
+      client.on('error', () => {})
+      await new Promise((resolve, reject) => {
+        client.on('open', resolve)
+        client.on('error', reject)
+      })
+
+      const selections = new Array(expected.files.length).fill(false)
+      client.send(encode('wt-start-torrenting',
+        [1, FIXTURE, downloadPath, null, selections]))
+      await waitFor(
+        () => frames.find((f) => f.channel === 'wt-ready'), 20000)
+
+      child.stdin.end()
+      const code = await exited
+
+      t.equal(code, 0, 'the engine exits cleanly')
+      t.deepEqual(
+        frames.filter((f) => f.channel === 'wt-uncaught-error'), [],
+        'shutting down raised no uncaught error\nstderr:\n' +
+          stderr.join('')
+      )
+    } catch (err) {
+      t.fail(err.message + '\nstderr:\n' + stderr.join(''))
+      child.kill()
+      await exited
+    } finally {
+      if (client) client.close()
+      await fs.promises.rm(downloadPath, { recursive: true, force: true })
+    }
+
+    t.end()
+  })
+
 test('the engine entry point names no host or browser API', function (t) {
   const source = fs.readFileSync(ENTRY_SRC, 'utf8')
   // Comments discuss the window the engine is moving out of, so they are

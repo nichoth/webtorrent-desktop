@@ -194,7 +194,13 @@ function onUncaughtError (err) {
   console.error(err)
 }
 
+// Every exit path lands here, and more than one can fire: a closed
+// stdin pipe emits `end` then `close`, and a signal can arrive mid-way.
+// `client.destroy` throws on a second call, so only the first counts.
+let shuttingDown = false
 function shutdown () {
+  if (shuttingDown) return
+  shuttingDown = true
   stopAllServers()
   client.destroy(() => {
     bus.close().then(() => process.exit(0), () => process.exit(0))
