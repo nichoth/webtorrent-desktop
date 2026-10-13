@@ -84,8 +84,13 @@ function webviewSandbox (invoked = [], answer = null) {
     addEventListener () {}, removeEventListener () {}, dispatchEvent () {}
   })
 
+  // Element-shaped enough for `ReactDOM.render` to accept one as its
+  // container, which is as far as the clean-boot test below needs it.
   function element () {
-    return Object.assign(listeners(), {
+    const node = Object.assign(listeners(), {
+      nodeType: 1,
+      nodeName: 'DIV',
+      tagName: 'DIV',
       style: {},
       classList: { add () {}, remove () {}, contains: () => false },
       dataset: {},
@@ -105,6 +110,10 @@ function webviewSandbox (invoked = [], answer = null) {
       contains: () => false,
       focus () {},
       blur () {}
+    })
+    // A getter, because `document` is built out of these.
+    return Object.defineProperty(node, 'ownerDocument', {
+      get: () => document
     })
   }
 
@@ -161,7 +170,10 @@ function webviewSandbox (invoked = [], answer = null) {
       matches: false, addListener () {}, removeListener () {}
     }),
     getComputedStyle: () => ({ getPropertyValue: () => '' }),
+    TextEncoder,
+    TextDecoder,
     Event: function Event () {},
+    HTMLIFrameElement: function HTMLIFrameElement () {},
     CustomEvent: function CustomEvent () {},
     fetch: () => Promise.reject(new Error('offline in this test')),
     WebSocket: function WebSocket () {},
@@ -289,16 +301,16 @@ test('the bundle asks the host for its paths before reading state',
 // which carries the path values and not the function that moves them,
 // so it threw `undefined is not a function` on a promise nobody was
 // awaiting. Nothing rendered and nothing said why.
-test('and it uses the answer, on both config surfaces', async (t) => {
-  const HOST = {
-    configPath: '/host/Profile',
-    torrentPath: '/host/Profile/Torrents',
-    posterPath: '/host/Profile/Posters',
-    tempPath: '/host/Temp',
-    defaultDownloadPath: '/host/Downloads',
-    isPortable: false
-  }
+const HOST = {
+  configPath: '/host/Profile',
+  torrentPath: '/host/Profile/Torrents',
+  posterPath: '/host/Profile/Posters',
+  tempPath: '/host/Temp',
+  defaultDownloadPath: '/host/Downloads',
+  isPortable: false
+}
 
+test('and it uses the answer, on both config surfaces', async (t) => {
   // The bootstrap deliberately has no `catch` -- there is no UI to
   // report into that early -- so a failure arrives as an unhandled
   // rejection on a later tick, where no `try` here could see it. It
@@ -336,3 +348,84 @@ test('and it uses the answer, on both config surfaces', async (t) => {
   }
   t.end()
 })
+
+// -- the ready handshake ---------------------------------------------
+
+// The regression test for the error banner every Tauri launch showed.
+// `setupIpc` registers every host and engine listener in one
+// `Promise.all` and only then tells the host it is ready. While any
+// registration in it was a not-implemented stub the `Promise.all`
+// rejected, so `ipc_ready` was never sent -- and the rejection is what
+// put the banner up. Startup reaching `ipc_ready` is the observable
+// half of that; the banner text is deliberately not what is asserted.
+//
+// The host answers just enough to get there: its paths, an existing
+// profile (so `State.load` does not build the default torrents, which
+// fetches bundled assets), and an id for each event registration.
+// Every other command stays pending, which keeps the engine client
+// from scheduling retries that would outlive the test.
+test('startup tells the host it is ready, after its listeners',
+  async (t) => {
+    const saved = {
+      version: require('../../package.json').version,
+      prefs: { downloadPath: HOST.defaultDownloadPath, globalTrackers: [] },
+      torrents: [],
+      torrentsToResume: []
+    }
+    // `fs_read_file` answers bytes as a number array, as the host does.
+    const profile = Array.from(Buffer.from(JSON.stringify(saved)))
+
+    const rejections = []
+    const onRejection = (err) => rejections.push(err)
+    process.on('unhandledRejection', onRejection)
+
+    let listenerId = 0
+    const invoked = []
+    const sandbox = webviewSandbox(invoked, (command) => {
+      if (command === 'app_paths') return Promise.resolve(HOST)
+      if (command === 'fs_read_file') return Promise.resolve(profile)
+      if (command === 'plugin:event|listen') {
+        return Promise.resolve(++listenerId)
+      }
+      return new Promise(() => {})
+    })
+
+    // Startup's once-a-second `update`, which would hold the process
+    // open after the test.
+    const intervals = []
+    sandbox.setInterval = (...args) => {
+      const id = setInterval(...args)
+      intervals.push(id)
+      return id
+    }
+
+    try {
+      vm.runInNewContext(source, sandbox, {
+        filename: 'main.js',
+        timeout: 30000
+      })
+      await new Promise((resolve) => setTimeout(resolve, 100))
+
+      t.deepEqual(rejections.map(String), [], 'startup ran with no rejection')
+
+      // Each step's label: the command, and for a listen, its event.
+      const steps = invoked.map((call) => (
+        call.command === 'plugin:event|listen'
+          ? `listen:${call.args.event}`
+          : call.command
+      ))
+      const ready = steps.indexOf('ipc_ready')
+      t.ok(ready !== -1,
+        `ipc_ready was invoked (saw: ${steps.join(', ')})`)
+
+      for (const event of ['log', 'error', 'dispatch']) {
+        const listen = steps.indexOf(`listen:${event}`)
+        t.ok(listen !== -1 && listen < ready,
+          `the ${event} listener was registered before ipc_ready`)
+      }
+    } finally {
+      intervals.forEach(clearInterval)
+      process.removeListener('unhandledRejection', onRejection)
+    }
+    t.end()
+  })

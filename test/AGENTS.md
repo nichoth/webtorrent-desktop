@@ -348,6 +348,15 @@ records every command and has two modes, and the difference matters:
   enough to assert what the bundle did with the answer. US-072 needed
   this: the bootstrap reached `useHostPaths` through the wrong export
   and threw one tick after every other test had gone green.
+- **Enough answers to boot.** `app_paths`, `fs_read_file` with an
+  existing profile (bytes as a number array) and an id for each
+  `plugin:event|listen` take startup through `ReactDOM.render` and
+  `setupIpc`. Answer `fs_read_file` with a profile rather than an
+  error: a missing one makes `State.load` build the default torrents,
+  which fetches bundled assets. Keep every other command pending; a
+  `null` from `get_engine_endpoint` starts the engine client's retry
+  timers. Wrap the sandbox's `setInterval` and clear it afterwards,
+  because startup's once-a-second `update` holds the process open.
 
 Anything asserted in the second mode runs on a later tick, so wrap it
 in a `process.on('unhandledRejection')` capture. `main.js`'s

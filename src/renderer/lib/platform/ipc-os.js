@@ -375,12 +375,33 @@ export async function getEngineEndpoint () {
   return invoke('get_engine_endpoint')
 }
 
+/**
+ * Log lines the host wants shown in the webview's developer console,
+ * which Electron's main process sent on `log`.
+ *
+ * Spread like `onDispatch`: the host sends its argument list as an
+ * array, and the caller sees `(...args)`. Nothing on the host emits
+ * this yet; subscribing to it is harmless until something does.
+ *
+ * @param {(...args: any[]) => void} listener
+ * @param {{ once?: boolean }} [options]
+ * @returns {Promise<() => void>}
+ */
 export async function onLog (listener, options) {
-  notImplemented('ipc-os', 'onLog')
+  return subscribe('log', (args) => listener(...args), options)
 }
 
+/**
+ * Errors the host wants shown in the webview's developer console,
+ * which Electron's main process sent on `error`. Spread, and not yet
+ * emitted, exactly like `onLog`.
+ *
+ * @param {(...args: any[]) => void} listener
+ * @param {{ once?: boolean }} [options]
+ * @returns {Promise<() => void>}
+ */
 export async function onError (listener, options) {
-  notImplemented('ipc-os', 'onError')
+  return subscribe('error', (args) => listener(...args), options)
 }
 
 /**
