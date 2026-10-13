@@ -111,3 +111,46 @@ Effort: high. Agent exit: 0. Subagents: 0. Cost: $1.20. Checked items: "`npm`` t
   return nothing, with the test stub answering `null`.
 
 ---
+<!-- nightralph:entry ticket=startup-ipc-signals:2 attempt=1 outcome=done -->
+## 2026-10-12 22:36 -- startup-ipc-signals/02 attempt 1 -- done
+
+Effort: medium. Agent exit: 0. Subagents: 0. Cost: $1.54. Checked items: "`npm test`, `cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo test` in `src-tauri` all pass".
+
+### Agent notes
+# Notes: 02 log/error subscriptions and clean boot
+
+## Item 1 onLog -- done
+- Shim tests (3, mirroring onDispatch) in test/unit/platform-ipc-os.js;
+  red seen (NotImplementedError), then `subscribe('log', spread)`.
+- Removed onLog from the stub register in the same commit, or the sweep
+  goes red.
+
+## Items 2-4 onError and the register -- done
+- Same 3 tests for `error`; red seen, then implemented like onLog.
+- Register: onLog/onError gone, which also removes the wrong
+  `src-tauri/src/log.rs` comment (no such module). The US-065 comment
+  already named only the two dialogs (ticket 01 did that), so item 4
+  needed only the log comment removed. Register edit is config: no new
+  test, the existing two-way sweep covers it (passes).
+- platform AGENTS.md: dropped "when they land" for onLog/onError.
+
+## Items 5-6 boot seam -- done
+- New test in test/unit/renderer-boots.js: invoke answers app_paths,
+  fs_read_file (an existing profile as a number array, so State.load
+  skips setupStateSaved, which fetches bundled assets via `new URL`)
+  and plugin:event|listen (an id); all else pending (an answered
+  get_engine_endpoint of null makes ipc-engine retry on timers).
+- Sandbox needed, to get through ReactDOM.render: element nodeType /
+  nodeName / tagName / ownerDocument (getter), HTMLIFrameElement, and
+  TextEncoder/TextDecoder (without TextDecoder readSavedState silently
+  returns null -> "Missing config file"). Existing tests still pass.
+- Sandbox setInterval wrapped and cleared (startup's 1 s `update`).
+- Red verified: with the pre-ticket stubbed ipc-os.js built, the
+  ipc_ready + 3 ordering assertions fail; green with the new shim.
+
+## Item 7 gate -- done
+- npm test exit 0 (4220/4220, No depcheck issue); cargo fmt --check,
+  clippy -D warnings, cargo test (209) pass. No Rust changes here.
+- test/AGENTS.md: documented the "enough answers to boot" sandbox mode.
+
+---
