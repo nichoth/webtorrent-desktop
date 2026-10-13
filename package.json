@@ -24,7 +24,9 @@
     "lint:boundary": "eslint --no-eslintrc -c eslint-boundary.config.js src/renderer src/engine",
     "update-authors": "./bin/update-authors.sh",
     "watch": "nodemon --exec \"npm run start\" --ext js,css --ignore build/ --ignore build-vite/ --ignore build-tauri/ --ignore build-sidecar/ --ignore dist/",
-    "version": "node ./bin/sync-crate-version.js && git add src-tauri/Cargo.toml src-tauri/Cargo.lock"
+    "preversion": "npm run lint",
+    "version": "node ./bin/sync-crate-version.js && git add src-tauri/Cargo.toml src-tauri/Cargo.lock",
+    "postversion": "git push --follow tags"
   },
   "babel": {
     "sourceType": "unambiguous",
