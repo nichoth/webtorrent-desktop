@@ -1,0 +1,8 @@
+npm notice run webtorrent-desktop@0.25.1 test
+npm notice run npm run lint && depcheck --ignores=standard,eslint,@babel/eslint-parser,madr,buffer --ignore-dirs=build,build-vite,build-tauri,build-sidecar,dist && npm run test-unit
+npm notice run webtorrent-desktop@0.25.1 lint
+npm notice run standard && npm run lint:boundary
+npm notice run webtorrent-desktop@0.25.1 lint:boundary
+npm notice run eslint --no-eslintrc -c eslint-boundary.config.js src/renderer src/engine
+Unused devDependencies
+* nightralph
