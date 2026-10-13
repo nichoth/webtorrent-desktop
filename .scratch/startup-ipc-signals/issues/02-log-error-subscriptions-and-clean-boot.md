@@ -40,5 +40,5 @@ restructured)
 - [ ] In the same test, `ipc_ready` arrives after the
       `plugin:event|listen` calls for `log`, `error` and `dispatch`
       (assert the ordering, not any banner text)
-- [ ] `npm test`, `cargo fmt --check`, `cargo clippy -- -D warnings`
+- [x] `npm test`, `cargo fmt --check`, `cargo clippy -- -D warnings`
       and `cargo test` in `src-tauri` all pass
