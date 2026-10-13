@@ -36,9 +36,7 @@ const UNIMPLEMENTED = {
     'openTorrentFileDialog',
     'openFilesDialog',
     // US-064: registering as the .torrent and magnet handler.
-    'setDefaultFileHandler',
-    // The host's error channel. Nothing on the host emits it yet.
-    'onError'
+    'setDefaultFileHandler'
   ]
 }
 

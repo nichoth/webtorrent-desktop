@@ -252,7 +252,7 @@ engine seam be reimplemented without touching `ipc-os.js`.
   rather than leaving it covered by the directory exemption.
 - A **Tauri event carries one payload where Electron's `send` carries
   an argument list.** An inbound export whose listener takes more than
-  one argument (`onDispatch`, and `onLog`/`onError` when they land)
+  one argument (`onDispatch`, `onLog`, `onError`)
   therefore has the host send the whole list as an array and the Tauri
   shim spread it, so both trees hand the caller the same
   `(first, ...rest)`. The parity test only checks arity, so a shim

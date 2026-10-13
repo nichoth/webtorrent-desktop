@@ -391,8 +391,17 @@ export async function onLog (listener, options) {
   return subscribe('log', (args) => listener(...args), options)
 }
 
+/**
+ * Errors the host wants shown in the webview's developer console,
+ * which Electron's main process sent on `error`. Spread, and not yet
+ * emitted, exactly like `onLog`.
+ *
+ * @param {(...args: any[]) => void} listener
+ * @param {{ once?: boolean }} [options]
+ * @returns {Promise<() => void>}
+ */
 export async function onError (listener, options) {
-  notImplemented('ipc-os', 'onError')
+  return subscribe('error', (args) => listener(...args), options)
 }
 
 /**

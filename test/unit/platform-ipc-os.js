@@ -399,6 +399,38 @@ test('onLog honours { once: true }', async function (t) {
   t.end()
 })
 
+test('onError subscribes to the host event', async function (t) {
+  reset()
+  const stop = await ipcOs.onError(() => {})
+
+  t.equal(calls.length, 1, 'registered once')
+  t.equal(calls[0].api, 'listen', 'a standing subscription by default')
+  t.equal(calls[0].name, 'error', 'the host\'s error channel')
+  t.equal(typeof stop, 'function', 'resolved to an unsubscribe')
+  t.end()
+})
+
+test('onError spreads the reported arguments', async function (t) {
+  reset()
+  const received = []
+  await ipcOs.onError((...args) => received.push(args))
+
+  calls[0].handler({ event: 'error', payload: ['engine', 'exited', 1] })
+
+  t.deepEqual(received, [['engine', 'exited', 1]],
+    'one call, with each element as its own argument')
+  t.end()
+})
+
+test('onError honours { once: true }', async function (t) {
+  reset()
+  await ipcOs.onError(() => {}, { once: true })
+
+  t.equal(calls[0].api, 'once', 'a one-shot subscription')
+  t.equal(calls[0].name, 'error', 'on the same event')
+  t.end()
+})
+
 // -- the startup handshake --------------------------------------------
 //
 // Electron's `ipcReady` and `stateSaved`. Both are commands that take
