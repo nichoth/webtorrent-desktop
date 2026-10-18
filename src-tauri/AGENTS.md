@@ -290,6 +290,16 @@ committing, and remember the single-instance socket (below) between
 runs -- a launch that finds a ghost exits silently with status 0, and
 that looks exactly like a probe that did not print.
 
+## Background work from a window event gets one worker, not a thread each
+
+Tauri delivers `WindowEvent`s on the UI thread, and a drag delivers
+hundreds of them. `window::Debounce` is the pattern for work that must
+leave that thread: one worker, started on the first call, sleeping on a
+`Condvar` until a deadline every call pushes forward, and ending when
+the last clone is dropped. A `std::thread::spawn` per event is what it
+replaced. Its tests make "one worker" observable by recording
+`std::thread::current().id()` from each job across several bursts.
+
 ## Gates
 
 `cargo fmt --check` and `cargo clippy -- -D warnings` are gates from
