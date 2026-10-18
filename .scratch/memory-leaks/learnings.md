@@ -366,3 +366,81 @@ Effort: medium. Agent exit: 0. Subagents: 0. Cost: $1.37. Checked items: "The se
   second commit.
 
 ---
+<!-- nightralph:entry ticket=memory-leaks:6 attempt=1 outcome=done -->
+## 2026-10-17 18:29 -- memory-leaks/06 attempt 1 -- done
+
+Effort: medium. Agent exit: 0. Subagents: 0. Cost: $1.22. Checked items: "After the player closes, none of its subscriptions is left, including ones made by a next or previous file change", "A ready or server-running delivery that arrives after close sends no `wt-start-server` and changes no playback state", "Closing a play that never sent start-server sends no stop-server".
+
+### Agent notes
+# Ticket 06: player close cancels subscriptions and releases only its hold
+
+## Implemented
+- `src/renderer/controllers/playback-controller.js`:
+  - constructor: `this.subscriptions = []`, `this.serverInfoHash = null`.
+  - `keepSubscription(promise)`: records a cancel that sets `cancelled`
+    and calls the unsubscribe once the shim answers (the
+    media-controller pattern), so a close before the shim resolves still
+    withdraws.
+  - `startServer`: ready wait and server-running wait go through
+    `keepSubscription`; both listeners check `state.playing === playing`
+    (captured at arm time) so a delivery racing the close does nothing.
+    `serverInfoHash` is set right before `ipcEngine.startServer`.
+  - `updatePlayer`: deferred audio-metadata wait goes through
+    `keepSubscription` and checks play identity (covers next/previous).
+  - `closePlayer`: cancels all subscriptions after `playerClosed`;
+    sends `stopServer(serverInfoHash)` only if set, then clears it.
+- New `test/unit/playback-controller-subscriptions.js` (emitted as
+  `playback-controller.subscriptions-test.js`; stubs every lib module
+  the graph reaches except dispatcher/errors/torrent-player).
+- `test/unit/engine-ipc-call-sites.js`: "closing the player stops the
+  server" now starts a server first -- under the new rule a play that
+  never started one sends no stop. Behaviour change required by the
+  ticket, not a weakening; it still asserts routing by info hash.
+- `src/renderer/controllers/AGENTS.md`: keepSubscription / matched-stop
+  conventions.
+
+## Notes
+- All three checklist items are one change in one function set, so they
+  land in one commit.
+- Ran new file with engine-ipc-call-sites and the other controller tests
+  in both orders: green. Full `npm test`: 4453/4453.
+- Stale metadata waits from an earlier file *within the same play*
+  (next before ready) still fire with their own index when ready; they
+  are withdrawn on close. Pre-existing, out of scope.
+
+---
+<!-- nightralph:entry ticket=memory-leaks:8 attempt=1 outcome=done -->
+## 2026-10-17 18:29 -- memory-leaks/08 attempt 1 -- done
+
+Effort: medium. Agent exit: 0. Subagents: 0. Cost: $0.99. Checked items: "A job whose server never answers leaves no server-running subscription once it times out", "A job that times out sends `wt-stop-server` for the hold it took", "A server reply that arrives after the timeout writes no poster", "The next queued job still starts after a timed-out one", "A job whose server never answers leaves no server-running subscription once it times out. The test failed before the fix.", "A job that times out sends `wt-stop-server` for the hold it took. The old code already did this, so I added a test for the other half of the spec: a job that gives up before its subscription is set up asks for no server and releases none, even if the subscription arrives later. That test failed before the fix, and it also caught the old code writing a poster after it had given up.", "A server reply that arrives after the timeout writes no poster. The tests (one for a late reply, one for a timeout during a capture) fail when I take out the matching checks and pass with them.", "The next queued job still starts after a timed-out one. This already worked, so the test passed from the start and now guards it.".
+
+### Agent notes
+# Ticket 08: poster job timeout releases everything
+
+## Implemented
+- `src/renderer/lib/torrent-poster.js`: `generateTorrentPoster(summary,
+  { timeout })` (defaults to JOB_TIMEOUT). `runPosterJob` makes a
+  per-job `{ over, unsubscribe, heldServer }`. Its finally sets `over`,
+  calls any live unsubscribe, and sends `wt-stop-server` only if
+  `heldServer`. `startServer` records the unsubscribe and the hold on
+  the job; if the subscription resolves after the job is over it
+  unsubscribes at once and sends no start-server. `savePoster` returns
+  early if the job is over after the server wait and after the capture,
+  so nothing is written late.
+- `test/unit/poster.js`: stub gained `record.silent` (hashes whose
+  server never answers) and `record.subscribeGate`. Six new tests with a
+  30 ms injected timeout.
+- `test/AGENTS.md`: note on injecting timeouts.
+
+## How ACs were read
+- Item 2 ("sends wt-stop-server for the hold it took"): the old code
+  already sent stop on timeout. Added a red test for the "only holds it
+  actually took" half: a job that gives up before its subscription
+  resolves sends neither start nor stop, even when the subscription
+  lands later.
+- Item 3: confirmed red by removing the `job.over` checks (both the
+  after-server-wait and after-capture checks each have a test).
+- Item 4: passed without changes (the queue already advanced after a
+  timeout); the test guards it.
+
+---
