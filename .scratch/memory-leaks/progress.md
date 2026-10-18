@@ -2,7 +2,10 @@
 
 Started: 2026-10-18T01:09:04.866Z
 
-- [ ] 01-resume-list-never-names-a-deleted-torrent.md
+- [x] 01-resume-list-never-names-a-deleted-torrent.md
+  branch: webtorrent-desktop--memory-leaks-01-resume-list-never-names-a-deleted-torrent
+  exit: 0
+  completed: 2026-10-18T01:19:03.133Z
 - [ ] 02-engine-forgets-per-torrent-state-on-close.md
 - [ ] 03-server-holds-counted-on-request.md
 - [ ] 04-audio-metadata-never-leaves-a-stream-open.md
