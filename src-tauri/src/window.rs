@@ -14,10 +14,11 @@
 //! rather than reading a window. What touches the world is the thin
 //! layer in `main.rs`.
 
+use std::panic::AssertUnwindSafe;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::atomic::Ordering;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -365,22 +366,62 @@ impl Default for FullscreenWatch {
 /// The trailing-edge debounce the Electron host gets from the
 /// `debounce` package.
 ///
-/// Each call takes a ticket and waits out the delay on its own thread;
-/// only the call still holding the newest ticket runs. The window
+/// One worker thread waits out a deadline that every call pushes
+/// forward, and runs the newest job once the calls stop. The window
 /// events it guards arrive on the UI thread, so the work must not
 /// happen there, and dropping the intermediate ones is the point --
-/// see [`BOUNDS_DEBOUNCE`].
-#[derive(Debug, Clone)]
+/// see [`BOUNDS_DEBOUNCE`]. The worker starts on the first call and
+/// ends once the last clone is dropped and nothing is pending.
+#[derive(Clone)]
 pub struct Debounce {
     delay: Duration,
-    latest: Arc<AtomicU64>,
+    handle: Arc<Handle>,
+}
+
+type Job = Box<dyn FnOnce() + Send>;
+
+/// What the callers and the worker share: the newest job and when it
+/// is due.
+#[derive(Default)]
+struct Shared {
+    pending: Mutex<Pending>,
+    wake: Condvar,
+}
+
+#[derive(Default)]
+struct Pending {
+    job: Option<Job>,
+    deadline: Option<Instant>,
+    worker: bool,
+    closed: bool,
+}
+
+/// Held by every clone of a [`Debounce`] and never by the worker, so
+/// its drop is what tells the worker it can stop.
+struct Handle {
+    shared: Arc<Shared>,
+}
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        lock(&self.shared.pending).closed = true;
+        self.shared.wake.notify_one();
+    }
+}
+
+/// A job that panicked must not take the debounce down with it, so a
+/// poisoned lock is still a usable one.
+fn lock(pending: &Mutex<Pending>) -> MutexGuard<'_, Pending> {
+    pending.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Debounce {
     pub fn new(delay: Duration) -> Debounce {
         Debounce {
             delay,
-            latest: Arc::new(AtomicU64::new(0)),
+            handle: Arc::new(Handle {
+                shared: Arc::new(Shared::default()),
+            }),
         }
     }
 
@@ -389,16 +430,65 @@ impl Debounce {
     where
         F: FnOnce() + Send + 'static,
     {
-        let ticket = self.latest.fetch_add(1, Ordering::SeqCst) + 1;
-        let latest = Arc::clone(&self.latest);
-        let delay = self.delay;
+        let shared = &self.handle.shared;
+        let mut pending = lock(&shared.pending);
+        pending.job = Some(Box::new(job));
+        pending.deadline = Some(Instant::now() + self.delay);
 
-        std::thread::spawn(move || {
-            std::thread::sleep(delay);
-            if latest.load(Ordering::SeqCst) == ticket {
-                job();
+        if !pending.worker {
+            pending.worker = true;
+            let shared = Arc::clone(shared);
+            std::thread::spawn(move || work(&shared));
+        }
+
+        drop(pending);
+        shared.wake.notify_one();
+    }
+}
+
+impl std::fmt::Debug for Debounce {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Debounce")
+            .field("delay", &self.delay)
+            .finish_non_exhaustive()
+    }
+}
+
+/// The worker's loop: sleep until there is a deadline, sleep again
+/// until it has passed without being moved, then run the job outside
+/// the lock so a call during it is not blocked.
+fn work(shared: &Shared) {
+    let mut pending = lock(&shared.pending);
+
+    loop {
+        let Some(deadline) = pending.deadline else {
+            if pending.closed {
+                return;
             }
-        });
+            pending = shared
+                .wake
+                .wait(pending)
+                .unwrap_or_else(PoisonError::into_inner);
+            continue;
+        };
+
+        let now = Instant::now();
+        if now < deadline {
+            pending = shared
+                .wake
+                .wait_timeout(pending, deadline - now)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0;
+            continue;
+        }
+
+        pending.deadline = None;
+        let job = pending.job.take();
+        drop(pending);
+        if let Some(job) = job {
+            let _ = std::panic::catch_unwind(AssertUnwindSafe(job));
+        }
+        pending = lock(&shared.pending);
     }
 }
 
@@ -640,6 +730,33 @@ mod tests {
             2,
             "a call after the delay is a new burst, not a swallowed one"
         );
+    }
+
+    /// A drag emits hundreds of events, and a thread per event is the
+    /// churn the debounce exists to avoid. Every job, burst after
+    /// burst, runs on the one worker.
+    #[test]
+    fn every_burst_runs_on_the_one_worker() {
+        let threads = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let debounce = Debounce::new(Duration::from_millis(40));
+
+        for _ in 0..3 {
+            for _ in 0..5 {
+                let threads = Arc::clone(&threads);
+                debounce.call(move || {
+                    threads.lock().unwrap().push(std::thread::current().id());
+                });
+            }
+            std::thread::sleep(Duration::from_millis(150));
+        }
+
+        let threads = threads.lock().unwrap();
+        assert_eq!(threads.len(), 3, "each burst ran its job once");
+        assert!(
+            threads.iter().all(|id| *id == threads[0]),
+            "the jobs ran on more than one thread"
+        );
+        assert_ne!(threads[0], std::thread::current().id());
     }
 
     // -- setBounds ---------------------------------------------------
