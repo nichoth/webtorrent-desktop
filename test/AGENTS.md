@@ -174,6 +174,15 @@ reachable this way. `build:node` deliberately ignores
 (Vite owns those), so those modules cannot be unit tested through
 `build/`. See `src/AGENTS.md`.
 
+### Timeouts in unit tests
+
+Never wait out a production timeout. `generateTorrentPoster` takes
+`{ timeout }` as a second argument for this; `test/unit/poster.js`
+passes 30 ms. Follow that shape (an optional argument that defaults to
+the real constant) when a new module needs a timeout tested. To test a
+reply that lands after a give-up, keep the listener the stub was
+handed and call it yourself after the job settles.
+
 ## Static boundary tests
 
 Because `components/`, `controllers/` and `main.js` are unreachable
