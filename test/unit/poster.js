@@ -465,3 +465,24 @@ test('poster: a capture that outlasts the timeout writes no poster',
     t.deepEqual(record.fs, [], 'but nothing was written')
     t.end()
   })
+
+test('poster: the next queued job starts after a timed-out one',
+  async function (t) {
+    reset()
+    record.serverURL = 'http://127.0.0.1:4321'
+    record.silent = [INFO_HASH]
+    const OTHER = 'b'.repeat(40)
+
+    const names = await Promise.all([
+      generateTorrentPoster(VIDEO_TORRENT, SHORT),
+      generateTorrentPoster({ ...VIDEO_TORRENT, infoHash: OTHER }, SHORT)
+    ])
+
+    t.deepEqual(names, [null, OTHER + '.jpg'],
+      'the first gave up, the second made its poster')
+    const calls = record.engine.map((c) => c.slice(0, 2).join(' '))
+    t.ok(calls.indexOf('stopServer ' + INFO_HASH) <
+      calls.indexOf('startServer ' + OTHER),
+    'the second started only after the first released')
+    t.end()
+  })
