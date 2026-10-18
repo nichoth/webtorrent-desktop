@@ -25,12 +25,12 @@ import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import util from 'util'
-import mm from 'music-metadata'
 import networkAddress from 'network-address'
 import WebTorrent from 'webtorrent'
 
 import config from '../config'
 import { runAnnounceSweep, SWEEP_INTERVAL_MS } from './announce'
+import { readAudioMetadata } from './audio-metadata'
 import { createWebSocketBus } from './bus-websocket'
 import { limitPendingDials } from './dials'
 import {
@@ -654,13 +654,7 @@ function getAudioMetadata (infoHash, index) {
       })
     }
   }
-  const onMetadata = file.done
-    // If completed; use direct file access
-    ? mm.parseFile(path.join(torrent.path, file.path), options)
-    // otherwise stream
-    : mm.parseStream(file.createReadStream(), file.name, options)
-
-  onMetadata
+  readAudioMetadata(file, torrent.path, options)
     .then(
       metadata => {
         bus.send('wt-audio-metadata', infoHash, index, metadata)
