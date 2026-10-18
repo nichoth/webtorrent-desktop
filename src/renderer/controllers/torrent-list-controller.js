@@ -1,6 +1,6 @@
 import path from 'path'
 
-import { dispatch, reportErrors } from '../lib/dispatcher'
+import { dispatch, dropDispatchers, reportErrors } from '../lib/dispatcher'
 import { TorrentKeyNotFoundError } from '../lib/errors'
 import * as os from '../lib/os'
 import * as sound from '../lib/sound'
@@ -234,6 +234,8 @@ export default class TorrentListController {
         this.state.saved.torrentsToResume =
           this.state.saved.torrentsToResume.filter((x) => x !== infoHash)
       }
+      // memoized handlers can name the deleted torrent's files
+      dropDispatchers()
       dispatch('stateSave')
 
       // prevent user from going forward to a deleted torrent
@@ -254,6 +256,7 @@ export default class TorrentListController {
 
     this.state.saved.torrents = []
     this.state.saved.torrentsToResume = []
+    dropDispatchers()
     dispatch('stateSave')
 
     // prevent user from going forward to a deleted torrent

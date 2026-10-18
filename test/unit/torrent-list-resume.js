@@ -6,7 +6,9 @@ const babel = require('@babel/core')
 // The resume list (`state.saved.torrentsToResume`): playback priority
 // pauses the other active torrents and records them there, and they
 // resume when playback ends. A deleted torrent must never be left in
-// it, and a stale entry must never break resuming.
+// it, and a stale entry must never break resuming. Deleting also drops
+// the dispatcher's memoized handlers, which are keyed by arguments that
+// can name the deleted torrent.
 //
 // Controllers are outside `build:node`, so the controller is compiled
 // here and emitted into `build/renderer/controllers/`, where its
@@ -35,7 +37,9 @@ function reset () {
 }
 
 const BUILT = path.join(ROOT, 'build', 'renderer')
-const { setDispatch } = require(path.join(BUILT, 'lib', 'dispatcher'))
+const { setDispatch, dispatcher } = require(
+  path.join(BUILT, 'lib', 'dispatcher')
+)
 
 // Every shim module the controller imports is stubbed, then withdrawn
 // once the controller has bound it, so the real shims stay intact for
@@ -180,5 +184,31 @@ test('prioritizing twice records each paused torrent once', function (t) {
   t.deepEqual(state.saved.torrentsToResume, [hash('b')],
     'the paused torrent is listed once')
   t.equal(b.status, 'paused', 'and it is paused')
+  t.end()
+})
+
+test('deleting a torrent drops the memoized handlers', function (t) {
+  reset()
+  const state = makeState([makeSummary('a', 1, 'paused')])
+  const controller = new TorrentListController(state)
+  const before = dispatcher('toggleSelectTorrent', 1)
+
+  controller.deleteTorrent(hash('a'), false)
+
+  t.notEqual(dispatcher('toggleSelectTorrent', 1), before,
+    'the same arguments get a fresh handler')
+  t.end()
+})
+
+test('deleting all torrents drops the memoized handlers', function (t) {
+  reset()
+  const state = makeState([makeSummary('a', 1, 'paused')])
+  const controller = new TorrentListController(state)
+  const before = dispatcher('toggleSelectTorrent', 1)
+
+  controller.deleteAllTorrents(false)
+
+  t.notEqual(dispatcher('toggleSelectTorrent', 1), before,
+    'the same arguments get a fresh handler')
   t.end()
 })
