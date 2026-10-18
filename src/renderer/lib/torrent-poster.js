@@ -147,8 +147,11 @@ async function runPosterJob (torrentSummary, timeout) {
   }
 
   // What this job holds, so it can let go of all of it if it gives up
-  // while `savePoster` is still waiting on the engine.
-  const job = { unsubscribe: null }
+  // while `savePoster` is still waiting on the engine. `over` is set
+  // once the job has finished or given up: work still in flight checks
+  // it and stops, so a reply that arrives late takes no hold and
+  // writes no poster.
+  const job = { over: false, unsubscribe: null, heldServer: false }
 
   try {
     return await withTimeout(savePoster(torrentSummary, job), timeout)
@@ -157,14 +160,20 @@ async function runPosterJob (torrentSummary, timeout) {
     console.log('error generating poster for %s: %o', infoHash, err)
     return null
   } finally {
+    job.over = true
     if (job.unsubscribe) job.unsubscribe()
-    // Release this job's hold on the server whatever happened. The
-    // engine counts holders, so this does not disturb a player
-    // streaming the same torrent.
-    try {
-      await ipcEngine.stopServer(infoHash)
-    } catch (err) {
-      console.log('error releasing poster server for %s: %o', infoHash, err)
+    job.unsubscribe = null
+
+    // Release this job's hold on the server whatever happened, but only
+    // a hold it took. The engine counts holders, so this does not
+    // disturb a player streaming the same torrent.
+    if (job.heldServer) {
+      try {
+        await ipcEngine.stopServer(infoHash)
+      } catch (err) {
+        console.log('error releasing poster server for %s: %o',
+          infoHash, err)
+      }
     }
   }
 }
@@ -172,7 +181,9 @@ async function runPosterJob (torrentSummary, timeout) {
 async function savePoster (torrentSummary, job) {
   const { infoHash } = torrentSummary
   const serverURL = await startServer(infoHash, job)
+  if (job.over) return null
   const { bytes, extension } = await torrentPoster(torrentSummary, serverURL)
+  if (job.over) return null
 
   const posterFileName = infoHash + extension
   await fs.mkdir(config.POSTER_PATH)
@@ -185,6 +196,9 @@ async function savePoster (torrentSummary, job) {
  * Ask the engine for this torrent's streaming server and wait for its
  * URL. wt-start-server is idempotent per torrent and always replies,
  * so this resolves whether or not a server was already up (ADR-013).
+ *
+ * Records the subscription and the hold on `job`, so the job can undo
+ * both if it gives up first. Asks for nothing once the job is over.
  */
 async function startServer (infoHash, job) {
   try {
@@ -192,7 +206,9 @@ async function startServer (infoHash, job) {
       ipcEngine.onServerRunningFor(
         infoHash, (info) => resolve(info.localURL), { once: true }
       ).then((off) => {
+        if (job.over) return off()
         job.unsubscribe = off
+        job.heldServer = true
         return ipcEngine.startServer(infoHash)
       }).catch(reject)
     })

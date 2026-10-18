@@ -38,6 +38,7 @@ const engineStub = {
   },
   async onServerRunningFor (infoHash, listener, options) {
     record.engine.push(['onServerRunningFor', infoHash, options])
+    if (record.subscribeGate) await record.subscribeGate
     record.serverListeners.push({ infoHash, listener })
     if (record.serverURL != null && !record.silent.includes(infoHash)) {
       setTimeout(() => listener({ localURL: record.serverURL }), 0)
@@ -76,7 +77,9 @@ function reset () {
     frameBytes: new Uint8Array([1, 2, 3]),
     serverURL: null,
     // Info hashes whose server never answers.
-    silent: []
+    silent: [],
+    // When set, subscribing waits on it.
+    subscribeGate: null
   }
 }
 
@@ -389,5 +392,40 @@ test('poster: a timed-out job leaves no server-running subscription',
     t.equal(record.serverListeners.length, 1, 'it did subscribe')
     t.deepEqual(record.unsubscribed, [INFO_HASH],
       'and the subscription was removed when it gave up')
+    t.end()
+  })
+
+test('poster: a timed-out job releases the hold it took',
+  async function (t) {
+    reset()
+    await generateTorrentPoster(VIDEO_TORRENT, SHORT)
+    const calls = record.engine.map((c) => c[0])
+    t.deepEqual(calls.filter((c) => c !== 'onServerRunningFor'),
+      ['startServer', 'stopServer'], 'one hold taken, one released')
+    t.deepEqual(record.engine[calls.indexOf('stopServer')],
+      ['stopServer', INFO_HASH], 'wt-stop-server names the torrent')
+    t.end()
+  })
+
+test('poster: a job that gives up before asking takes no hold later',
+  async function (t) {
+    reset()
+    record.serverURL = 'http://127.0.0.1:4321'
+    let open = null
+    record.subscribeGate = new Promise((resolve) => { open = resolve })
+
+    const name = await generateTorrentPoster(VIDEO_TORRENT, SHORT)
+    t.equal(name, null, 'no poster')
+    t.deepEqual(record.engine.filter((c) => c[0] !== 'onServerRunningFor'),
+      [], 'it never asked, so it released nothing')
+
+    // The subscription lands after the job gave up.
+    open()
+    await delay(20)
+    t.deepEqual(record.engine.filter((c) => c[0] !== 'onServerRunningFor'),
+      [], 'and a late subscription asks for no server')
+    t.deepEqual(record.unsubscribed, [INFO_HASH],
+      'the late subscription was removed')
+    t.deepEqual(record.fs, [], 'nothing was written')
     t.end()
   })
