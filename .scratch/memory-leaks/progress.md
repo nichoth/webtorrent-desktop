@@ -17,7 +17,10 @@ Started: 2026-10-18T01:09:04.866Z
   completed: 2026-10-18T01:19:22.034Z
 - [ ] 05-file-selection-applies-only-changes.md
 - [ ] 06-player-close-cancels-subscriptions-and-holds.md
-- [ ] 07-leaving-player-cancels-external-player-wait.md
+- [x] 07-leaving-player-cancels-external-player-wait.md
+  branch: webtorrent-desktop--memory-leaks-07-leaving-player-cancels-external-player-wait
+  exit: 0
+  completed: 2026-10-18T01:19:27.009Z
 - [ ] 08-poster-job-timeout-releases-everything.md
 - [ ] 09-leaving-player-resets-media-session.md
 - [ ] 10-error-list-stays-bounded.md
