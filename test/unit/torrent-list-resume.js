@@ -124,3 +124,17 @@ test('deleting a torrent removes its info hash from the resume list',
       'only the remaining torrent is left to resume')
     t.end()
   })
+
+test('deleting all torrents leaves the resume list empty', function (t) {
+  reset()
+  const state = makeState([
+    makeSummary('a', 1, 'paused'),
+    makeSummary('b', 2, 'paused')
+  ], [hash('a'), hash('b')])
+  const controller = new TorrentListController(state)
+
+  controller.deleteAllTorrents(false)
+
+  t.deepEqual(state.saved.torrentsToResume, [], 'nothing is left to resume')
+  t.end()
+})

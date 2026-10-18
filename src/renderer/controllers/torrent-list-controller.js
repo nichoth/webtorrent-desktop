@@ -245,6 +245,7 @@ export default class TorrentListController {
     this.state.saved.torrents.forEach((summary) => deleteTorrentFile(summary, deleteData))
 
     this.state.saved.torrents = []
+    this.state.saved.torrentsToResume = []
     dispatch('stateSave')
 
     // prevent user from going forward to a deleted torrent
