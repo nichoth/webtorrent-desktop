@@ -85,6 +85,12 @@ so send it only for a `wt-start-server` this caller actually sent --
 `playback-controller.js` records that in `serverInfoHash`. An
 unmatched stop releases another caller's hold, a poster job's say.
 
+A page `setup` that calls back with an error is never `destroy`ed --
+`location-history` only unloads a page it finished loading -- so
+`closePlayer` does not run for a failed `openPlayer`. Validate before
+acquiring anything (a server hold, a subscription), or release it on
+the error path yourself.
+
 **Every shim call is async, and `dispatch()` re-renders synchronously.**
 `dispatch(action)` calls the handler and then `update()` in the same
 turn, so any state a controller writes inside a `.then()` lands *after*
