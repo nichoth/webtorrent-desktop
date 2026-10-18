@@ -20,8 +20,8 @@ seconds)
 
 **Status:** ready-for-agent
 
-- [ ] A job whose server never answers leaves no server-running
+- [x] A job whose server never answers leaves no server-running
       subscription once it times out
-- [ ] A job that times out sends `wt-stop-server` for the hold it took
-- [ ] A server reply that arrives after the timeout writes no poster
-- [ ] The next queued job still starts after a timed-out one
+- [x] A job that times out sends `wt-stop-server` for the hold it took
+- [x] A server reply that arrives after the timeout writes no poster
+- [x] The next queued job still starts after a timed-out one

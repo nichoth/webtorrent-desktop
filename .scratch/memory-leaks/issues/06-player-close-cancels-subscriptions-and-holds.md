@@ -35,8 +35,8 @@ in both orders)
 
 **Status:** ready-for-agent
 
-- [ ] After the player closes, none of its subscriptions is left,
+- [x] After the player closes, none of its subscriptions is left,
       including ones made by a next or previous file change
-- [ ] A ready or server-running delivery that arrives after close sends
+- [x] A ready or server-running delivery that arrives after close sends
       no `wt-start-server` and changes no playback state
-- [ ] Closing a play that never sent start-server sends no stop-server
+- [x] Closing a play that never sent start-server sends no stop-server
