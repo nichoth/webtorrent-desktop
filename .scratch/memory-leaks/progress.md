@@ -18,7 +18,10 @@ Started: 2026-10-18T01:09:04.866Z
   branch: webtorrent-desktop--memory-leaks-04-audio-metadata-never-leaves-a-stream-open
   exit: 0
   completed: 2026-10-18T01:19:22.034Z
-- [ ] 05-file-selection-applies-only-changes.md
+- [x] 05-file-selection-applies-only-changes.md
+  branch: webtorrent-desktop--memory-leaks-05-file-selection-applies-only-changes
+  exit: 0
+  completed: 2026-10-18T01:25:59.947Z
 - [ ] 06-player-close-cancels-subscriptions-and-holds.md
 - [x] 07-leaving-player-cancels-external-player-wait.md
   branch: webtorrent-desktop--memory-leaks-07-leaving-player-cancels-external-player-wait
