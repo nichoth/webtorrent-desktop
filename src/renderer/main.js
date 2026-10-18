@@ -16,6 +16,7 @@ import ReactDOM from 'react-dom'
 import config, { useHostPaths } from '../config'
 import State from './lib/state'
 import * as sound from './lib/sound'
+import { recordError } from './lib/error-list'
 import * as TorrentPlayer from './lib/torrent-player'
 import { setDispatch, reportErrors } from './lib/dispatcher'
 import * as clipboard from './lib/platform/clipboard'
@@ -539,10 +540,7 @@ function onOpen (files) {
 function onError (err) {
   console.error(err.stack || err)
   sound.play('ERROR')
-  state.errors.push({
-    time: new Date().getTime(),
-    message: err.message || err
-  })
+  recordError(state.errors, err.message || err)
 
   update()
 }

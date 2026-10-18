@@ -9,6 +9,7 @@ import MuiThemeProvider from 'material-ui/styles/MuiThemeProvider'
 import Header from '../components/header'
 
 import * as os from '../lib/os'
+import { isRecent } from '../lib/error-list'
 
 import TorrentListPage from './torrent-list-page'
 import PlayerPage from './player-page'
@@ -92,7 +93,7 @@ class App extends React.Component {
   getErrorPopover () {
     const state = this.props.state
     const now = new Date().getTime()
-    const recentErrors = state.errors.filter((x) => now - x.time < 5000)
+    const recentErrors = state.errors.filter((x) => isRecent(x, now))
     const hasErrors = recentErrors.length > 0
 
     const errorElems = recentErrors.map((error, i) => <div key={i} className='error'>{error.message}</div>)

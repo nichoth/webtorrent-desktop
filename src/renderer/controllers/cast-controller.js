@@ -2,6 +2,7 @@ import * as cast from '../lib/platform/cast'
 import * as CastMirror from '../lib/cast-mirror'
 import { reportErrors } from '../lib/dispatcher'
 import { CastingError } from '../lib/errors'
+import { recordError } from '../lib/error-list'
 
 // Controls remote playback on Chromecast, DLNA and AirPlay receivers.
 //
@@ -149,11 +150,11 @@ export default class CastController {
   }
 
   // Casting failed, at any point: discovery, connecting, or a session
-  // that dropped. Pushed onto `state.errors` the way the old module
+  // that dropped. Recorded in `state.errors` the way the old module
   // did rather than dispatched as an error, so it stays a message in
   // the corner and not an error sound.
   raise (message) {
-    this.state.errors.push({ time: new Date().getTime(), message })
+    recordError(this.state.errors, message)
     this.update()
   }
 }

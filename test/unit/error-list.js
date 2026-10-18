@@ -37,3 +37,26 @@ test('recordError keeps the same array', function (t) {
   t.deepEqual(ref.map((e) => e.message), ['y'])
   t.end()
 })
+
+// Every site that records an error goes through `recordError`, so no
+// source under `src/renderer/` pushes onto `state.errors` directly.
+test('no renderer source pushes to state.errors directly', function (t) {
+  const fs = require('fs')
+  const path = require('path')
+  const root = path.join(__dirname, '..', '..', 'src', 'renderer')
+  const offenders = []
+  ;(function walk (dir) {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, ent.name)
+      if (ent.isDirectory()) walk(p)
+      else if (/\.js$/.test(ent.name)) {
+        const src = fs.readFileSync(p, 'utf8')
+        if (/\.errors\.(push|unshift|splice)\s*\(/.test(src)) {
+          offenders.push(path.relative(root, p))
+        }
+      }
+    }
+  })(root)
+  t.deepEqual(offenders, [], 'no direct pushes')
+  t.end()
+})
