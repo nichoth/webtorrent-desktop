@@ -30,5 +30,5 @@ whole-torrent selection, exactly as today.
 - [ ] A deselect after a repeated select yields exactly one deselect
 - [ ] The first application replaces the default whole-torrent
       selection
-- [ ] `wt-select-files` goes through the diff, and applied selections
+- [x] `wt-select-files` goes through the diff, and applied selections
       are forgotten from the torrent's close handler (source scan)

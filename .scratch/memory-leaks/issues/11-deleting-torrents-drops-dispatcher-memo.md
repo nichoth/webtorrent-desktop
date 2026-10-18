@@ -19,8 +19,8 @@ controller)
 
 **Status:** ready-for-agent
 
-- [ ] Without a drop, `dispatcher` returns the same handler for the same
+- [x] Without a drop, `dispatcher` returns the same handler for the same
       arguments
-- [ ] After a drop, `dispatcher` returns a fresh handler for the same
+- [x] After a drop, `dispatcher` returns a fresh handler for the same
       arguments
-- [ ] Deleting a torrent and deleting all torrents both drop the memo
+- [x] Deleting a torrent and deleting all torrents both drop the memo
