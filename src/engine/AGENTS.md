@@ -202,3 +202,18 @@ An interval that fires once a minute is too slow to drive from a
 spawned sidecar, and a test-only override of it would be production
 code that exists for a test -- so renaming `runSweep` or inlining the
 constant fails that scan instead of going unnoticed.
+
+## `audio-metadata.js`
+
+`readAudioMetadata(file, torrentPath, options, parser)` is the only
+place the engine hands `music-metadata` a file. An unfinished file is
+parsed from `file.createReadStream()`, and that stream holds a piece
+buffer and a high-priority selection until it is destroyed -- the
+library stops reading once it has what it needs but never destroys the
+stream it was given. So the module owns the stream and destroys it once
+the parse settles, either way. Finished files go through `parseFile`,
+which closes its own file. Do not call `mm.parseStream` from `index.js`
+again: `test/unit/engine-audio-metadata-wiring.js` scans for exactly
+that. `parser` defaults to `music-metadata` and is a parameter so
+`test/unit/engine-audio-metadata.js` can drive a real `Readable`
+without audio.
