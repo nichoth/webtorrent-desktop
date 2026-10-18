@@ -1,6 +1,7 @@
 const test = require('tape')
 const { spawn } = require('child_process')
 const fs = require('fs')
+const net = require('net')
 const os = require('os')
 const path = require('path')
 const parseTorrent = require('parse-torrent')
@@ -187,6 +188,196 @@ test('closing the parent pipe shuts the engine down once',
 
     t.end()
   })
+
+// ADR-013 and the shim contract: every `wt-start-server` is one hold,
+// every `wt-stop-server` releases one, and the server dies with its
+// last holder. These drive the real sidecar and judge the outcome the
+// way a player would: does the reported port accept a connection?
+// Every file is deselected and the download directory is empty, so no
+// peer and no download is needed for `ready`.
+
+test('a start and stop that arrive before ready leave no server',
+  async function (t) {
+    await withEngine(t, async ({ send, frames, infoHash, downloadPath }) => {
+      // Missing files verify in a few milliseconds, too fast for the
+      // burst below to land first. A full-length file of zeros has to
+      // be read and hashed piece by piece, and fails every hash, so
+      // the window before ready is wide and nothing is downloaded.
+      const parsed = parseTorrent(await fs.promises.readFile(FIXTURE))
+      for (const file of parsed.files) {
+        const filePath = path.join(downloadPath, file.path)
+        await fs.promises.mkdir(path.dirname(filePath), { recursive: true })
+        await fs.promises.writeFile(filePath, '')
+        await fs.promises.truncate(filePath, file.length)
+      }
+
+      const selections = new Array(SINTEL_FILES).fill(false)
+      send('wt-start-torrenting',
+        [1, FIXTURE, downloadPath, null, selections])
+      await waitFor(
+        () => frames.find((f) => f.channel === 'wt-parsed'), 20000)
+
+      // The torrent is known to the engine but still verifying.
+      const readyBeforeBurst = frames.some((f) => f.channel === 'wt-ready')
+      send('wt-start-server', [infoHash])
+      send('wt-stop-server', [infoHash])
+      t.notOk(readyBeforeBurst, 'the burst was sent before ready')
+
+      await waitFor(
+        () => frames.find((f) => f.channel === 'wt-ready'), 20000)
+      // A server created on ready replies within one listen callback.
+      await delay(1000)
+
+      const replies = frames.filter(
+        (f) => f.channel === 'wt-server-' + infoHash)
+      for (const reply of replies) {
+        t.notOk(await accepts(reply.args[0].localURL),
+          'no server is left listening at ' + reply.args[0].localURL)
+      }
+      t.pass('checked ' + replies.length + ' server replies')
+    })
+  })
+
+test('two starts and two stops leave the port refusing connections',
+  async function (t) {
+    await withEngine(t, async ({ send, frames, infoHash, ready }) => {
+      await ready()
+      const url = await startServer(send, frames, infoHash)
+      await startServer(send, frames, infoHash)
+      send('wt-stop-server', [infoHash])
+      send('wt-stop-server', [infoHash])
+      t.ok(await waitForPort(url, false),
+        'the port refuses connections once both holders release')
+    })
+  })
+
+test('two starts and one stop leave the port accepting connections',
+  async function (t) {
+    await withEngine(t, async ({ send, frames, infoHash, ready }) => {
+      await ready()
+      const url = await startServer(send, frames, infoHash)
+      await startServer(send, frames, infoHash)
+      send('wt-stop-server', [infoHash])
+      // A round trip through the engine, so the stop has been handled.
+      await startServer(send, frames, infoHash)
+      send('wt-stop-server', [infoHash])
+      await delay(200)
+      t.ok(await accepts(url),
+        'the port still accepts connections for the remaining holder')
+    })
+  })
+
+test('a resumed torrent gets a server that accepts connections',
+  async function (t) {
+    await withEngine(t, async ({ send, frames, infoHash, ready }) => {
+      await ready()
+      const first = await startServer(send, frames, infoHash)
+      t.ok(await accepts(first), 'the first server accepts connections')
+
+      // Stop the torrent while it holds a server, with no stop-server.
+      send('wt-stop-torrenting', [infoHash])
+      await ready(2)
+
+      const second = await startServer(send, frames, infoHash)
+      t.ok(await accepts(second),
+        'the resumed torrent\'s server accepts connections at ' + second)
+    })
+  })
+
+const SINTEL_FILES = parseTorrent(fs.readFileSync(FIXTURE)).files.length
+
+// Spawn the sidecar, connect, and hand `body` a sender, the frames
+// received so far, the fixture's info hash and a `ready(key)` helper
+// that starts the fixture under `key` and waits for its `wt-ready`.
+async function withEngine (t, body) {
+  const infoHash = parseTorrent(await fs.promises.readFile(FIXTURE))
+    .infoHash
+  const downloadPath = await fs.promises.mkdtemp(
+    path.join(os.tmpdir(), 'wt-engine-test-')
+  )
+  const child = spawn(process.execPath, [ENTRY], {
+    cwd: REPO,
+    env: { ...process.env, NODE_ENV: 'test', WEBTORRENT_ENGINE_TOKEN: TOKEN },
+    stdio: ['ignore', 'pipe', 'pipe']
+  })
+  const stdout = []
+  const stderr = []
+  child.stdout.setEncoding('utf8')
+  child.stderr.setEncoding('utf8')
+  child.stdout.on('data', (chunk) => stdout.push(chunk))
+  child.stderr.on('data', (chunk) => stderr.push(chunk))
+  const exited = new Promise((resolve) => child.on('exit', resolve))
+
+  let client = null
+  try {
+    const port = await waitFor(() => {
+      const line = stdout.join('').split('\n')
+        .find((l) => l.startsWith('WEBTORRENT_ENGINE_PORT='))
+      return line && Number(line.slice('WEBTORRENT_ENGINE_PORT='.length))
+    }, 20000)
+    client = new WebSocket('ws://127.0.0.1:' + port + '/?token=' + TOKEN)
+    const frames = []
+    client.on('message', (data) => frames.push(decode(data)))
+    await new Promise((resolve, reject) => {
+      client.on('open', resolve)
+      client.on('error', reject)
+    })
+
+    const send = (channel, args) => client.send(encode(channel, args))
+    const ready = async (key = 1) => {
+      const selections = new Array(SINTEL_FILES).fill(false)
+      send('wt-start-torrenting',
+        [key, FIXTURE, downloadPath, null, selections])
+      await waitFor(() => frames.find(
+        (f) => f.channel === 'wt-ready' && f.args[0] === key), 20000)
+    }
+    await body({ send, frames, infoHash, ready, downloadPath })
+  } catch (err) {
+    t.fail(err.message + '\nstdout:\n' + stdout.join('') +
+      '\nstderr:\n' + stderr.join(''))
+  } finally {
+    if (client) client.close()
+    child.kill()
+    await exited
+    await fs.promises.rm(downloadPath, { recursive: true, force: true })
+  }
+  t.end()
+}
+
+// Send one `wt-start-server` and resolve to the URL of the reply it
+// draws -- the first server reply that arrives after it was sent.
+async function startServer (send, frames, infoHash) {
+  const channel = 'wt-server-' + infoHash
+  const seen = frames.filter((f) => f.channel === channel).length
+  send('wt-start-server', [infoHash])
+  const reply = await waitFor(() =>
+    frames.filter((f) => f.channel === channel)[seen], 20000)
+  return reply.args[0].localURL
+}
+
+// Does anything accept a TCP connection at this URL's port?
+function accepts (url) {
+  const { hostname, port } = new URL(url)
+  return new Promise((resolve) => {
+    const socket = net.connect({ host: hostname, port: Number(port) })
+    socket.once('connect', () => { socket.destroy(); resolve(true) })
+    socket.once('error', () => resolve(false))
+  })
+}
+
+// Poll until the port's state is `expected`, or time out to false.
+async function waitForPort (url, expected, timeout = 5000) {
+  const started = Date.now()
+  while (Date.now() - started < timeout) {
+    if (await accepts(url) === expected) return true
+    await delay(50)
+  }
+  return false
+}
+
+function delay (ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
 
 test('the engine entry point names no host or browser API', function (t) {
   const source = fs.readFileSync(ENTRY_SRC, 'utf8')
