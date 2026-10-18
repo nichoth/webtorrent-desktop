@@ -10,7 +10,10 @@ Started: 2026-10-18T01:09:04.866Z
   branch: webtorrent-desktop--memory-leaks-02-engine-forgets-per-torrent-state-on-close
   exit: 0
   completed: 2026-10-18T01:19:16.980Z
-- [ ] 03-server-holds-counted-on-request.md
+- [x] 03-server-holds-counted-on-request.md
+  branch: webtorrent-desktop--memory-leaks-03-server-holds-counted-on-request
+  exit: 0
+  completed: 2026-10-18T01:24:35.772Z
 - [x] 04-audio-metadata-never-leaves-a-stream-open.md
   branch: webtorrent-desktop--memory-leaks-04-audio-metadata-never-leaves-a-stream-open
   exit: 0
