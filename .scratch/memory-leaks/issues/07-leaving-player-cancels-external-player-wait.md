@@ -19,7 +19,7 @@ recipe in `test/AGENTS.md`, prior art
 `test/unit/media-controller-playability.js`; emit under a distinct
 suffix and run alongside the existing controller tests in both orders)
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] Leaving the player before the server reply leaves no
       external-player subscription armed

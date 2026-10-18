@@ -17,7 +17,7 @@ deadline is killed, reaped, and treated as not answering.
 `answers_version`), in-module `#[cfg(test)]` tests (prior art the
 existing tests in `external_player.rs` and its `Sandbox` helper)
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] The VLC probe returns "not answering" within its deadline for a
       command that never exits

@@ -16,7 +16,7 @@ thread-per-event churn goes away.
 unchanged), in-module `#[cfg(test)]` tests (prior art
 `src-tauri/src/ready.rs` and the existing tests in `window.rs`)
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] After a burst of calls, the job runs exactly once
 - [x] The job does not run before the delay has passed since the last

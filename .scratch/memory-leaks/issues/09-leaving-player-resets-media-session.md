@@ -19,9 +19,9 @@ ticket is verified by hand.
 **Touches:** `src/renderer/pages/player-page.js` (the
 `onComponentWillUnmount` hook, `navigator.mediaSession`)
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Manual check: play one file, close the player, play a different
+- [x] Manual check: play one file, close the player, play a different
       file, and the system media controls show the second file's title
-- [ ] Manual check: after closing the player, the main and preview media
+- [x] Manual check: after closing the player, the main and preview media
       elements no longer hold a source

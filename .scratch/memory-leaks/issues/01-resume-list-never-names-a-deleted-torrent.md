@@ -27,10 +27,10 @@ The spec calls this the most visible bug in the audit, so it goes first.
 `test/unit/torrent-list-resume.js` (controller-compile recipe in
 `test/AGENTS.md`, prior art `test/unit/torrent-context-menu.js`)
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] Deleting a torrent removes its info hash from the resume list
-- [ ] Deleting all torrents leaves the resume list empty
-- [ ] Resuming a list that names a missing torrent resumes every other
+- [x] Deleting all torrents leaves the resume list empty
+- [x] Resuming a list that names a missing torrent resumes every other
       torrent in it and leaves the list empty
-- [ ] Prioritizing the same torrent twice adds its info hash once
+- [x] Prioritizing the same torrent twice adds its info hash once

@@ -21,7 +21,7 @@ are unchanged.
 values and a real Node Readable, prior art `test/unit/engine-stall.js`),
 `test/unit/engine-torrent-close-wiring.js` or a sibling wiring scan
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] The stream is destroyed after a parse that resolves
 - [x] The stream is destroyed after a parse that rejects

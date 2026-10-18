@@ -18,7 +18,7 @@ alongside `src/renderer/lib/errors.js`), `src/renderer/main.js`
 window constant, currently 5000 ms), new unit test (prior art
 `test/unit/time.js` and `test/unit/sound.js`)
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] Recording many errors over a span longer than the banner window
       keeps the list bounded

@@ -23,7 +23,7 @@ where a closing torrent is forgotten.
 (source scan in the shape of `test/unit/engine-sweep-wiring.js` and
 `test/unit/engine-hashfail-wiring.js`)
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] Announce times, corrupt-peer counters and stall samples are
       forgotten from the torrent's own close handler, not only from
