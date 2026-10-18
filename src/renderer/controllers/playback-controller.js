@@ -20,6 +20,10 @@ export default class PlaybackController {
     this.state = state
     this.config = config
     this.update = update
+    // Withdraws each engine subscription made for the current play.
+    this.subscriptions = []
+    // The info hash whose server this play asked for, if it did.
+    this.serverInfoHash = null
   }
 
   // Play a file in a torrent.
@@ -261,25 +265,48 @@ export default class PlaybackController {
   // Starts WebTorrent server for media streaming
   startServer (torrentSummary) {
     const state = this.state
+    // `closePlayer` replaces `state.playing`, so a delivery that races
+    // the close finds a different object and leaves it alone.
+    const playing = state.playing
 
-    if (torrentSummary.status === 'paused') {
-      dispatch('startTorrentingSummary', torrentSummary.torrentKey)
-      reportErrors(ipcEngine.onTorrentReadyFor(
-        torrentSummary.infoHash, () => onTorrentReady(), { once: true }))
-    } else {
-      onTorrentReady()
-    }
-
-    function onTorrentReady () {
+    const onTorrentReady = () => {
+      if (state.playing !== playing) return
       // Addressed by info hash: since ADR-013 poster generation starts
       // servers too, so the broadcast channel can carry a server for a
       // torrent the user is not watching.
-      reportErrors(ipcEngine.onServerRunningFor(
+      this.keepSubscription(ipcEngine.onServerRunningFor(
         torrentSummary.infoHash,
-        () => { state.playing.isReady = true },
+        () => {
+          if (state.playing === playing) playing.isReady = true
+        },
         { once: true }))
+      this.serverInfoHash = torrentSummary.infoHash
       reportErrors(ipcEngine.startServer(torrentSummary.infoHash))
     }
+
+    if (torrentSummary.status === 'paused') {
+      dispatch('startTorrentingSummary', torrentSummary.torrentKey)
+      this.keepSubscription(ipcEngine.onTorrentReadyFor(
+        torrentSummary.infoHash, onTorrentReady, { once: true }))
+    } else {
+      onTorrentReady()
+    }
+  }
+
+  // Holds on to a subscription made for the current play, so
+  // `closePlayer` can withdraw it -- even if the close arrives before
+  // the shim has handed back the unsubscribe.
+  keepSubscription (subscribing) {
+    let cancelled = false
+    let unsubscribe = null
+    this.subscriptions.push(() => {
+      cancelled = true
+      if (unsubscribe) unsubscribe()
+    })
+    reportErrors(subscribing.then((unsub) => {
+      if (cancelled) unsub()
+      else unsubscribe = unsub
+    }))
   }
 
   // Called each time the current file changes
@@ -318,15 +345,17 @@ export default class PlaybackController {
     state.playing.jumpToTime = jumpToTime
 
     // if it's audio, parse out the metadata (artist, title, etc)
+    const playing = state.playing
     if (torrentSummary.status === 'paused') {
-      reportErrors(ipcEngine.onTorrentReadyFor(
+      this.keepSubscription(ipcEngine.onTorrentReadyFor(
         torrentSummary.infoHash, getAudioMetadata, { once: true }))
     } else {
       getAudioMetadata()
     }
 
     function getAudioMetadata () {
-      if (state.playing.type === 'audio') {
+      if (state.playing !== playing) return
+      if (playing.type === 'audio') {
         reportErrors(
           ipcEngine.getAudioMetadata(torrentSummary.infoHash, index))
       }
@@ -375,12 +404,11 @@ export default class PlaybackController {
     // A wait for the server to open the external player is over too.
     dispatch('playerClosed')
 
+    // So is every wait this play made on the engine.
+    this.subscriptions.splice(0).forEach((cancel) => cancel())
+
     // Save volume (this session only, not in state.saved)
     state.previousVolume = state.playing.volume
-
-    // wt-stop-server is per-torrent since ADR-013, so the info hash
-    // has to be read before the play state is reset below.
-    const playingInfoHash = state.playing.infoHash
 
     // Reset the window contents back to the home screen
     state.playing = State.getDefaultPlayState()
@@ -392,8 +420,13 @@ export default class PlaybackController {
     }
     restoreBounds(state)
 
-    // Release our hold on the torrent-to-HTTP server
-    reportErrors(ipcEngine.stopServer(playingInfoHash))
+    // Release our hold on the torrent-to-HTTP server, if this play took
+    // one. Sending a stop it never matched would release someone else's
+    // hold -- a poster job's, say (ADR-013 counts holders per torrent).
+    if (this.serverInfoHash !== null) {
+      reportErrors(ipcEngine.stopServer(this.serverInfoHash))
+      this.serverInfoHash = null
+    }
 
     reportErrors(ipcOs.notifyPlayerClose())
 

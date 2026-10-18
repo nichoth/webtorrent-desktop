@@ -408,9 +408,14 @@ test('closing the player stops the server through the shim',
       window: { isFullScreen: false, bounds: null },
       saved: { prefs: {} }
     }
-    new PlaybackController(state, {}, () => {}).closePlayer()
+    // Only a play that took a hold releases one.
+    const controller = new PlaybackController(state, {}, () => {})
+    controller.startServer({
+      infoHash: 'abc', torrentKey: 'k', status: 'downloading'
+    })
+    controller.closePlayer()
     await flush()
-    t.deepEqual(record.engine, [['stopServer', 'abc']],
+    t.deepEqual(record.engine, [['startServer', 'abc'], ['stopServer', 'abc']],
       'the server is released by info hash')
     t.end()
   })

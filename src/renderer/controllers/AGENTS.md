@@ -76,7 +76,14 @@ cancelled and call the unsubscribe as soon as it arrives. The listener
 should also check that the thing it was armed for is still current
 (`state.playing` is replaced on close), because a delivery can race
 the withdrawal. `openExternalPlayer` in `media-controller.js` is the
-worked example.
+worked example. `playback-controller.js` keeps every wait a play makes
+through `keepSubscription()`, and `closePlayer` withdraws them all; a
+new one-shot subscription for a play goes through it too.
+
+`wt-stop-server` releases one holder of a torrent's server (ADR-013),
+so send it only for a `wt-start-server` this caller actually sent --
+`playback-controller.js` records that in `serverInfoHash`. An
+unmatched stop releases another caller's hold, a poster job's say.
 
 **Every shim call is async, and `dispatch()` re-renders synchronously.**
 `dispatch(action)` calls the handler and then `update()` in the same
