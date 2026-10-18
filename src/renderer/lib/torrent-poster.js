@@ -120,13 +120,16 @@ export default async function torrentPoster (torrentSummary, serverURL) {
  * are serialized, so this may not start immediately.
  *
  * @param {{infoHash: string, files: object[]}} torrentSummary
+ * @param {{timeout?: number}} [opts] `timeout` overrides how long a job
+ *   may run before it gives up, in ms. For tests.
  * @returns {Promise<string|null>} The poster's file name, or `null` if
  *   no poster could be made.
  */
-export function generateTorrentPoster (torrentSummary) {
+export function generateTorrentPoster (torrentSummary, opts = {}) {
+  const timeout = opts.timeout || JOB_TIMEOUT
   const job = queue.then(
-    () => runPosterJob(torrentSummary),
-    () => runPosterJob(torrentSummary)
+    () => runPosterJob(torrentSummary, timeout),
+    () => runPosterJob(torrentSummary, timeout)
   )
   // The queue must survive a failed job, and a rejection here is
   // already reported by `runPosterJob`.
@@ -134,7 +137,7 @@ export function generateTorrentPoster (torrentSummary) {
   return job
 }
 
-async function runPosterJob (torrentSummary) {
+async function runPosterJob (torrentSummary, timeout) {
   const { infoHash } = torrentSummary
 
   // Nothing needs a server if nothing can be made from the torrent.
@@ -143,13 +146,18 @@ async function runPosterJob (torrentSummary) {
     return null
   }
 
+  // What this job holds, so it can let go of all of it if it gives up
+  // while `savePoster` is still waiting on the engine.
+  const job = { unsubscribe: null }
+
   try {
-    return await withTimeout(savePoster(torrentSummary), JOB_TIMEOUT)
+    return await withTimeout(savePoster(torrentSummary, job), timeout)
   } catch (err) {
     // Same silence the engine kept: log it, leave the placeholder.
     console.log('error generating poster for %s: %o', infoHash, err)
     return null
   } finally {
+    if (job.unsubscribe) job.unsubscribe()
     // Release this job's hold on the server whatever happened. The
     // engine counts holders, so this does not disturb a player
     // streaming the same torrent.
@@ -161,9 +169,9 @@ async function runPosterJob (torrentSummary) {
   }
 }
 
-async function savePoster (torrentSummary) {
+async function savePoster (torrentSummary, job) {
   const { infoHash } = torrentSummary
-  const serverURL = await startServer(infoHash)
+  const serverURL = await startServer(infoHash, job)
   const { bytes, extension } = await torrentPoster(torrentSummary, serverURL)
 
   const posterFileName = infoHash + extension
@@ -178,19 +186,19 @@ async function savePoster (torrentSummary) {
  * URL. wt-start-server is idempotent per torrent and always replies,
  * so this resolves whether or not a server was already up (ADR-013).
  */
-async function startServer (infoHash) {
-  let unsubscribe = null
+async function startServer (infoHash, job) {
   try {
     return await new Promise((resolve, reject) => {
       ipcEngine.onServerRunningFor(
         infoHash, (info) => resolve(info.localURL), { once: true }
       ).then((off) => {
-        unsubscribe = off
+        job.unsubscribe = off
         return ipcEngine.startServer(infoHash)
       }).catch(reject)
     })
   } finally {
-    if (unsubscribe) unsubscribe()
+    if (job.unsubscribe) job.unsubscribe()
+    job.unsubscribe = null
   }
 }
 

@@ -39,7 +39,7 @@ const engineStub = {
   async onServerRunningFor (infoHash, listener, options) {
     record.engine.push(['onServerRunningFor', infoHash, options])
     record.serverListeners.push({ infoHash, listener })
-    if (record.serverURL != null) {
+    if (record.serverURL != null && !record.silent.includes(infoHash)) {
       setTimeout(() => listener({ localURL: record.serverURL }), 0)
     }
     return () => record.unsubscribed.push(infoHash)
@@ -74,7 +74,9 @@ function reset () {
     captured: [],
     captureFails: false,
     frameBytes: new Uint8Array([1, 2, 3]),
-    serverURL: null
+    serverURL: null,
+    // Info hashes whose server never answers.
+    silent: []
   }
 }
 
@@ -370,3 +372,22 @@ test('poster: jobs run one at a time', async function (t) {
     'the second job started only after the first released')
   t.end()
 })
+
+// -- a job that times out ---------------------------------------------
+
+// A server that never answers wedges nothing: the job gives up after
+// its timeout. Injected short here, never a real 60 seconds.
+const SHORT = { timeout: 30 }
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
+
+test('poster: a timed-out job leaves no server-running subscription',
+  async function (t) {
+    reset()
+    const name = await generateTorrentPoster(VIDEO_TORRENT, SHORT)
+    t.equal(name, null, 'no poster')
+    t.equal(record.serverListeners.length, 1, 'it did subscribe')
+    t.deepEqual(record.unsubscribed, [INFO_HASH],
+      'and the subscription was removed when it gave up')
+    t.end()
+  })
