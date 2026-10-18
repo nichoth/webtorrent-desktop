@@ -22,7 +22,10 @@ Started: 2026-10-18T01:09:04.866Z
   branch: webtorrent-desktop--memory-leaks-05-file-selection-applies-only-changes
   exit: 0
   completed: 2026-10-18T01:25:59.947Z
-- [ ] 06-player-close-cancels-subscriptions-and-holds.md
+- [x] 06-player-close-cancels-subscriptions-and-holds.md
+  branch: webtorrent-desktop--memory-leaks-06-player-close-cancels-subscriptions-and-holds
+  exit: 0
+  completed: 2026-10-18T01:29:54.567Z
 - [x] 07-leaving-player-cancels-external-player-wait.md
   branch: webtorrent-desktop--memory-leaks-07-leaving-player-cancels-external-player-wait
   exit: 0
