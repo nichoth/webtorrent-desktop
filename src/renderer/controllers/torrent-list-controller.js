@@ -220,6 +220,12 @@ export default class TorrentListController {
 
       // remove torrent from saved list
       this.state.saved.torrents.splice(index, 1)
+
+      // a deleted torrent must never be resumed after playback
+      if (this.state.saved.torrentsToResume) {
+        this.state.saved.torrentsToResume =
+          this.state.saved.torrentsToResume.filter((x) => x !== infoHash)
+      }
       dispatch('stateSave')
 
       // prevent user from going forward to a deleted torrent
