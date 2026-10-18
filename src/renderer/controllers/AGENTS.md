@@ -88,3 +88,9 @@ something else, which re-renders on its own. And always terminate the
 promise. For fire-and-forget calls that is `reportErrors(...)` from
 `lib/dispatcher`, which is `.catch(err => dispatch('error', err))` in
 one call; a floating rejection is invisible.
+
+**Record user-facing errors with `recordError` from
+`lib/error-list.js`**, never `state.errors.push(...)`. It drops errors
+older than the banner window (`ERROR_WINDOW_MS`, which `pages/app.js`
+uses to filter) so the list stays bounded. `test/unit/error-list.js`
+scans `src/renderer/` and fails on a direct push.
