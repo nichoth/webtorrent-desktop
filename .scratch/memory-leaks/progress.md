@@ -31,5 +31,8 @@ Started: 2026-10-18T01:09:04.866Z
   exit: 0
   completed: 2026-10-18T01:19:34.829Z
 - [ ] 11-deleting-torrents-drops-dispatcher-memo.md
-- [ ] 12-window-bounds-debounce-one-thread.md
+- [x] 12-window-bounds-debounce-one-thread.md
+  branch: webtorrent-desktop--memory-leaks-12-window-bounds-debounce-one-thread
+  exit: 0
+  completed: 2026-10-18T01:19:37.867Z
 - [ ] 13-external-player-never-strands-a-child.md
