@@ -35,4 +35,7 @@ Started: 2026-10-18T01:09:04.866Z
   branch: webtorrent-desktop--memory-leaks-12-window-bounds-debounce-one-thread
   exit: 0
   completed: 2026-10-18T01:19:37.867Z
-- [ ] 13-external-player-never-strands-a-child.md
+- [x] 13-external-player-never-strands-a-child.md
+  branch: webtorrent-desktop--memory-leaks-13-external-player-never-strands-a-child
+  exit: 0
+  completed: 2026-10-18T01:19:43.336Z
