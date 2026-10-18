@@ -167,7 +167,10 @@ export default class TorrentListController {
         // Pause torrent without playing sounds.
         this.pauseTorrent(torrent, false)
 
-        this.state.saved.torrentsToResume.push(torrent.infoHash)
+        const toResume = this.state.saved.torrentsToResume
+        if (!toResume.includes(torrent.infoHash)) {
+          toResume.push(torrent.infoHash)
+        }
       })
 
     console.log('Playback Priority: paused torrents: ', this.state.saved.torrentsToResume)

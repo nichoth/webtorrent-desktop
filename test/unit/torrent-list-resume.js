@@ -163,3 +163,22 @@ test('resuming skips a missing torrent and resumes the rest',
     t.deepEqual(state.saved.torrentsToResume, [], 'the list is reset')
     t.end()
   })
+
+test('prioritizing twice records each paused torrent once', function (t) {
+  reset()
+  const a = makeSummary('a', 1, 'downloading')
+  const b = makeSummary('b', 2, 'downloading')
+  const state = makeState([a, b])
+  const controller = new TorrentListController(state)
+
+  controller.prioritizeTorrent(hash('a'))
+  // The user starts 'b' again by hand while 'a' is still playing, then
+  // plays 'a' again.
+  b.status = 'downloading'
+  controller.prioritizeTorrent(hash('a'))
+
+  t.deepEqual(state.saved.torrentsToResume, [hash('b')],
+    'the paused torrent is listed once')
+  t.equal(b.status, 'paused', 'and it is paused')
+  t.end()
+})
