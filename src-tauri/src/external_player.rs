@@ -513,9 +513,14 @@ where
                         Some(status.success())
                     }
                     Ok(None) => None,
+                    // Dropping a `Child` neither kills nor reaps it, so
+                    // a player we cannot wait on is ended rather than
+                    // left behind as a zombie.
                     Err(err) => {
                         eprintln!("external player: could not wait for it: {err}");
-                        state.child = None;
+                        if let Some(child) = state.child.take() {
+                            end(child);
+                        }
                         Some(false)
                     }
                 },
