@@ -9,6 +9,8 @@ import { unsupportedMediaMessage } from '../lib/media-playability'
 export default class MediaController {
   constructor (state) {
     this.state = state
+    // Withdraws the external player's "server running" wait, if any
+    this.cancelServerWait = noop
   }
 
   // Dispatched by the <video>/<audio> tag; nothing to do, but the dispatcher
@@ -73,10 +75,14 @@ export default class MediaController {
 
   openExternalPlayer () {
     const state = this.state
-    state.playing.location = 'external'
+    const playing = state.playing
+    playing.location = 'external'
 
     const onServerRunning = () => {
-      state.playing.isReady = true
+      // The user may have left the player while the server was coming
+      // up; that play is over, and its URL with it.
+      if (state.playing !== playing) return
+      playing.isReady = true
 
       const mediaURL = Playlist.getCurrentLocalURL(state)
       reportErrors(ipcOs.openExternalPlayer(
@@ -85,13 +91,30 @@ export default class MediaController {
         state.window.title))
     }
 
-    if (state.server != null) onServerRunning()
-    else {
-      // Addressed by info hash: since ADR-013 the broadcast channel can
-      // carry a server started for poster generation.
-      reportErrors(ipcEngine.onServerRunningFor(
-        state.playing.infoHash, onServerRunning, { once: true }))
+    if (state.server != null) return onServerRunning()
+
+    // Addressed by info hash: since ADR-013 the broadcast channel can
+    // carry a server started for poster generation.
+    this.cancelServerWait()
+    let cancelled = false
+    let unsubscribe = null
+    this.cancelServerWait = () => {
+      cancelled = true
+      if (unsubscribe) unsubscribe()
+      this.cancelServerWait = noop
     }
+    reportErrors(ipcEngine.onServerRunningFor(
+      playing.infoHash, onServerRunning, { once: true }
+    ).then((unsub) => {
+      // Leaving before the shim answered: withdraw it now.
+      if (cancelled) unsub()
+      else unsubscribe = unsub
+    }))
+  }
+
+  // Dispatched by the playback controller as the player closes.
+  playerClosed () {
+    this.cancelServerWait()
   }
 
   externalPlayerNotFound () {
@@ -101,3 +124,5 @@ export default class MediaController {
     }
   }
 }
+
+function noop () {}

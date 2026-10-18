@@ -372,6 +372,8 @@ export default class PlaybackController {
     if (state.playing.location === 'external') {
       reportErrors(ipcOs.quitExternalPlayer())
     }
+    // A wait for the server to open the external player is over too.
+    dispatch('playerClosed')
 
     // Save volume (this session only, not in state.saved)
     state.previousVolume = state.playing.volume

@@ -300,6 +300,7 @@ const dispatchHandlers = {
   mediaControlsMouseLeave: () => controllers.media().controlsMouseLeave(),
   openExternalPlayer: () => controllers.media().openExternalPlayer(),
   externalPlayerNotFound: () => controllers.media().externalPlayerNotFound(),
+  playerClosed: () => controllers.media().playerClosed(),
 
   // Remote casting: Chromecast, Airplay, etc
   toggleCastMenu: (deviceType) => controllers.cast().toggleMenu(deviceType),

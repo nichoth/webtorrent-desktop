@@ -415,6 +415,20 @@ test('closing the player stops the server through the shim',
     t.end()
   })
 
+test('closing the player ends the external player\'s server wait',
+  function (t) {
+    reset()
+    const state = {
+      playing: { location: 'external', volume: 1, infoHash: 'abc' },
+      window: { isFullScreen: false, bounds: null },
+      saved: { prefs: {} }
+    }
+    new PlaybackController(state, {}, () => {}).closePlayer()
+    t.deepEqual(record.dispatches.filter((d) => d[0] === 'playerClosed'),
+      [['playerClosed']], 'the media controller is told')
+    t.end()
+  })
+
 // -- media-controller ------------------------------------------------
 
 test('with no server yet, the external player waits through the shim',
