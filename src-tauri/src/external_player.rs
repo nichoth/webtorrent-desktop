@@ -53,6 +53,11 @@ pub const MODAL_DELAY: Duration = Duration::from_millis(1000);
 /// closely [`MODAL_DELAY`] is honoured.
 const POLL: Duration = Duration::from_millis(25);
 
+/// How long a `--version` probe may take before the candidate is
+/// treated as not answering. `vlc --version` prints and exits at once;
+/// this only has to outlast a cold start on a loaded machine.
+const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// The two registry keys `vlc-command` reads on Windows: the second is
 /// where a 32-bit VLC lands on a 64-bit Windows.
 pub const VLC_REGISTRY_KEYS: [&str; 2] = [
@@ -282,15 +287,35 @@ impl Vlc for Lookup {
 
 /// Whether a candidate is really there: `cp.exec(cmd + ' --version')`.
 fn answers_version(candidate: &Launch) -> bool {
-    Command::new(&candidate.program)
+    answers_version_within(candidate, PROBE_TIMEOUT)
+}
+
+/// [`answers_version`] with its deadline as a parameter. A candidate
+/// still running at the deadline is killed, reaped and counted as not
+/// answering, so a hung one never strands the lookup's thread.
+fn answers_version_within(candidate: &Launch, timeout: Duration) -> bool {
+    let spawned = Command::new(&candidate.program)
         .args(&candidate.args)
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()
-        .map(|status| status.success())
-        .unwrap_or(false)
+        .spawn();
+    let Ok(mut child) = spawned else {
+        return false;
+    };
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if Instant::now() < deadline => thread::sleep(POLL),
+            Ok(None) | Err(_) => {
+                end(child);
+                return false;
+            }
+        }
+    }
 }
 
 /// One `reg query`, parsed.
@@ -1011,6 +1036,49 @@ mod tests {
     fn vlc_being_there_is_what_the_modal_offers() {
         let sandbox = Sandbox::new("installed");
         assert!(player(found(&sandbox.player("process.exit(0)"))).installed(None));
+    }
+
+    /// A candidate that hangs on `--version` must not strand the
+    /// lookup's thread: past the deadline it is killed, reaped and
+    /// treated as not answering.
+    #[test]
+    fn a_candidate_that_never_answers_is_not_vlc_once_the_deadline_passes() {
+        let sandbox = Sandbox::new("probe-hangs");
+        let pid = sandbox.path("pid");
+        let script = sandbox.player(&format!(
+            "require('fs').writeFileSync({pid:?}, String(process.pid))\n{STAYS_UP}"
+        ));
+        let candidate = Launch {
+            program: PathBuf::from("node"),
+            args: vec![script.to_string_lossy().into_owned()],
+        };
+
+        // Long enough for Node to start and write its pid.
+        let deadline = Duration::from_millis(1500);
+        let started = Instant::now();
+        let answered = answers_version_within(&candidate, deadline);
+        let took = started.elapsed();
+
+        assert!(!answered);
+        assert!(
+            took < deadline + Duration::from_secs(2),
+            "probe took {took:?}"
+        );
+        let pid: u32 = fs::read_to_string(&pid).unwrap().parse().unwrap();
+        assert!(!is_alive(pid), "the hung candidate was left running");
+    }
+
+    #[test]
+    fn a_candidate_that_answers_in_time_is_vlc() {
+        let sandbox = Sandbox::new("probe-answers");
+        let candidate = Launch {
+            program: PathBuf::from("node"),
+            args: vec![sandbox
+                .player("process.exit(0)")
+                .to_string_lossy()
+                .into_owned()],
+        };
+        assert!(answers_version_within(&candidate, Duration::from_secs(5)));
     }
 
     #[test]
