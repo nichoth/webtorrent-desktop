@@ -6,7 +6,10 @@ Started: 2026-10-18T01:09:04.866Z
   branch: webtorrent-desktop--memory-leaks-01-resume-list-never-names-a-deleted-torrent
   exit: 0
   completed: 2026-10-18T01:19:03.133Z
-- [ ] 02-engine-forgets-per-torrent-state-on-close.md
+- [x] 02-engine-forgets-per-torrent-state-on-close.md
+  branch: webtorrent-desktop--memory-leaks-02-engine-forgets-per-torrent-state-on-close
+  exit: 0
+  completed: 2026-10-18T01:19:16.980Z
 - [ ] 03-server-holds-counted-on-request.md
 - [ ] 04-audio-metadata-never-leaves-a-stream-open.md
 - [ ] 05-file-selection-applies-only-changes.md
