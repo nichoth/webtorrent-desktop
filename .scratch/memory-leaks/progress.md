@@ -11,7 +11,10 @@ Started: 2026-10-18T01:09:04.866Z
   exit: 0
   completed: 2026-10-18T01:19:16.980Z
 - [ ] 03-server-holds-counted-on-request.md
-- [ ] 04-audio-metadata-never-leaves-a-stream-open.md
+- [x] 04-audio-metadata-never-leaves-a-stream-open.md
+  branch: webtorrent-desktop--memory-leaks-04-audio-metadata-never-leaves-a-stream-open
+  exit: 0
+  completed: 2026-10-18T01:19:22.034Z
 - [ ] 05-file-selection-applies-only-changes.md
 - [ ] 06-player-close-cancels-subscriptions-and-holds.md
 - [ ] 07-leaving-player-cancels-external-player-wait.md
