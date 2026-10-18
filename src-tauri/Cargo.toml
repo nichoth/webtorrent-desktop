@@ -5,7 +5,7 @@ name = "webtorrent-desktop"
 # drift teeth -- this names the .app and the .dmg while package.json's
 # reaches the sidecar's peer ID -- so `test/unit/tauri-host.js` checks
 # that the two agree.
-version = "0.25.4"
+version = "0.25.5"
 description = "Streaming torrent client"
 authors = ["WebTorrent, LLC"]
 license = "MIT"
