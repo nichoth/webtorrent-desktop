@@ -732,6 +732,30 @@ mod tests {
         );
     }
 
+    /// The delay counts from the last call, not the first: a drag that
+    /// lasts longer than the delay is still one burst.
+    #[test]
+    fn a_burst_longer_than_the_delay_waits_for_its_last_call() {
+        let runs = Arc::new(AtomicUsize::new(0));
+        let debounce = Debounce::new(Duration::from_millis(60));
+
+        for _ in 0..12 {
+            let runs = Arc::clone(&runs);
+            debounce.call(move || {
+                runs.fetch_add(1, Ordering::SeqCst);
+            });
+            std::thread::sleep(Duration::from_millis(15));
+        }
+
+        assert_eq!(
+            runs.load(Ordering::SeqCst),
+            0,
+            "the job ran before the delay had passed since the last call"
+        );
+        std::thread::sleep(Duration::from_millis(250));
+        assert_eq!(runs.load(Ordering::SeqCst), 1);
+    }
+
     /// A drag emits hundreds of events, and a thread per event is the
     /// churn the debounce exists to avoid. Every job, burst after
     /// burst, runs on the one worker.
