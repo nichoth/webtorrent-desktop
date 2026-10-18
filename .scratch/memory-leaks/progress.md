@@ -30,7 +30,10 @@ Started: 2026-10-18T01:09:04.866Z
   branch: webtorrent-desktop--memory-leaks-07-leaving-player-cancels-external-player-wait
   exit: 0
   completed: 2026-10-18T01:19:27.009Z
-- [ ] 08-poster-job-timeout-releases-everything.md
+- [x] 08-poster-job-timeout-releases-everything.md
+  branch: webtorrent-desktop--memory-leaks-08-poster-job-timeout-releases-everything
+  exit: 0
+  completed: 2026-10-18T01:29:57.553Z
 - [x] 09-leaving-player-resets-media-session.md
   branch: webtorrent-desktop--memory-leaks-09-leaving-player-resets-media-session
   exit: 0
