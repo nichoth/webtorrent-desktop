@@ -1,0 +1,272 @@
+<!-- nightralph:entry ticket=memory-leaks:9 attempt=1 outcome=done -->
+## 2026-10-17 18:11 -- memory-leaks/09 attempt 1 -- done
+
+Effort: medium. Agent exit: 0. Subagents: 0. Cost: $0.47. Checked items: none.
+
+### Agent notes
+# Ticket 09: leaving the player resets the media session
+
+## Implemented
+- `src/renderer/pages/player-page.js`: renamed the misnamed
+  `onComponentWillUnmount` to React's `componentWillUnmount`. It now
+  unloads every `audio,video` element (the main element and
+  `video#preview`): pause, removeAttribute('src'), load(). The old code
+  only handled the first match, and `src = ''` makes the element try to
+  load the page URL.
+- It also resets `navigator.mediaSession.metadata` to null and clears
+  the play/pause/nexttrack/previoustrack action handlers
+  (`MEDIA_SESSION_ACTIONS`). renderMedia() registers next and previous
+  only when the playlist has them, so a handler left over from the
+  last play would otherwise stick. Each setActionHandler call sits in
+  a try block because an engine may throw on an action it does not
+  support. The metadata reset no longer depends on a media tag being
+  found (the old code returned early before it).
+
+## Testing decision
+- No automated test was written. The spec's Testing Decisions list the
+  player page lifecycle as "Not automated" (pages are Vite-only and
+  cannot be required in the unit suite), and the ticket says it is
+  verified by hand. I chose not to add a source-scan test for the hook
+  name, because the spec rules out automating this.
+- `npm test` (lint + depcheck + build + 4224 unit tests) passes.
+
+## Manual checks (not run here, so they need a human with the app)
+- Play one file, close the player, play a different file: the system
+  media controls should show the second file's title.
+- After closing the player, the main and preview media elements no
+  longer hold a source.
+
+---
+<!-- nightralph:entry ticket=memory-leaks:4 attempt=1 outcome=done -->
+## 2026-10-17 18:12 -- memory-leaks/04 attempt 1 -- done
+
+Effort: medium. Agent exit: 0. Subagents: 0. Cost: $0.74. Checked items: "The stream is destroyed after a parse that resolves", "The stream is destroyed after a parse that rejects", "`wt-get-audio-metadata` reads through the new module (source scan)".
+
+### Agent notes
+# Ticket 04 notes
+
+## Items 1 and 2 (stream destroyed after resolve / reject)
+- New `src/engine/audio-metadata.js`: `readAudioMetadata(file, torrentPath,
+  options, parser = mm)`. Finished files -> `parser.parseFile(path)`;
+  unfinished -> `parser.parseStream(stream).finally(() => stream.destroy())`.
+- Parser injected so `test/unit/engine-audio-metadata.js` uses a real
+  Readable and a fake parser. Both items share one module, so they landed
+  in one red -> green cycle and one commit.
+
+## Item 3 (wiring scan)
+- `src/engine/index.js`: `getAudioMetadata` calls `readAudioMetadata(file,
+  torrent.path, options)`; dropped the direct `music-metadata` import.
+  Reply channel and silence-on-failure (console.log only) unchanged.
+- New sibling scan `test/unit/engine-audio-metadata-wiring.js` (chose a
+  sibling rather than `engine-torrent-close-wiring.js`, which does not
+  exist yet on this branch).
+- Added an `audio-metadata.js` section to `src/engine/AGENTS.md`.
+- Full `npm test` passed: 4268/4268, lint clean.
+
+---
+<!-- nightralph:entry ticket=memory-leaks:2 attempt=1 outcome=done -->
+## 2026-10-17 18:13 -- memory-leaks/02 attempt 1 -- done
+
+Effort: medium. Agent exit: 0. Subagents: 0. Cost: $0.91. Checked items: "Announce times, corrupt-peer counters and stall samples are forgotten from the torrent's own close handler, not only from stop-torrenting (source scan)", "A torrent that closed and is started again under the same info hash does not report as stalled on its first progress update".
+
+### Agent notes
+# Ticket 02: engine forgets per-torrent state on close
+
+## Implemented
+- `src/engine/index.js`: `addTorrentEvents` installs
+  `torrent.once('close', torrentClose)`. `torrentClose` reads
+  `torrent.infoHash` and deletes `lastAnnounceAt`, `corruptPeerStats`
+  and `stalls.forget`. `stopTorrenting` no longer repeats the cleanup;
+  `torrent.destroy()` emits `close` synchronously.
+- Guard: `if (client.get(infoHash)) return`. WebTorrent 1.9.7 destroys a
+  duplicate add after assigning the live torrent's infoHash
+  (`_infoHash` event), and `_destroy` calls `client._remove(this)`
+  before `emit('close')`, so a hit at close time is a different live
+  torrent. Without the guard a duplicate start-torrenting would wipe the
+  live torrent's stall/announce/corrupt state.
+- New test `test/unit/engine-torrent-close-wiring.js` (source scan).
+- `src/engine/AGENTS.md`: new section on the close handler; removed the
+  stale "orphans are inert" paragraph.
+
+## How the ACs were read
+- AC1 (source scan): covered directly by the new wiring test.
+- AC2 ("resumed torrent not stalled on first progress update"): the
+  behaviour of a forgotten key is already pinned against plain values in
+  `test/unit/engine-stall.js` ("a forgotten torrent starts over"); the
+  new scan pins that the close handler is what forgets. A real sidecar
+  test would need a 60s stall per case and a way to trigger a fatal
+  torrent error, so it was not automated. Same code change satisfies
+  both items, so they share one commit.
+
+## For tickets 03 and 05
+- Add server-entry and selection cleanup inside `torrentClose`, after
+  the duplicate guard. The scan asserts exactly one
+  `.on/.once('close', torrentClose)` exists.
+- Existing `engine-hashfail-wiring.js` pins the literal
+  `corruptPeerStats.delete(infoHash)` and `stalls.forget(infoHash)`, so
+  the handler binds a local `infoHash`.
+
+---
+<!-- nightralph:entry ticket=memory-leaks:1 attempt=1 outcome=done -->
+## 2026-10-17 18:13 -- memory-leaks/01 attempt 1 -- done
+
+Effort: medium. Agent exit: 0. Subagents: 0. Cost: $0.98. Checked items: "Deleting a torrent removes its info hash from the resume list".
+
+### Agent notes
+# Notes: 01 resume list never names a deleted torrent
+
+## Item 1: delete removes info hash from resume list
+- `deleteTorrent` filters `state.saved.torrentsToResume`.
+- Test: `test/unit/torrent-list-resume.js` (controller compiled under
+  `.resume-test.js` suffix; all shim modules stubbed then withdrawn).
+
+## Item 2: delete all empties the resume list
+- `deleteAllTorrents` sets `torrentsToResume = []`.
+
+## Item 3: resuming skips missing torrents and resets the list
+- `resumePausedTorrents` snapshots the list, resets it before the loop
+  (so a throw from one entry still leaves it reset), and skips any hash
+  `TorrentSummary.getByKey` cannot find. Read "even if resuming one
+  entry fails" as: the reset happens before any toggle, not that every
+  entry's error is swallowed.
+
+## Item 4: prioritizing twice adds no duplicates
+- `prioritizeTorrent` pushes only hashes not already in the list.
+- Duplicates arise when the user restarts a paused torrent by hand and
+  plays again; the test models exactly that.
+- Ran the new file with `torrent-context-menu.js` in both orders: green.
+
+## Final
+- npm test: 4242/4242 pass, lint clean. test/AGENTS.md notes the
+  `.resume-test.js` emit suffix.
+
+---
+<!-- nightralph:entry ticket=memory-leaks:10 attempt=1 outcome=done -->
+## 2026-10-17 18:14 -- memory-leaks/10 attempt 1 -- done
+
+Effort: medium. Agent exit: 0. Subagents: 0. Cost: $0.71. Checked items: "No site pushes to `state.errors` directly (source scan)", "Recording many errors over a span longer than the banner window keeps the list bounded", "Errors recorded within the banner window are kept".
+
+### Agent notes
+# Ticket 10: error list stays bounded
+
+Implemented:
+- `src/renderer/lib/error-list.js`: `ERROR_WINDOW_MS` (5000),
+  `isRecent(error, now)`, `recordError(errors, message, now?)`.
+  recordError prunes stale entries in place (same array, so
+  `state.errors` references stay valid), then pushes.
+- `main.js` onError and `cast-controller.js` raise use recordError.
+- `pages/app.js` banner filter uses `isRecent` (shared window).
+- `test/unit/error-list.js`: bounded-list, keeps-recent, same-array,
+  and a source scan of src/renderer for `.errors.push/unshift/splice(`.
+- AGENTS.md note in src/renderer/controllers.
+
+Reading of criteria: "bounded" = at most window/interval + 1 entries
+when errors arrive at a steady rate over 60 s.
+
+Gotcha: compiling only `src/renderer/lib` with babel leaves `build/`
+without `config`, breaking other tests; use `npm run build:node`.
+
+---
+<!-- nightralph:entry ticket=memory-leaks:7 attempt=1 outcome=done -->
+## 2026-10-17 18:14 -- memory-leaks/07 attempt 1 -- done
+
+Effort: medium. Agent exit: 0. Subagents: 0. Cost: $0.95. Checked items: "Leaving the player before the server reply leaves no external-player subscription armed", "A server reply that arrives after leaving never opens the external player".
+
+### Agent notes
+# Ticket 07: leaving the player cancels the external player wait
+
+## Implemented
+- `media-controller.js`: `openExternalPlayer` keeps a `cancelServerWait`
+  closure for its `onServerRunningFor` subscription. New action
+  `playerClosed()` calls it. If the user leaves before the shim's
+  promise resolves, the unsubscribe is called as soon as it arrives.
+  `onServerRunning` also returns early when `state.playing` is no
+  longer the play object it was armed for (closePlayer replaces it),
+  which covers a reply racing the withdrawal.
+- `playback-controller.js` `closePlayer` dispatches `playerClosed`;
+  `main.js` maps `playerClosed` to `controllers.media().playerClosed()`.
+  (Ticket listed only media-controller.js, but the controller has no
+  other way to learn the player closed.)
+
+## Tests
+- New `test/unit/media-controller-external-player.js` (suffix
+  `.external-player-test.js`): armed while open, cancelled on leave,
+  cancelled when leaving before the shim answers, late reply opens
+  nothing and leaves new play state alone, normal reply still opens.
+- `engine-ipc-call-sites.js`: closePlayer dispatches `playerClosed`
+  (verified red by stashing the playback-controller change).
+- Ran the controller tests together in both orders: 139/139.
+
+## For later tickets
+- The playback-controller ticket (subscriptions on close) will touch
+  closePlayer near the new `dispatch('playerClosed')` line.
+
+---
+<!-- nightralph:entry ticket=memory-leaks:12 attempt=1 outcome=done -->
+## 2026-10-17 18:18 -- memory-leaks/12 attempt 1 -- done
+
+Effort: medium. Agent exit: 0. Subagents: 0. Cost: $0.93. Checked items: "The job does not run before the delay has passed since the last call", "After a burst of calls, the job runs exactly once".
+
+### Agent notes
+# Notes: ticket 12 -- window-bounds debounce uses one worker thread
+
+## Reading of the criteria
+- "one worker thread" is made observable by asserting every job, across
+  several bursts, runs on the same thread id (and not the caller's).
+- "not before the delay since the last call" is tested with a burst that
+  lasts several times the delay; nothing may run during it.
+- Existing tests a_burst_of_calls_runs_the_job_once and
+  a_later_burst_is_debounced_on_its_own stay as they are.
+
+## Environment
+- cargo test needs build-tauri/ -> ran `npm run build:tauri` first.
+
+## Implemented
+- src-tauri/src/window.rs: `Debounce` now holds an `Arc<Handle>` over a
+  `Mutex<Pending>` + `Condvar`. `call` stores the newest job, moves the
+  deadline to now + delay, and lazily spawns the single worker. The worker
+  waits until the deadline passes unmoved, runs the job outside the lock
+  (wrapped in catch_unwind so a panicking job cannot kill the worker), and
+  exits once every clone is dropped and nothing is pending.
+- Public API unchanged (`new`, `call`, Clone, Debug); main.rs untouched.
+
+## Tests (src-tauri/src/window.rs)
+- every_burst_runs_on_the_one_worker: red on the old code (jobs on
+  different threads), green after.
+- a_burst_longer_than_the_delay_waits_for_its_last_call: passes on both
+  old and new code (characterises item 2); mutation check -- counting the
+  deadline from the first call makes it fail.
+- Ran the window tests 3x, stable.
+
+## AGENTS.md
+- Added a section to src-tauri/AGENTS.md on the one-worker pattern.
+
+---
+<!-- nightralph:entry ticket=memory-leaks:13 attempt=1 outcome=done -->
+## 2026-10-17 18:18 -- memory-leaks/13 attempt 1 -- done
+
+Effort: medium. Agent exit: 0. Subagents: 0. Cost: $0.84. Checked items: "The VLC probe returns "not answering" within its deadline for a command that never exits", "Not automated: the `try_wait` error path kills and reaps the child (the OS error cannot be triggered on demand)".
+
+### Agent notes
+# Ticket 13 notes
+
+## Implemented
+1. VLC probe deadline -- `src-tauri/src/external_player.rs`:
+   `answers_version` now delegates to `answers_version_within(candidate,
+   PROBE_TIMEOUT)` (5 s). It spawns, polls `try_wait` every `POLL`, and
+   past the deadline (or on a `try_wait` error) calls `end(child)`
+   (kill + wait) and returns false. Tests:
+   `a_candidate_that_never_answers_is_not_vlc_once_the_deadline_passes`
+   (node script that never exits; asserts false, elapsed < deadline+2s,
+   and the pid is no longer alive) and
+   `a_candidate_that_answers_in_time_is_vlc`.
+2. `watch`'s `try_wait` Err arm now `take()`s the child and `end()`s it
+   instead of dropping it. Not automated (OS error cannot be triggered),
+   recorded as the ticket says. Test-first skipped for that reason.
+
+## Notes for next attempt
+- `cargo test` needs `build-tauri/`: run `npm run build:tauri` first.
+- The binary crate has no lib target: use `cargo test external_player`,
+  not `cargo test --lib`.
+
+---
