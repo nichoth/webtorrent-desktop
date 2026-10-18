@@ -14,6 +14,9 @@ import {
 import config from '../../config'
 import { calculateEta } from '../lib/time'
 
+// Every media session action renderMedia() may register
+const MEDIA_SESSION_ACTIONS = ['play', 'pause', 'nexttrack', 'previoustrack']
+
 // Shows a streaming video player. Standard features + Chromecast + Airplay
 export default class Player extends React.Component {
   render () {
@@ -34,14 +37,24 @@ export default class Player extends React.Component {
     )
   }
 
-  onComponentWillUnmount () {
-    // Unload the media element so that Chromium stops trying to fetch data
-    const tag = document.querySelector('audio,video')
-    if (!tag) return
-    tag.pause()
-    tag.src = ''
-    tag.load()
+  componentWillUnmount () {
+    // Unload the main and preview media elements so that the webview
+    // stops fetching from the torrent's server
+    for (const tag of document.querySelectorAll('audio,video')) {
+      tag.pause()
+      tag.removeAttribute('src')
+      tag.load()
+    }
+    // Reset the media session, so the next play sets fresh metadata and
+    // media-key actions instead of keeping this play's
     navigator.mediaSession.metadata = null
+    for (const action of MEDIA_SESSION_ACTIONS) {
+      try {
+        navigator.mediaSession.setActionHandler(action, null)
+      } catch (err) {
+        // The engine does not support this action, nothing to reset
+      }
+    }
   }
 }
 

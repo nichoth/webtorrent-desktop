@@ -65,3 +65,14 @@ a plain `import Pkg from 'pkg'`. Check the package first: dropping
 `__esModule`, or when its `exports.import` entry has a real
 `export default`. If neither holds, a default import silently yields
 the whole module object.
+
+## React lifecycle hooks must use React's exact names
+
+A misnamed hook such as `onComponentWillUnmount` is just an unused
+method: React never calls it, and nothing warns you. Pages cannot be
+loaded in the unit suite, so check by hand that teardown code in a
+page actually runs. `player-page.js`'s `componentWillUnmount` unloads
+every media element (main and `video#preview`) and resets
+`navigator.mediaSession`. `renderMedia()` sets the metadata only while
+it is `null`, so that reset is what lets the next play show fresh
+metadata.
