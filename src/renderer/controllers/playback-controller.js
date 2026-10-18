@@ -251,6 +251,15 @@ export default class PlaybackController {
     const state = this.state
     const torrentSummary = TorrentSummary.getByKey(state, infoHash)
 
+    // Checked before the server is asked for: a failed setup never
+    // reaches `closePlayer` (`location-history` only destroys a page
+    // whose setup succeeded), so nothing taken here would be released.
+    const fileSummary = torrentSummary.files[index]
+    if (!fileSummary || !TorrentPlayer.isPlayable(fileSummary)) {
+      torrentSummary.mostRecentFileIndex = undefined
+      return cb(new UnplayableFileError())
+    }
+
     state.playing.infoHash = torrentSummary.infoHash
     state.playing.isReady = false
 

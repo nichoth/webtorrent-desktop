@@ -315,3 +315,41 @@ test('a paused play that became ready stops the server it started',
       'and closing releases it')
     t.end()
   })
+
+// `location-history` calls a page's `destroy` only once its setup has
+// succeeded, so a play whose setup fails never reaches `closePlayer`.
+// Such a play must not have taken anything `closePlayer` would release.
+for (const status of ['downloading', 'paused']) {
+  test(`opening an unplayable file (${status}) takes nothing`,
+    async function (t) {
+      reset()
+      const state = makeState(status)
+      state.saved.torrents[0].files.push({ name: 'notes.txt' })
+      const controller = new PlaybackController(state, {}, () => {})
+      let error = null
+      controller.openPlayer(INFO_HASH, 3, (err) => { error = err })
+      await flush()
+
+      t.ok(error, 'the setup fails')
+      t.deepEqual(sent('startServer'), [], 'no server is requested')
+      t.deepEqual(record.live, [], 'no subscription is armed')
+      t.end()
+    })
+}
+
+// `playFile` falls back to `findIndex(isPlayable)`, which is -1 for a
+// torrent with nothing playable in it.
+test('opening a file the torrent does not have takes nothing',
+  async function (t) {
+    reset()
+    const state = makeState('downloading')
+    const controller = new PlaybackController(state, {}, () => {})
+    let error = null
+    controller.openPlayer(INFO_HASH, -1, (err) => { error = err })
+    await flush()
+
+    t.ok(error, 'the setup fails')
+    t.deepEqual(sent('startServer'), [], 'no server is requested')
+    t.deepEqual(record.live, [], 'no subscription is armed')
+    t.end()
+  })
