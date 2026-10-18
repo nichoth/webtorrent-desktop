@@ -37,6 +37,7 @@ import {
   bannedSinceProgress, createHashFailTracker, guardIncomingPeers,
   guardPeerAdds, parseFailedPiece
 } from './hashfail'
+import { diffSelections } from './selections'
 import { createStallTracker, verifiedBytes } from './stall'
 
 console.time('init')
@@ -112,6 +113,13 @@ const corruptPeerStats = new Map()
 // reports: `downloadSpeed` counts every byte off the socket, and
 // `downloaded` counts piece buffers that may still fail their hash.
 const stalls = createStallTracker()
+
+// Info hash -> the file selections last applied to that torrent. Each
+// `file.select()` adds a selection webtorrent keeps until one
+// `file.deselect()` removes it, so only what changed is applied
+// (`selections.js`). Forgotten when the torrent closes, so a resumed
+// torrent starts from webtorrent's default selection again.
+const appliedSelections = new Map()
 
 // The one hook WebTorrent 1.9.7 offers for refusing a peer. It is
 // documented as a static IP blocklist loaded at construction, but
@@ -346,6 +354,7 @@ function addTorrentEvents (torrent) {
     lastAnnounceAt.delete(infoHash)
     corruptPeerStats.delete(infoHash)
     stalls.forget(infoHash)
+    appliedSelections.delete(infoHash)
   }
 
   function torrentMetadata () {
@@ -695,19 +704,21 @@ function selectFiles (torrentOrInfoHash, selections) {
       'but the torrent contains ' + torrent.files.length + ' files')
   }
 
+  const changes = diffSelections(
+    appliedSelections.get(torrent.infoHash), selections)
+
   // Remove default selection (whole torrent)
-  torrent.deselect(0, torrent.pieces.length - 1, false)
+  if (changes.replaceDefault) {
+    torrent.deselect(0, torrent.pieces.length - 1, false)
+  }
 
   // Add selections (individual files)
-  selections.forEach((selection, i) => {
-    const file = torrent.files[i]
-    if (selection) {
-      file.select()
-    } else {
-      console.log('deselecting file ' + i + ' of torrent ' + torrent.name)
-      file.deselect()
-    }
+  changes.select.forEach((i) => torrent.files[i].select())
+  changes.deselect.forEach((i) => {
+    console.log('deselecting file ' + i + ' of torrent ' + torrent.name)
+    torrent.files[i].deselect()
   })
+  appliedSelections.set(torrent.infoHash, selections.slice())
 }
 
 // Gets a WebTorrent handle by torrentKey

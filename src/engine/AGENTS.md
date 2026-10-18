@@ -143,7 +143,7 @@ outside `NODE_ENV=test` (portable config skips the branch).
 ## Per-torrent state and the torrent's `close`
 
 State the engine keys by info hash (`lastAnnounceAt`,
-`corruptPeerStats`, the stall tracker) is forgotten in one place:
+`corruptPeerStats`, the stall tracker, `appliedSelections`) is forgotten in one place:
 `torrentClose`, the `close` handler `addTorrentEvents` installs.
 WebTorrent emits `close` from `destroy()` whatever the cause --
 `wt-stop-torrenting`, removal, a fatal error -- so `stopTorrenting`
@@ -217,3 +217,18 @@ again: `test/unit/engine-audio-metadata-wiring.js` scans for exactly
 that. `parser` defaults to `music-metadata` and is a parameter so
 `test/unit/engine-audio-metadata.js` can drive a real `Readable`
 without audio.
+
+## `selections.js`
+
+`diffSelections(applied, requested)` decides which file selections
+reach webtorrent. In webtorrent 1.9.7 each `file.select()` pushes a new
+entry onto the torrent's selection list and `file.deselect()` removes
+only one, so re-applying the whole list on every checkbox toggle grows
+the list and leaves a twice-selected file downloading after a
+deselect. `selectFiles` in `index.js` diffs against
+`appliedSelections` (info hash -> last applied list) and applies only
+the changes. `applied` undefined means the first application, which is
+also when webtorrent's default whole-torrent selection is removed.
+`test/unit/engine-selections.js` tests the diff with plain values;
+`test/unit/engine-torrent-close-wiring.js` scans that `selectFiles`
+uses it and that `torrentClose` forgets the applied list.

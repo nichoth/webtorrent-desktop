@@ -83,3 +83,37 @@ test('stop-torrenting relies on the close handler', function (t) {
     .test(body), 'and does not keep a second copy of the cleanup')
   t.end()
 })
+
+// The selection diff itself is tested against plain values in
+// `engine-selections.js`. What that cannot reach is whether
+// `wt-select-files` uses it, and whether the applied selections it
+// diffs against are forgotten with the torrent. Left behind, a resumed
+// torrent would be diffed against the old session's selections and
+// keep webtorrent's default whole-torrent selection.
+test('file selections go through the diff', function (t) {
+  t.ok(/import \{[^}]*diffSelections[^}]*\} from '\.\/selections'/
+    .test(code), 'diffSelections comes from selections.js')
+
+  const select = /function selectFiles \([\s\S]*?\n\}/.exec(code)
+  t.ok(select, 'selectFiles is found')
+  const body = select ? select[0] : ''
+  t.ok(/diffSelections\(\s*appliedSelections\.get\(/.test(body),
+    'it diffs against the selections last applied')
+  t.ok(/appliedSelections\.set\(/.test(body),
+    'and records what it applied')
+  t.notOk(/selections\.forEach\(/.test(body),
+    'it does not re-apply the whole list')
+  t.end()
+})
+
+test('the close handler forgets the applied selections', function (t) {
+  const handler = /function torrentClose \(\) \{[\s\S]*?\n {2}\}/
+    .exec(events)
+  const body = handler ? handler[0] : ''
+  const guardAt = body.search(/if \(client\.get\(infoHash\)\) return/)
+  const forgetAt = body.search(/appliedSelections\.delete\(infoHash\)/)
+  t.ok(forgetAt >= 0, 'the applied selections are forgotten')
+  t.ok(guardAt >= 0 && guardAt < forgetAt,
+    'but not when a duplicate closes under the live torrent\'s hash')
+  t.end()
+})
