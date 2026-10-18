@@ -1,4 +1,4 @@
-const dispatchers = {}
+let dispatchers = {}
 let _dispatch = () => {}
 
 export function setDispatch (dispatch) {
@@ -39,4 +39,12 @@ export function dispatcher (...args) {
     }
   }
   return handler
+}
+
+// The memo is keyed by argument list and never evicts on its own, so a
+// deleted torrent would leave one handler per file and action behind.
+// Callers drop the whole memo when such keys go away; the next render
+// rebuilds the handlers it still needs.
+export function dropDispatchers () {
+  dispatchers = {}
 }

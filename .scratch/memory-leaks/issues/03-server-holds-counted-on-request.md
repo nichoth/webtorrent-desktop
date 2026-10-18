@@ -52,5 +52,5 @@ socket), a `static/*.torrent` fixture with every file deselected,
 - [ ] Start-server, then stop-torrenting with no stop-server, then
       start-torrenting again, then start-server reports a URL that
       accepts connections
-- [ ] The server entry is forgotten from the torrent's close handler
+- [x] The server entry is forgotten from the torrent's close handler
       (source scan)

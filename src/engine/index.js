@@ -355,6 +355,7 @@ function addTorrentEvents (torrent) {
     corruptPeerStats.delete(infoHash)
     stalls.forget(infoHash)
     appliedSelections.delete(infoHash)
+    forgetServer(infoHash)
   }
 
   function torrentMetadata () {
@@ -578,8 +579,15 @@ function getTorrentProgress () {
   }
 }
 
+// Every `wt-start-server` is one hold, counted the moment it arrives,
+// whether or not the torrent is ready. Counting on `ready` instead lost
+// a `wt-stop-server` that came first, and the server was then created
+// with a holder nobody would ever release.
 function startServer (infoHash) {
   const torrent = client.get(infoHash)
+  // No torrent, no hold and no reply: the caller's own timeout covers
+  // it, and replying would change the wire protocol.
+  //
   // DIAGNOSTIC (temporary): which caller asks for a server on a torrent
   // the engine no longer has, and what does the client still hold?
   if (!torrent) {
@@ -588,29 +596,40 @@ function startServer (infoHash) {
       infoHash, client.torrents.map((t) => t.infoHash).join(' '))
     return
   }
-  if (torrent.ready) startServerFromReadyTorrent(torrent)
-  else torrent.once('ready', () => startServerFromReadyTorrent(torrent))
-}
 
-function startServerFromReadyTorrent (torrent) {
-  const existing = servers.get(torrent.infoHash)
+  const existing = servers.get(infoHash)
   if (existing) {
     existing.holders++
     // `wt-start-server` always replies, even for a server that is
     // already listening -- a caller that got silence would wait
     // forever. A request that arrives before the first `listen`
-    // callback needs no re-send: the reply below is a broadcast and
-    // every subscriber gets it.
-    if (existing.info) sendServerRunning(torrent.infoHash, existing.info)
+    // callback needs no re-send: the reply is a broadcast and every
+    // subscriber gets it. Nor does it park a second ready handler.
+    if (existing.info) sendServerRunning(infoHash, existing.info)
     return
   }
 
+  // `server` stays null until the torrent is ready, `info` until the
+  // server is listening.
+  const entry = { torrent, holders: 1, server: null, info: null }
+  servers.set(infoHash, entry)
+  if (torrent.ready) listenForEntry(entry)
+  else torrent.once('ready', () => listenForEntry(entry))
+}
+
+function listenForEntry (entry) {
+  const { torrent } = entry
+  const infoHash = torrent.infoHash
+  // Every holder released before ready, or the torrent closed: the
+  // entry is gone and nobody wants this server.
+  if (servers.get(infoHash) !== entry) return
+
   // start the streaming torrent-to-http server
   const server = torrent.createServer()
-  const entry = { server, info: null, holders: 1 }
-  servers.set(torrent.infoHash, entry)
+  entry.server = server
 
   server.listen(0, () => {
+    if (servers.get(infoHash) !== entry) return
     const port = server.address().port
     const urlSuffix = ':' + port
     entry.info = {
@@ -620,7 +639,7 @@ function startServerFromReadyTorrent (torrent) {
       networkAddress: networkAddress()
     }
 
-    sendServerRunning(torrent.infoHash, entry.info)
+    sendServerRunning(infoHash, entry.info)
   })
 }
 
@@ -629,17 +648,38 @@ function sendServerRunning (infoHash, info) {
   bus.send('wt-server-' + infoHash, info)
 }
 
+// Releases one hold whatever state the entry is in -- parked on ready,
+// waiting on `listen`, or serving.
 function stopServer (infoHash) {
   const entry = servers.get(infoHash)
   if (!entry) return
   if (--entry.holders > 0) return
+  forgetServer(infoHash)
+}
+
+// Drop the entry outright, holders or not. The last release lands
+// here, and so does the torrent's `close`.
+function forgetServer (infoHash) {
+  const entry = servers.get(infoHash)
+  if (!entry) return
   servers.delete(infoHash)
-  entry.server.destroy()
+  if (entry.server) destroyServer(entry.torrent, entry.server)
+}
+
+// WebTorrent keeps every server it creates in the torrent's own
+// `_servers` list and only empties it on destroy, so without the
+// splice each play and close cycle leaves a dead server behind on a
+// torrent that keeps running. A second `destroy` (the torrent's own,
+// on close) is harmless.
+function destroyServer (torrent, server) {
+  const list = torrent._servers
+  const i = list ? list.indexOf(server) : -1
+  if (i !== -1) list.splice(i, 1)
+  server.destroy()
 }
 
 function stopAllServers () {
-  for (const entry of servers.values()) entry.server.destroy()
-  servers.clear()
+  for (const infoHash of [...servers.keys()]) forgetServer(infoHash)
 }
 
 console.log('Initializing...')

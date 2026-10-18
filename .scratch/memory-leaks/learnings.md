@@ -270,3 +270,99 @@ Effort: medium. Agent exit: 0. Subagents: 0. Cost: $0.84. Checked items: "The VL
   not `cargo test --lib`.
 
 ---
+<!-- nightralph:entry ticket=memory-leaks:11 attempt=1 outcome=done -->
+## 2026-10-17 18:21 -- memory-leaks/11 attempt 1 -- done
+
+Effort: medium. Agent exit: 0. Subagents: 0. Cost: $0.67. Checked items: "Without a drop, `dispatcher` returns the same handler for the same arguments", "After a drop, `dispatcher` returns a fresh handler for the same arguments", "Deleting a torrent and deleting all torrents both drop the memo".
+
+### Agent notes
+# Notes: 11 deleting torrents drops dispatcher memo
+
+## Item 1: same handler without a drop
+- Existing behaviour; added characterization test `test/unit/dispatcher.js`
+  (passed immediately -- nothing to implement).
+
+## Item 2: fresh handler after a drop
+- `src/renderer/lib/dispatcher.js`: `dispatchers` is now `let`, new export
+  `dropDispatchers()` replaces it with `{}`.
+- Test in `test/unit/dispatcher.js` (red -> green).
+
+## Item 3: delete one / delete all drop the memo
+- `torrent-list-controller.js`: `deleteTorrent` (inside the found branch)
+  and `deleteAllTorrents` call `dropDispatchers()`.
+- Tests added to `test/unit/torrent-list-resume.js` (reuses its compiled
+  controller and stubs), observed through the real `dispatcher`.
+  Ran with `torrent-context-menu.js` in both orders: green.
+
+## Final
+- npm test: 4378/4378 pass, lint clean. Added a paragraph to src/AGENTS.md.
+
+---
+<!-- nightralph:entry ticket=memory-leaks:5 attempt=1 outcome=done -->
+## 2026-10-17 18:22 -- memory-leaks/05 attempt 1 -- done
+
+Effort: medium. Agent exit: 0. Subagents: 0. Cost: $0.78. Checked items: "`wt-select-files` goes through the diff, and applied selections are forgotten from the torrent's close handler (source scan)".
+
+### Agent notes
+# Ticket 05: file selection applies only what changed
+
+## Item 1-3 (diff module)
+- New `src/engine/selections.js`: pure `diffSelections(applied, requested)`
+  -> `{ replaceDefault, select, deselect }`. `applied` undefined = first
+  application: replaceDefault true, every true selected, every false
+  deselected (same as the old code).
+- New `test/unit/engine-selections.js` (plain values). Items 1-3 share
+  one module and one commit.
+
+## Item 4 (wiring)
+- `src/engine/index.js`: module-level `appliedSelections` Map;
+  `selectFiles` diffs against it, deselects the default only on first
+  application, applies only changed indexes, stores a copy. Deleted in
+  `torrentClose` after the duplicate guard.
+- `test/unit/engine-torrent-close-wiring.js`: two new scan tests.
+- `src/engine/AGENTS.md`: `selections.js` section, close-handler list.
+- Full `npm test` green (4400 pass).
+
+---
+<!-- nightralph:entry ticket=memory-leaks:3 attempt=1 outcome=done -->
+## 2026-10-17 18:24 -- memory-leaks/03 attempt 1 -- done
+
+Effort: medium. Agent exit: 0. Subagents: 0. Cost: $1.37. Checked items: "The server entry is forgotten from the torrent's close handler (source scan)".
+
+### Agent notes
+# Ticket 03: server holds counted on request, forgotten on close
+
+## Implemented
+- `src/engine/index.js`: `startServer` creates the entry
+  `{ torrent, holders, server: null, info: null }` on arrival and counts
+  the hold at once; the first early request parks one ready handler
+  (`listenForEntry`). `listenForEntry` and the `listen` callback bail if
+  `servers.get(infoHash) !== entry`. `stopServer` decrements in any
+  state and calls `forgetServer` at zero. `forgetServer` deletes the
+  entry and `destroyServer`s (splices from `torrent._servers`, then
+  `server.destroy()`). `stopAllServers` and `torrentClose` (after the
+  duplicate guard) call `forgetServer`. Unknown torrent: still no hold,
+  no reply.
+- `test/unit/engine-entry.js`: four real-sidecar tests plus helpers
+  `withEngine`, `startServer`, `accepts` (net.connect probe),
+  `waitForPort`, `delay`.
+- `test/unit/engine-torrent-close-wiring.js`: scan that torrentClose
+  calls `forgetServer(infoHash)` after the guard, and that forgetServer
+  deletes and destroys.
+- `src/engine/AGENTS.md`: server lifecycle + sidecar test gotchas.
+
+## How ACs were read
+- Burst test: a .torrent path parses asynchronously, so start-server in
+  the same burst as start-torrenting finds no torrent (passes trivially).
+  The test waits for `wt-parsed`, then sends start+stop in one burst and
+  asserts ready had not yet arrived. Missing files verified too fast
+  (ready beat the burst), so per the ticket the fixture got more to
+  verify: a full-length sparse file of zeros in the download dir. Stable
+  over 5 runs; failed on old code for the right reason.
+- Two starts / two stops and two starts / one stop run after ready (they
+  need the reply's URL). Pre-ready counting is covered by the burst test.
+- Removing from `torrent._servers` is not automated (spec says so).
+- Items 1-4 share one engine change and one commit; item 5 (scan) is a
+  second commit.
+
+---

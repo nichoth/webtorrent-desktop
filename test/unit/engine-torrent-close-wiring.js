@@ -117,3 +117,33 @@ test('the close handler forgets the applied selections', function (t) {
     'but not when a duplicate closes under the live torrent\'s hash')
   t.end()
 })
+
+// A torrent can close holding a streaming server nobody released --
+// stop-torrenting is not required to follow stop-server, and a fatal
+// error follows nothing. If the entry outlived the torrent, a resumed
+// torrent under the same info hash would be handed the old entry's URL,
+// whose port is closed. `engine-entry.js` proves the outcome on the
+// real sidecar for stop-torrenting; this pins that the forgetting hangs
+// off `close`, so the fatal-error path is covered too.
+test('the close handler forgets the torrent\'s server entry',
+  function (t) {
+    const handler = /function torrentClose \(\) \{[\s\S]*?\n {2}\}/
+      .exec(events)
+    const body = handler ? handler[0] : ''
+    const forgetAt = body.search(/forgetServer\(infoHash\)/)
+    t.ok(forgetAt >= 0, 'torrentClose forgets the server entry')
+    const guardAt = body.search(/if \(client\.get\(infoHash\)\) return/)
+    t.ok(guardAt >= 0 && guardAt < forgetAt,
+      'after the duplicate guard, so a duplicate add closing leaves ' +
+      'the live torrent\'s server alone')
+
+    const forget = /function forgetServer \(infoHash\) \{[\s\S]*?\n\}/
+      .exec(code)
+    t.ok(forget, 'forgetServer is found')
+    const forgetBody = forget ? forget[0] : ''
+    t.ok(/servers\.delete\(infoHash\)/.test(forgetBody),
+      'forgetting deletes the entry')
+    t.ok(/destroyServer\(/.test(forgetBody),
+      'and destroys its server, if it has one')
+    t.end()
+  })

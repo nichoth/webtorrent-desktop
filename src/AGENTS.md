@@ -144,6 +144,12 @@ with the process. It is renderer-only now, and the
 is dead weight rather than a constraint -- there is no other process
 that could reach it.
 
+`dispatcher.js`'s `dispatcher(...)` memo is module-wide and keyed by
+the JSON of its arguments, so it only shrinks when something calls
+`dropDispatchers()`. Anything that makes a whole family of keys
+meaningless (deleting torrents does today) should drop it; tests
+observe the drop as `dispatcher(sameArgs)` returning a new function.
+
 ## Deferring a module load in the renderer
 
 **Do not use dynamic `import()` in `src/renderer/`.** It never settles

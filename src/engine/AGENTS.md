@@ -124,6 +124,27 @@ the server dies with its last holder. Poster generation and playback can
 hold servers for different torrents at once, so a single module-level
 `server` is not enough any more.
 
+A hold is counted the moment `wt-start-server` arrives, not on
+`ready`: the entry (`{ torrent, holders, server, info }`) exists from
+the first request, `server` stays null until the torrent is ready and
+`info` until it is listening. Only the first early request parks a
+ready handler, and that handler (and the `listen` callback) does
+nothing once `servers.get(infoHash)` is no longer its entry. So a
+`wt-stop-server` is honoured in any state and the last one always
+wins. `forgetServer` is the one way an entry goes: the last release,
+`stopAllServers` and the torrent's `close` all call it, and
+`destroyServer` also splices the server out of WebTorrent's private
+`torrent._servers`, which otherwise only empties on destroy.
+
+`test/unit/engine-entry.js` checks this on the real sidecar by probing
+the reported port with `net.connect`. Its `withEngine` helper spawns
+and connects; reuse it for new sidecar cases. A `.torrent` path is
+parsed asynchronously, so a `wt-start-server` in the same burst as
+`wt-start-torrenting` finds no torrent -- wait for `wt-parsed` first.
+Missing files verify in milliseconds, so a test that needs to act
+before `ready` writes full-length sparse files of zeros into the
+download directory to widen the window.
+
 `config.TORRENT_PATH` and `config.POSTER_PATH` resolve under plain
 `node` because US-040 made `src/config.js` require `electron` lazily,
 inside the main-process branch of `getPath()`. Do not hoist that back
@@ -154,6 +175,8 @@ The handler returns early when `client.get(infoHash)` still finds a
 torrent. WebTorrent removes a closing torrent from the client before
 emitting `close`, so a hit means a duplicate add is being destroyed
 under the live torrent's hash, and that state is not its to forget.
+
+The streaming server entry is forgotten there too (`forgetServer`).
 
 `test/unit/engine-torrent-close-wiring.js` pins this by source scan.
 
