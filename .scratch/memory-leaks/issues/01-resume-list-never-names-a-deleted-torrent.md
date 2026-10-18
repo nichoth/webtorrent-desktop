@@ -29,7 +29,7 @@ The spec calls this the most visible bug in the audit, so it goes first.
 
 **Status:** ready-for-agent
 
-- [ ] Deleting a torrent removes its info hash from the resume list
+- [x] Deleting a torrent removes its info hash from the resume list
 - [ ] Deleting all torrents leaves the resume list empty
 - [ ] Resuming a list that names a missing torrent resumes every other
       torrent in it and leaves the list empty

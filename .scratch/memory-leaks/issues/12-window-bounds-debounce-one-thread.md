@@ -18,6 +18,6 @@ unchanged), in-module `#[cfg(test)]` tests (prior art
 
 **Status:** ready-for-agent
 
-- [ ] After a burst of calls, the job runs exactly once
-- [ ] The job does not run before the delay has passed since the last
+- [x] After a burst of calls, the job runs exactly once
+- [x] The job does not run before the delay has passed since the last
       call

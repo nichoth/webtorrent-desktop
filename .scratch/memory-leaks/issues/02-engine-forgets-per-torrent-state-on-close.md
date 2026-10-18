@@ -25,8 +25,8 @@ where a closing torrent is forgotten.
 
 **Status:** ready-for-agent
 
-- [ ] Announce times, corrupt-peer counters and stall samples are
+- [x] Announce times, corrupt-peer counters and stall samples are
       forgotten from the torrent's own close handler, not only from
       stop-torrenting (source scan)
-- [ ] A torrent that closed and is started again under the same info
+- [x] A torrent that closed and is started again under the same info
       hash does not report as stalled on its first progress update

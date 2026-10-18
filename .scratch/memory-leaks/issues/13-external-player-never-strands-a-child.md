@@ -19,7 +19,7 @@ existing tests in `external_player.rs` and its `Sandbox` helper)
 
 **Status:** ready-for-agent
 
-- [ ] The VLC probe returns "not answering" within its deadline for a
+- [x] The VLC probe returns "not answering" within its deadline for a
       command that never exits
-- [ ] Not automated: the `try_wait` error path kills and reaps the
+- [x] Not automated: the `try_wait` error path kills and reaps the
       child (the OS error cannot be triggered on demand)

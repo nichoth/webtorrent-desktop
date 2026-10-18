@@ -20,7 +20,7 @@ window constant, currently 5000 ms), new unit test (prior art
 
 **Status:** ready-for-agent
 
-- [ ] Recording many errors over a span longer than the banner window
+- [x] Recording many errors over a span longer than the banner window
       keeps the list bounded
-- [ ] Errors recorded within the banner window are kept
-- [ ] No site pushes to `state.errors` directly (source scan)
+- [x] Errors recorded within the banner window are kept
+- [x] No site pushes to `state.errors` directly (source scan)

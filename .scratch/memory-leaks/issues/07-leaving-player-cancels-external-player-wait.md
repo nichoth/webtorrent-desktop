@@ -21,7 +21,7 @@ suffix and run alongside the existing controller tests in both orders)
 
 **Status:** ready-for-agent
 
-- [ ] Leaving the player before the server reply leaves no
+- [x] Leaving the player before the server reply leaves no
       external-player subscription armed
-- [ ] A server reply that arrives after leaving never opens the
+- [x] A server reply that arrives after leaving never opens the
       external player

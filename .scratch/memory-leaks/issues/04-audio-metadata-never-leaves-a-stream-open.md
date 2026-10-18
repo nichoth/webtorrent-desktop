@@ -23,6 +23,6 @@ values and a real Node Readable, prior art `test/unit/engine-stall.js`),
 
 **Status:** ready-for-agent
 
-- [ ] The stream is destroyed after a parse that resolves
-- [ ] The stream is destroyed after a parse that rejects
-- [ ] `wt-get-audio-metadata` reads through the new module (source scan)
+- [x] The stream is destroyed after a parse that resolves
+- [x] The stream is destroyed after a parse that rejects
+- [x] `wt-get-audio-metadata` reads through the new module (source scan)
