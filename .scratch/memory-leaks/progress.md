@@ -36,7 +36,10 @@ Started: 2026-10-18T01:09:04.866Z
   branch: webtorrent-desktop--memory-leaks-10-error-list-stays-bounded
   exit: 0
   completed: 2026-10-18T01:19:34.829Z
-- [ ] 11-deleting-torrents-drops-dispatcher-memo.md
+- [x] 11-deleting-torrents-drops-dispatcher-memo.md
+  branch: webtorrent-desktop--memory-leaks-11-deleting-torrents-drops-dispatcher-memo
+  exit: 0
+  completed: 2026-10-18T01:26:02.609Z
 - [x] 12-window-bounds-debounce-one-thread.md
   branch: webtorrent-desktop--memory-leaks-12-window-bounds-debounce-one-thread
   exit: 0
