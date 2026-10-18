@@ -167,7 +167,10 @@ export default class TorrentListController {
         // Pause torrent without playing sounds.
         this.pauseTorrent(torrent, false)
 
-        this.state.saved.torrentsToResume.push(torrent.infoHash)
+        const toResume = this.state.saved.torrentsToResume
+        if (!toResume.includes(torrent.infoHash)) {
+          toResume.push(torrent.infoHash)
+        }
       })
 
     console.log('Playback Priority: paused torrents: ', this.state.saved.torrentsToResume)
@@ -175,13 +178,18 @@ export default class TorrentListController {
 
   resumePausedTorrents () {
     console.log('Playback Priority: resuming paused torrents')
-    if (!this.state.saved.torrentsToResume || !this.state.saved.torrentsToResume.length) return
-    this.state.saved.torrentsToResume.forEach((infoHash) => {
-      this.toggleTorrent(infoHash)
-    })
+    const toResume = this.state.saved.torrentsToResume
+    if (!toResume || !toResume.length) return
 
-    // reset paused torrents
+    // reset paused torrents first, so the list is cleared even if
+    // resuming one of them throws
     this.state.saved.torrentsToResume = []
+
+    // skip any info hash that no longer names a torrent (one deleted
+    // while paused, or saved in a profile before deletes cleaned up)
+    toResume
+      .filter((infoHash) => TorrentSummary.getByKey(this.state, infoHash))
+      .forEach((infoHash) => this.toggleTorrent(infoHash))
   }
 
   toggleTorrentFile (infoHash, index) {
@@ -220,6 +228,12 @@ export default class TorrentListController {
 
       // remove torrent from saved list
       this.state.saved.torrents.splice(index, 1)
+
+      // a deleted torrent must never be resumed after playback
+      if (this.state.saved.torrentsToResume) {
+        this.state.saved.torrentsToResume =
+          this.state.saved.torrentsToResume.filter((x) => x !== infoHash)
+      }
       dispatch('stateSave')
 
       // prevent user from going forward to a deleted torrent
@@ -239,6 +253,7 @@ export default class TorrentListController {
     this.state.saved.torrents.forEach((summary) => deleteTorrentFile(summary, deleteData))
 
     this.state.saved.torrents = []
+    this.state.saved.torrentsToResume = []
     dispatch('stateSave')
 
     // prevent user from going forward to a deleted torrent
