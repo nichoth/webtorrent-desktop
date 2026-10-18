@@ -429,3 +429,39 @@ test('poster: a job that gives up before asking takes no hold later',
     t.deepEqual(record.fs, [], 'nothing was written')
     t.end()
   })
+
+test('poster: a server reply after the timeout writes no poster',
+  async function (t) {
+    reset()
+    record.serverURL = 'http://127.0.0.1:4321'
+    record.silent = [INFO_HASH]
+    const name = await generateTorrentPoster(VIDEO_TORRENT, SHORT)
+    t.equal(name, null, 'the job gave up')
+
+    // The reply was already in flight when the job unsubscribed.
+    record.serverListeners[0].listener({ localURL: record.serverURL })
+    await delay(20)
+    t.deepEqual(record.captured, [], 'nothing was decoded')
+    t.deepEqual(record.fs, [], 'nothing was written')
+    t.end()
+  })
+
+test('poster: a capture that outlasts the timeout writes no poster',
+  async function (t) {
+    reset()
+    record.serverURL = 'http://127.0.0.1:4321'
+    const captureVideoFrame = videoFrameStub.captureVideoFrame
+    videoFrameStub.captureVideoFrame = async (url) => {
+      await delay(60)
+      return captureVideoFrame(url)
+    }
+
+    const name = await generateTorrentPoster(VIDEO_TORRENT, SHORT)
+    await delay(80)
+    videoFrameStub.captureVideoFrame = captureVideoFrame
+
+    t.equal(name, null, 'the job gave up')
+    t.equal(record.captured.length, 1, 'the capture did finish')
+    t.deepEqual(record.fs, [], 'but nothing was written')
+    t.end()
+  })
