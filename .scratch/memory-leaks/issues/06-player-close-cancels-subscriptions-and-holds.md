@@ -33,7 +33,7 @@ records live subscriptions and the unsubscribe calls made on them; emit
 under a distinct suffix and run alongside the existing controller tests
 in both orders)
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] After the player closes, none of its subscriptions is left,
       including ones made by a next or previous file change

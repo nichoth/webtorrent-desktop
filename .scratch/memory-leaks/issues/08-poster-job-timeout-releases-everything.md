@@ -18,7 +18,7 @@ engine counts holds on request (ticket 03).
 short injected timeout or a controllable clock, never a real 60
 seconds)
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] A job whose server never answers leaves no server-running
       subscription once it times out
