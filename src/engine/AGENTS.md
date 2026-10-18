@@ -140,6 +140,23 @@ neither `'renderer'` nor `'browser'` as a plain Node process. A check
 for "is Electron present" there breaks the sidecar at load, and only
 outside `NODE_ENV=test` (portable config skips the branch).
 
+## Per-torrent state and the torrent's `close`
+
+State the engine keys by info hash (`lastAnnounceAt`,
+`corruptPeerStats`, the stall tracker) is forgotten in one place:
+`torrentClose`, the `close` handler `addTorrentEvents` installs.
+WebTorrent emits `close` from `destroy()` whatever the cause --
+`wt-stop-torrenting`, removal, a fatal error -- so `stopTorrenting`
+only destroys and does not repeat the cleanup. Add new per-torrent
+cleanup to that handler, not to `stopTorrenting`.
+
+The handler returns early when `client.get(infoHash)` still finds a
+torrent. WebTorrent removes a closing torrent from the client before
+emitting `close`, so a hit means a duplicate add is being destroyed
+under the live torrent's hash, and that state is not its to forget.
+
+`test/unit/engine-torrent-close-wiring.js` pins this by source scan.
+
 ## `announce.js`
 
 `announceNow(torrent, dht)` is the discovery half of "destroy and
@@ -170,14 +187,7 @@ says nothing at all.
 `index.js` owns only the timer and the `lastAnnounceAt` map. The map
 is seeded when a torrent's info hash arrives -- `client.add()` has just
 announced `started` and a second announce a minute later would be waste
--- and cleared in `stopTorrenting`.
-
-That covers the `wt-stop-torrenting` path, which is the only caller.
-A torrent torn down any other way -- a fatal `torrent` error, say --
-leaves its entry behind. Those orphans are inert rather than a leak:
-the sweep iterates `client.torrents` and never the map, so an entry
-with no torrent is never read, and re-adding the same info hash
-overwrites it.
+-- and cleared when the torrent closes (see above).
 
 The three tunables are exported from here, not from `index.js`:
 `SWEEP_INTERVAL_MS`, `COOLDOWN_MS` and `MAX_PER_SWEEP`. `index.js`

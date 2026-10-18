@@ -237,9 +237,8 @@ function startTorrenting (torrentKey, torrentID, path, fileModtimes, selections)
 
 function stopTorrenting (infoHash) {
   console.log('--- STOP TORRENTING: ', infoHash)
-  lastAnnounceAt.delete(infoHash)
-  corruptPeerStats.delete(infoHash)
-  stalls.forget(infoHash)
+  // The per-torrent state goes in `torrentClose`, which `destroy()`
+  // triggers, so this path and a fatal error share one cleanup.
   const torrent = client.get(infoHash)
   if (torrent) torrent.destroy()
 }
@@ -327,6 +326,27 @@ function addTorrentEvents (torrent) {
   torrent.on('metadata', torrentMetadata)
   torrent.on('ready', torrentReady)
   torrent.on('done', torrentDone)
+  torrent.once('close', torrentClose)
+
+  // The single place a closing torrent is forgotten. WebTorrent emits
+  // `close` from `destroy()` whatever the cause -- stop-torrenting,
+  // removal, a fatal error -- so state keyed by this info hash cannot
+  // outlive the torrent and greet a resumed one. Stale stall samples
+  // were the visible symptom: a resumed torrent reported as stalled
+  // on its first progress update.
+  //
+  // WebTorrent takes a closing torrent off the client before emitting
+  // `close`, so a torrent still found under this hash is a different,
+  // live one. That happens when a duplicate add is destroyed: it was
+  // given the live torrent's info hash first, and the state is not its
+  // to forget.
+  function torrentClose () {
+    const infoHash = torrent.infoHash
+    if (client.get(infoHash)) return
+    lastAnnounceAt.delete(infoHash)
+    corruptPeerStats.delete(infoHash)
+    stalls.forget(infoHash)
+  }
 
   function torrentMetadata () {
     const info = getTorrentInfo(torrent)
