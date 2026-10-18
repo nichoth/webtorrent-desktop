@@ -175,13 +175,18 @@ export default class TorrentListController {
 
   resumePausedTorrents () {
     console.log('Playback Priority: resuming paused torrents')
-    if (!this.state.saved.torrentsToResume || !this.state.saved.torrentsToResume.length) return
-    this.state.saved.torrentsToResume.forEach((infoHash) => {
-      this.toggleTorrent(infoHash)
-    })
+    const toResume = this.state.saved.torrentsToResume
+    if (!toResume || !toResume.length) return
 
-    // reset paused torrents
+    // reset paused torrents first, so the list is cleared even if
+    // resuming one of them throws
     this.state.saved.torrentsToResume = []
+
+    // skip any info hash that no longer names a torrent (one deleted
+    // while paused, or saved in a profile before deletes cleaned up)
+    toResume
+      .filter((infoHash) => TorrentSummary.getByKey(this.state, infoHash))
+      .forEach((infoHash) => this.toggleTorrent(infoHash))
   }
 
   toggleTorrentFile (infoHash, index) {

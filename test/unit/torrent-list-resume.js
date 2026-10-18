@@ -138,3 +138,28 @@ test('deleting all torrents leaves the resume list empty', function (t) {
   t.deepEqual(state.saved.torrentsToResume, [], 'nothing is left to resume')
   t.end()
 })
+
+test('resuming skips a missing torrent and resumes the rest',
+  function (t) {
+    reset()
+    const a = makeSummary('a', 1, 'paused')
+    const c = makeSummary('c', 3, 'paused')
+    // 'b' was deleted before this fix, so a saved profile can still
+    // name it.
+    const state = makeState([a, c], [hash('a'), hash('b'), hash('c')])
+    const controller = new TorrentListController(state)
+
+    t.doesNotThrow(() => controller.resumePausedTorrents(),
+      'a stale entry does not throw')
+
+    t.deepEqual(
+      record.engine
+        .filter(([call]) => call === 'startTorrenting')
+        .map(([, key]) => key),
+      [1, 3],
+      'every torrent still in the list is started again')
+    t.notEqual(a.status, 'paused', 'the first torrent is no longer paused')
+    t.notEqual(c.status, 'paused', 'the last torrent is no longer paused')
+    t.deepEqual(state.saved.torrentsToResume, [], 'the list is reset')
+    t.end()
+  })
