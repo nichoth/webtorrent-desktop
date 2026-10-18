@@ -26,7 +26,10 @@ Started: 2026-10-18T01:09:04.866Z
   branch: webtorrent-desktop--memory-leaks-09-leaving-player-resets-media-session
   exit: 0
   completed: 2026-10-18T01:19:30.853Z
-- [ ] 10-error-list-stays-bounded.md
+- [x] 10-error-list-stays-bounded.md
+  branch: webtorrent-desktop--memory-leaks-10-error-list-stays-bounded
+  exit: 0
+  completed: 2026-10-18T01:19:34.829Z
 - [ ] 11-deleting-torrents-drops-dispatcher-memo.md
 - [ ] 12-window-bounds-debounce-one-thread.md
 - [ ] 13-external-player-never-strands-a-child.md
