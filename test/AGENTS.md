@@ -281,7 +281,10 @@ before running any test:
   into the same directory, and `media-controller-playability.js` under
   `.playability-test.js` (the directory is what resolves `../lib/...`,
   not the file name). Both collide with `os-ipc-call-sites.js`, which
-  emits `media-controller.js` itself. The failure is silent and lands
+  emits `media-controller.js` itself. Likewise
+  `torrent-list-resume.js` emits `torrent-list-controller` under
+  `.resume-test.js`, since `torrent-context-menu.js` owns the plain
+  name. The failure is silent and lands
   in the *other* file: the loser's recorders stay empty while its own
   assertions about the modal still pass, so run a new controller test
   alongside the existing ones, both orders, before believing it.
