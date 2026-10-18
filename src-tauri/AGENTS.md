@@ -240,6 +240,11 @@ about it are not local to the file:
   one entry goes through `Launch::parse`: splitting the rest on
   whitespace would turn a home directory with a space in it into a
   program and an argument.
+- **Every child this module starts ends through `end()`.** Dropping a
+  `std::process::Child` neither kills nor reaps it, so any path that
+  gives up on a child (a probe past its deadline, a `try_wait` error)
+  kills and waits on it rather than letting it go out of scope. Never
+  probe with `.status()` or `.output()`: they block with no deadline.
 
 ## Driving a real player, or anything that needs a stream
 
