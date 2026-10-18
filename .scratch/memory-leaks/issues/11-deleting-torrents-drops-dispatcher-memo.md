@@ -17,7 +17,7 @@ controller)
 `src/renderer/controllers/torrent-list-controller.js` (`deleteTorrent`,
 `deleteAllTorrents`), new unit test (prior art `test/unit/time.js`)
 
-**Status:** ready-for-agent
+**Status:** done
 
 - [x] Without a drop, `dispatcher` returns the same handler for the same
       arguments

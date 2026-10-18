@@ -23,12 +23,12 @@ whole-torrent selection, exactly as today.
 `test/unit/engine-stall.js` and `test/unit/engine-hashfail.js`),
 `test/unit/engine-torrent-close-wiring.js`
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Applying the same selections twice yields no changes the second
+- [x] Applying the same selections twice yields no changes the second
       time
-- [ ] A deselect after a repeated select yields exactly one deselect
-- [ ] The first application replaces the default whole-torrent
+- [x] A deselect after a repeated select yields exactly one deselect
+- [x] The first application replaces the default whole-torrent
       selection
 - [x] `wt-select-files` goes through the diff, and applied selections
       are forgotten from the torrent's close handler (source scan)

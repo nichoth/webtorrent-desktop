@@ -41,15 +41,15 @@ handler from 02), `test/unit/engine-entry.js` (real sidecar, real
 socket), a `static/*.torrent` fixture with every file deselected,
 `test/unit/engine-torrent-close-wiring.js`
 
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Sending start-torrenting, start-server and stop-server in one
+- [x] Sending start-torrenting, start-server and stop-server in one
       burst, before `ready`, leaves no server accepting connections once
       the torrent is ready. If this turns out flaky, give the fixture
       more to verify rather than moving the test to a lower seam
-- [ ] Two starts and two stops leave the port refusing connections
-- [ ] Two starts and one stop leave the port accepting connections
-- [ ] Start-server, then stop-torrenting with no stop-server, then
+- [x] Two starts and two stops leave the port refusing connections
+- [x] Two starts and one stop leave the port accepting connections
+- [x] Start-server, then stop-torrenting with no stop-server, then
       start-torrenting again, then start-server reports a URL that
       accepts connections
 - [x] The server entry is forgotten from the torrent's close handler
