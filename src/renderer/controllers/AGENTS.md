@@ -69,6 +69,15 @@ name: call `ipcEngine.onTorrentReadyFor(infoHash, listener, { once:
 true })` rather than building `'wt-ready-' + infoHash`. A one-shot
 listener is `{ once: true }`, not a separate export.
 
+Subscriptions resolve to their unsubscribe function, so a wait that
+has to be cancelled (on leaving the player, say) must cope with the
+cancel arriving before that promise does: record that it was
+cancelled and call the unsubscribe as soon as it arrives. The listener
+should also check that the thing it was armed for is still current
+(`state.playing` is replaced on close), because a delivery can race
+the withdrawal. `openExternalPlayer` in `media-controller.js` is the
+worked example.
+
 **Every shim call is async, and `dispatch()` re-renders synchronously.**
 `dispatch(action)` calls the handler and then `update()` in the same
 turn, so any state a controller writes inside a `.then()` lands *after*
